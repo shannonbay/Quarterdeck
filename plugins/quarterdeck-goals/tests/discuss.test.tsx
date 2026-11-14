@@ -118,6 +118,10 @@ test('update_goal shows a new watch\'s whole command before it is set, and says 
   expect(String((await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'unsub' } as never)).result)).toContain('- new issues: every 5 min, runs gh issue list')
   await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', watches: { 'new issues': { command: 'gh pr list', every_minutes: 15 }, old: null } } as never)
   expect(asked.asked[1]).toBe('Change the goal "Unsubscribe"?\n• Watch changed "new issues": every 15 min this command runs on your computer, and a run starts when it prints a line it hasn\'t before: gh pr list\n• Watch removed: old')
+  // A watch on a state says it fires when its output changes, and passes the mode through
+  await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', watches: { tree: { command: 'git describe --always --dirty', fires: 'change' } } } as never)
+  expect(asked.asked[2]).toBe('Change the goal "Unsubscribe"?\n• New watch "tree": every 5 min this command runs on your computer, and a run starts when its output changes: git describe --always --dirty')
+  expect(fake.of('update_goal')[2]?.input).toEqual({ goal_id: 'g1', watches: { tree: { command: 'git describe --always --dirty', fires: 'change' } } })
 })
 
 test('update_goal shows a tool watch\'s tool and whole input before it is set', async ($, on) => {
@@ -136,6 +140,7 @@ test('a goal shows its watches when expanded, and one that cannot check keeps it
   fakeQuarterdeck(on, [
     goal({ id: 'g1', name: 'Issues', watches: watch(false) }),
     goal({ id: 'g2', name: 'Pulls', watches: watch(true) }),
+    goal({ id: 'g3', name: 'Tree', watches: [{ name: 'working tree', every_minutes: 1, fires: 'change', runs: 'git describe --always --dirty', last_fired_at: null, failing: false, error: null }] }),
   ])
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
@@ -148,6 +153,9 @@ test('a goal shows its watches when expanded, and one that cannot check keeps it
   expect(await ui.find({ type: 'Text', text: /^a watch can't check: expand the goal to see why$/ })).toBeDefined()
   await ui.press({ key: 'toggle-g2' })
   expect(await ui.find({ type: 'Text', text: /can't check: Exit code 4: gh: not logged in/ })).toBeDefined()
+  // A watch on a state runs when it changes
+  await ui.press({ key: 'toggle-g3' })
+  expect(await ui.find({ type: 'Text', text: /^Also runs when "working tree" changes \(checked every 1 min\)$/ })).toBeDefined()
   await ui.unmount()
 })
 
