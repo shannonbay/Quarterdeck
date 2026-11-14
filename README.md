@@ -6,7 +6,7 @@
 
 It's a Claude Code plugin that turns Claude into a personal assistant: it keeps looking after the things you hand it, asks before it does anything you haven't allowed, and remembers what you decided.
 
-You give it **goals**, things you want kept true: "unsubscribe me from mailing lists I never read", "find me the three best new job ads each week", "keep my GitHub profile up to date", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
+You give it **goals**, things you want kept true: "fix new issues on my repo and open pull requests", "tell me when the fixes I'm waiting on land in the projects I use", "find me the three best new job ads each week", "unsubscribe me from mailing lists I never read", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
 
 The idea behind it: persistent intent may matter more than persistent memory.
 
@@ -19,6 +19,7 @@ The idea behind it: persistent intent may matter more than persistent memory.
 - **It asks when it's stuck.** When a run needs something only you can give (which job sites, signing in to `gh`), it asks under Needs you instead of guessing, and carries on with your answer.
 - **It earns trust one kind of action at a time.** Each kind of action (send mail, delete a file, archive) is *off*, *propose* or *auto*. After 10 approvals in a row, the pane offers to switch that kind to auto.
 - **It remembers.** Each goal keeps its own memory, its open items (never handling the same email twice) and its run history, outside any one conversation.
+- **It works on Quarterdeck too.** [PR #30](https://github.com/shannonbay/Quarterdeck/pull/30), watches that fire when a state changes, was written and opened by a Quarterdeck goal from [issue #29](https://github.com/shannonbay/Quarterdeck/issues/29); I tested it live and merged it. [How that works](#example-from-issue-to-merged-pr).
 - **You see what it costs.** Each run shows its tokens and time, e.g. `· 48k tokens · 2m`.
 
 ![A friend's "Sell Personal Items" goal in the Goals pane, asking for the make and model, condition, defects, asking price and lowest acceptable price of a reverb unit, a Luxman amp and a dolly before it lists them, with Answer and Done buttons](docs/needs-you-sell-gear.jpg)
