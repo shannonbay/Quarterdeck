@@ -232,7 +232,7 @@ export function describe(g: GoalCard, now: number): string {
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
     `Model: ${goalModelLabel(g.model)}`,
     g.watches.length > 0
-      ? `Watches (a run starts when one sees a new line):\n${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? ' (on change)' : ''}, runs ${w.runs}${w.failing ? ` [failing: ${w.error ?? 'no message'}]` : ''}${w.lastFiredAt ? `, last saw something new ${ago(w.lastFiredAt, now)}` : ''}`).join('\n')}`
+      ? `Watches (a run starts when one sees a new line):\n${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? ' (on change)' : ''}, runs ${w.runs}${w.failing ? ` [failing: ${w.error ?? 'no message'}]` : ''}${w.lastFiredAt ? `, last ${w.onChange ? 'changed' : 'saw something new'} ${ago(w.lastFiredAt, now)}` : ''}`).join('\n')}`
       : null,
     `Autonomy (unlisted categories: propose): ${Object.entries(g.autonomy).map(([c, m]) => `${c}=${m}`).join(', ') || 'none set'}`,
     Object.keys(g.toolMap).length ? `Tool rules: ${Object.entries(g.toolMap).map(([p, c]) => `${p} → ${c}`).join(', ')}` : null,
