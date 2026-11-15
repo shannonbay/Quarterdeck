@@ -353,3 +353,51 @@ describe('scheduler decisions', () => {
     expect(listRuns(db, 'g1')).toHaveLength(2)
   })
 })
+
+describe('runaway breaker', () => {
+  const finishRun = (trigger: 'manual' | 'event' | 'interval' = 'event') => {
+    const run = queueRun(db, 'g1', trigger)
+    startRun(db, run.id, null)
+    return endRun(db, run.id, 'nothing to do')
+  }
+
+  it('pauses the goal and asks the person after too many unscheduled runs that resolve nothing', () => {
+    for (let i = 0; i < 4; i++) finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    const ask = db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref LIKE 'runaway-breaker:%'").all() as { goal: string; notes: string }[]
+    expect(ask).toHaveLength(1)
+    expect(ask[0].notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
+  it('leaves idle scheduled runs alone', () => {
+    for (let i = 0; i < 6; i++) finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('a run that resolves an item resets the idle count', () => {
+    for (let i = 0; i < 4; i++) finishRun()
+    const run = queueRun(db, 'g1', 'event')
+    startRun(db, run.id, null)
+    const item = addItem(db, 'g1', run.id, { goal: 'x' }).task
+    updateTask(db, 'g1', item.id, { status: 'completed' })
+    endRun(db, run.id, 'did one')
+    finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('pauses after more runs in an hour than max_runs_per_hour', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
+    for (let i = 0; i < 3; i++) finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  })
+
+  it('is off when both limits are 0', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0, max_idle_runs: 0 } })
+    for (let i = 0; i < 12; i++) finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+})

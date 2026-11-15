@@ -395,7 +395,51 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   }
   archiveResolved(db, run.plan_id)
   finishIfDone(db, run.plan_id)
+  tripBreakerIfRunaway(db, run.plan_id)
   return getRun(db, runId)!
+}
+
+/** Why the runaway breaker should trip after this run, or null. Uses goal_runs only. */
+export function runawayReason(db: Database, planId: string, now: Date = new Date()): string | null {
+  const goal = getGoal(db, planId)
+  if (!goal) return null
+  const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits
+  if (perHour > 0) {
+    const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
+    const n = (db.prepare("SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND started_at >= ?")
+      .get(planId, hourAgo) as { n: number }).n
+    if (n > perHour) return `${n} runs in the last hour (limit ${perHour})`
+  }
+  if (idle > 0) {
+    // Scheduled runs that find nothing are normal; runs that queue each other are what loops
+    const recent = db.prepare(`SELECT trigger, items_resolved FROM goal_runs
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all(planId, idle) as { trigger: string; items_resolved: number }[]
+    if (recent.length === idle && recent.every((r) => r.items_resolved === 0 && r.trigger !== 'interval' && r.trigger !== 'cron')) {
+      return `${idle} unscheduled runs in a row resolved no item`
+    }
+  }
+  return null
+}
+
+/**
+ * The runaway breaker: when a goal's runs keep coming back (too many in an hour, or
+ * unscheduled runs in a row that resolve nothing), pause it and ask the person.
+ * Returns the reason when it tripped.
+ */
+export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = new Date()): string | null {
+  const goal = getGoal(db, planId)
+  if (!goal || goal.status !== 'active') return null
+  const reason = runawayReason(db, planId, now)
+  if (!reason) return null
+  updateGoal(db, planId, { status: 'paused', next_run_at: null })
+  const ref = `runaway-breaker:${now.toISOString().slice(0, 13)}`
+  addItem(db, planId, null, {
+    goal: 'This goal may be looping, so I paused it. Resume it?',
+    notes: `Runaway breaker: ${reason}. Look at its recent runs, then resume the goal to keep going, change its instructions or limits first, or leave it paused.`,
+    external_ref: ref, ask_person: true,
+  })
+  return reason
 }
 
 /** Open items: pending, or active (which includes proposals waiting for review and approved ones not yet carried out). */
