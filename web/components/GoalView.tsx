@@ -47,6 +47,14 @@ function when(iso: string | null) {
   return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+/** A goal status's colour by its tone (as in the Goals pane): ok green, attention yellow, problem red. */
+const TONE_CLASS: Record<string, string> = {
+  ok: 'bg-green-100 text-green-700',
+  attention: 'bg-yellow-100 text-yellow-800',
+  problem: 'bg-red-100 text-red-700',
+  none: 'bg-gray-100 text-gray-600',
+}
+
 const runStyle: Record<GoalRun['status'], string> = {
   queued: 'bg-gray-100 text-gray-600',
   running: 'bg-blue-100 text-blue-700',
@@ -108,6 +116,7 @@ export function GoalView({ goalId }: { goalId: string }) {
             <div className="flex items-center gap-2 mt-1">
               <h1 className="text-xl font-semibold text-gray-900">{plan.name}</h1>
               <span className={`text-xs px-1.5 py-0.5 rounded ${goal.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{goal.status}</span>
+              {goal.status_note && <span className={`text-xs px-1.5 py-0.5 rounded ${TONE_CLASS[goal.status_tone ?? 'none']}`} title="The status the goal's last run set">{goal.status_note}</span>}
             </div>
             <p className="text-sm text-gray-600 mt-1">{goal.objective}</p>
             <p className="text-xs text-gray-400 mt-1">

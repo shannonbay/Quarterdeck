@@ -127,7 +127,7 @@ export async function end_run(args: unknown) {
   if (!runId) throw new Error('No run to end: you were not started for a run (get_goal_brief had no run_id).')
   const run = getRun(runId)
   if (!run || run.plan_id !== planId) throw new Error(`Run ${runId} not found in this goal.`)
-  const ended = endRun(runId, input.summary, input.status, input.status_check)
+  const ended = endRun(runId, input.summary, input.status, input.status_check, input.status_tone)
   setOpenRun(null)
   record(planId, planId, 'run_completed', { run_id: runId, summary: ended.summary, items_created: ended.items_created, items_resolved: ended.items_resolved })
   return {
