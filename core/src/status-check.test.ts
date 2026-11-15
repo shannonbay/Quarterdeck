@@ -116,6 +116,48 @@ describe('evaluateStatusCheck', () => {
   })
 })
 
+describe('status tones', () => {
+  it('end_run stores a tone with the status, clears it with the status, and ignores it without one', () => {
+    const run = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, run.id, 'done', 'PR #12 awaiting review', check, 'attention')
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'PR #12 awaiting review', status_tone: 'attention' })
+    expect(buildOverview(db).goals.find((g) => g.id === 'g1')!.status_note).toMatchObject({ tone: 'attention' })
+    const kept = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, kept.id, 'done', undefined, undefined, 'problem')
+    expect(getGoal(db, 'g1')!.status_tone).toBe('attention') // no status: tone ignored, status kept
+    endWith('clean')
+    expect(getGoal(db, 'g1')!.status_tone).toBeNull()
+    endWith('')
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: null, status_tone: null })
+  })
+
+  it('refuses an unknown tone', () => {
+    const run = startRun(db, queueRun(db, 'g1').id, null)
+    expect(() => endRun(db, run.id, 'done', 'x', undefined, 'green')).toThrow(/status_tone/)
+    expect(() => validateStatusCheck({ ...check, otherwise: { MERGED: { status: 'merged', tone: 'blue' } } })).toThrow(/tone/)
+  })
+
+  it('a check sets the tone an otherwise entry names, and plain text keeps the current one', async () => {
+    const toned = { ...check, otherwise: { MERGED: { status: 'PR #12 merged', tone: 'ok' }, CLOSED: 'PR #12 closed' } }
+    expect(validateStatusCheck(toned)).toEqual(toned)
+    let run = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, run.id, 'done', 'PR #12 awaiting review', toned, 'attention')
+    expect(await evaluateStatusCheck(db, 'g1', answer('MERGED'))).toMatchObject({ outcome: 'changed', text: 'PR #12 merged' })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'PR #12 merged', status_tone: 'ok' })
+    run = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, run.id, 'done', 'PR #12 awaiting review', toned, 'attention')
+    await evaluateStatusCheck(db, 'g1', answer('CLOSED'))
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'PR #12 closed', status_tone: 'attention' })
+  })
+
+  it('a stale status keeps its tone', async () => {
+    const run = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, run.id, 'done', 'PR #12 awaiting review', { ...check, otherwise: { MERGED: 'merged' } }, 'attention')
+    await evaluateStatusCheck(db, 'g1', answer('CLOSED'))
+    expect(buildOverview(db).goals.find((g) => g.id === 'g1')!.status_note).toMatchObject({ stale: true, tone: 'attention' })
+  })
+})
+
 describe('checkStatuses', () => {
   it('checks each goal at most once every 5 minutes and skips goals without a check', async () => {
     const run = answer('OPEN')

@@ -158,6 +158,8 @@ export interface Goal {
   status_check_at: string | null
   /** Failed checks in a row; at STATUS_CHECK_MAX_FAILURES the status shows as stale. */
   status_check_failures: number
+  /** How the goal stands by its status: ok (green), attention (yellow), problem (red); null: no tone. */
+  status_tone: import('./status-check.js').StatusTone | null
 }
 
 export type NewGoal = Pick<Goal, 'plan_id' | 'objective'> & Partial<Omit<Goal, 'plan_id' | 'objective' | 'limits'>> & { limits?: Partial<GoalLimits> }

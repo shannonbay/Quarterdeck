@@ -274,7 +274,8 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
     g.openItemCount > 0 ? ` · ${g.openItemCount} open` : '',
   ].join('')
   // The status a run set comes right after the name, in the pane's own colours: a run gives
-  // only the words. Dimmed when stale; ⚠ when the run that set it had read outside content.
+  // only the words and a tone (ok green, attention yellow, problem red). Dimmed when stale
+  // (it keeps its colour); ⚠ when the run that set it had read outside content.
   const note = g.statusNote
   const noteText = note ? ` [${note.text}]` : ''
   const noteWidth = note ? [...noteText].length + (note.untrusted ? 2 : 0) : 0
@@ -285,10 +286,15 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
   return (
     <Box key={g.id} marginBottom={gap}>
       <Button key={`toggle-${g.id}`} plain label={`▸ ${g.name}`} hotkey={index < 9 ? String(index + 1) : undefined} onPress={() => void toggleExpanded($, g.id).then(() => refresh($))} />
-      {showNote && <Text key={`note-${g.id}`} dimColor={note.stale}>{note.untrusted ? <Text color="yellow"> ⚠</Text> : null}{noteText}</Text>}
+      {showNote && <Text key={`note-${g.id}`} dimColor={note.stale}>{note.untrusted ? <Text color="yellow"> ⚠</Text> : null}<Text color={toneColor(note.tone)} dimColor={note.stale}>{noteText}</Text></Text>}
       {factsRoom >= 8 && <Text dimColor>{clip(facts, factsRoom)}</Text>}
     </Box>
   )
+}
+
+/** The pane's colour for a status tone; undefined (the default text colour) when none was given. */
+export function toneColor(tone: 'ok' | 'attention' | 'problem' | null): string | undefined {
+  return tone === 'ok' ? 'green' : tone === 'attention' ? 'yellow' : tone === 'problem' ? 'red' : undefined
 }
 
 function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {

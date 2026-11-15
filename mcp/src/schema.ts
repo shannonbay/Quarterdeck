@@ -97,6 +97,8 @@ export const ForgetSchema = z.object({
   memory_id: z.string().describe('ID of a memory you (an agent) created'),
 })
 
+const StatusToneSchema = z.enum(['ok', 'attention', 'problem'])
+
 export const EndRunSchema = z.object({
   summary: z.string().min(1).describe('What you did this run, what is waiting for the human, and anything you learned'),
   run_id: z.string().optional().describe('Defaults to the run from get_goal_brief'),
@@ -106,8 +108,12 @@ export const EndRunSchema = z.object({
     repo: z.string().describe('owner/name on GitHub'),
     number: z.number().int().positive().describe('The pull request or issue number'),
     holds_while: z.array(z.string()).min(1).describe('The states for which the status still holds: OPEN, CLOSED, MERGED (MERGED only for github_pr)'),
-    otherwise: z.record(z.string()).optional().describe('What the status becomes for other states, e.g. {"MERGED": "PR #12 merged", "CLOSED": "PR #12 closed"}; any other state shows the status as stale'),
+    otherwise: z.record(z.union([z.string(), z.object({
+      status: z.string().describe('The new status text'),
+      tone: StatusToneSchema.optional().describe('Its tone; left out, the status keeps its current tone'),
+    })])).optional().describe('What the status becomes for other states: plain text (the tone stays) or {status, tone}, e.g. {"MERGED": {"status": "PR #12 merged", "tone": "ok"}, "CLOSED": {"status": "PR #12 closed", "tone": "problem"}}; any other state shows the status as stale'),
   }).optional().describe('Give it with status whenever the status describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue): the scheduler checks it about every 5 minutes and updates the status. Setting or clearing the status later replaces or clears the check.'),
+  status_tone: StatusToneSchema.optional().describe('How the goal stands by its status, which colours it in the Goals pane: ok (green, e.g. "clean"), attention (yellow, e.g. "PR #12 awaiting review"), problem (red, e.g. a failing check). Only with status; leave it out for no colour.'),
 })
 
 export const RunGoalSchema = z.object({

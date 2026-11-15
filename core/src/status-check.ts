@@ -21,6 +21,25 @@ export const STATUS_CHECK_VALUES = {
 
 export type StatusCheckKind = keyof typeof STATUS_CHECK_VALUES
 
+/** How a goal stands by its status: the pane shows ok green, attention yellow, problem red. */
+export const STATUS_TONES = ['ok', 'attention', 'problem'] as const
+export type StatusTone = typeof STATUS_TONES[number]
+
+/** A status a check changes to: its text, and a tone (left out: the status keeps its current tone). */
+export interface StatusCheckChange {
+  status: string
+  tone?: StatusTone
+}
+
+/** Validates an optional tone: undefined/null stay undefined; anything else must be a known tone. */
+export function validateStatusTone(input: unknown, field = 'status_tone'): StatusTone | undefined {
+  if (input === undefined || input === null) return undefined
+  if (typeof input !== 'string' || !(STATUS_TONES as readonly string[]).includes(input)) {
+    throw new GoalError(`${field} must be one of: ${STATUS_TONES.join(', ')}.`)
+  }
+  return input as StatusTone
+}
+
 export interface StatusCheck {
   kind: StatusCheckKind
   /** owner/name on GitHub */
@@ -28,8 +47,8 @@ export interface StatusCheck {
   number: number
   /** The values for which the status still holds. */
   holds_while: string[]
-  /** What the status becomes when the check sees one of these values. */
-  otherwise: Record<string, string>
+  /** What the status becomes when the check sees one of these values: plain text (the tone stays), or a status with a tone. */
+  otherwise: Record<string, string | StatusCheckChange>
 }
 
 /** Checks per goal are at least this far apart. */
@@ -69,14 +88,17 @@ export function validateStatusCheck(input: unknown): StatusCheck {
   }
   const otherwiseIn = c.otherwise ?? {}
   if (typeof otherwiseIn !== 'object' || Array.isArray(otherwiseIn)) throw new GoalError('status_check.otherwise must map values to statuses.')
-  const otherwise: Record<string, string> = {}
-  for (const [v, text] of Object.entries(otherwiseIn as Record<string, unknown>)) {
+  const otherwise: Record<string, string | StatusCheckChange> = {}
+  for (const [v, entry] of Object.entries(otherwiseIn as Record<string, unknown>)) {
     if (!values.includes(v)) throw new GoalError(`status_check.otherwise keys must be among: ${values.join(', ')}.`)
     if ((c.holds_while as string[]).includes(v)) throw new GoalError(`status_check value ${v} can't both hold and change the status.`)
-    if (typeof text !== 'string') throw new GoalError('status_check.otherwise values must be text.')
+    const isOutcome = !!entry && typeof entry === 'object' && !Array.isArray(entry)
+    const text = isOutcome ? (entry as Record<string, unknown>).status : entry
+    if (typeof text !== 'string') throw new GoalError('status_check.otherwise values must be text, or {status, tone}.')
     const clean = cleanStatusNote(text)
     if (!clean) throw new GoalError('status_check.otherwise texts must not be empty.')
-    otherwise[v] = clean
+    const tone = isOutcome ? validateStatusTone((entry as Record<string, unknown>).tone, `status_check.otherwise.${v}.tone`) : undefined
+    otherwise[v] = tone ? { status: clean, tone } : clean
   }
   return { kind, repo: c.repo, number: c.number, holds_while: [...new Set(c.holds_while as string[])], otherwise }
 }
@@ -132,10 +154,13 @@ export async function evaluateStatusCheck(db: Database, planId: string, runFile:
     if (current.status_check_failures) updateGoal(db, planId, { status_check_failures: 0 })
     return { outcome: 'holds', value }
   }
-  const text = check.otherwise[value]
+  const entry = check.otherwise[value]
+  const text = typeof entry === 'string' ? entry : entry?.status
   if (text) {
     updateGoal(db, planId, {
       status_note: text,
+      // Plain text keeps the current tone; {status, tone} sets it
+      status_tone: typeof entry === 'string' ? current.status_tone : (entry.tone ?? current.status_tone),
       status_note_at: new Date().toISOString(),
       // The text came from the run that attached the check: it keeps that run's mark
       status_note_untrusted: current.status_note_untrusted,

@@ -35,6 +35,7 @@ function deserializeGoal(r: Row): Goal {
     status_check: r.status_check ? JSON.parse(r.status_check as string) : null,
     status_check_at: (r.status_check_at as string | null | undefined) ?? null,
     status_check_failures: (r.status_check_failures as number | undefined) ?? 0,
+    status_tone: (r.status_tone as Goal['status_tone'] | undefined) ?? null,
   } as Goal
 }
 
