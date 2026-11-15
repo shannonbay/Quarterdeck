@@ -525,12 +525,50 @@ describe('runaway breaker', () => {
   })
 
   it('counts self-caused watch runs toward the idle rule', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0 } }) // the idle rule alone
     for (let i = 0; i < 4; i++) finishRun('self-watch')
-    finishRun('watch') // one started by someone else doesn't count
+    finishRun('watch') // one started by someone else doesn't count, and breaks the streak
+    for (let i = 0; i < 4; i++) finishRun('self-watch')
     expect(getGoal(db, 'g1')!.status).toBe('active')
     finishRun('self-watch')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     expect(breakerAsks()[0]!.notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
+  it('an uncounted run breaks the idle streak: a report-only goal with coincidental self-caused runs stays active', () => withClock((tick) => {
+    // A report-only goal on a 1-minute watch: changes land sometimes during a run (so the
+    // re-check tags the next run self-caused) and sometimes between runs (an ordinary watch run)
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0 } }) // the idle rule alone
+    for (let i = 0; i < 36; i++) { tick(); finishRun(i % 3 === 2 ? 'watch' : 'self-watch') }
+    // A scheduled run breaks the streak too
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
+    tick(); finishRun('interval')
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+    // A goal that really does trigger its own watch every run still trips
+    tick(); finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  }))
+
+  it('only counts an idle streak whose runs all started within the last hour', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let t = Date.parse('2026-01-01T00:00:00.000Z')
+      // 5 self-caused idle runs, 20 minutes apart: the first is over an hour before the last
+      for (let i = 0; i < 5; i++) { vi.setSystemTime((t += 20 * 60_000)); finishRun('self-watch') }
+      expect(getGoal(db, 'g1')!.status).toBe('active')
+      expect(breakerAsks()).toHaveLength(0)
+      // Two hours on: 4 more in a minute don't trip it while the 5th of the streak is old
+      t += 2 * 3_600_000
+      for (let i = 0; i < 4; i++) { vi.setSystemTime((t += 60_000)); finishRun('self-watch') }
+      expect(getGoal(db, 'g1')!.status).toBe('active')
+      // The 5th within the hour trips it
+      vi.setSystemTime((t += 60_000)); finishRun('self-watch')
+      expect(getGoal(db, 'g1')!.status).toBe('paused')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('leaves scheduled runs out of max_runs_per_hour: a goal on the shortest interval stays active', () => {

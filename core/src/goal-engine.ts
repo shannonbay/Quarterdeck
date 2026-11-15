@@ -429,11 +429,16 @@ export function runawayReason(db: Database, planId: string, now: Date = new Date
     if (n > perHour) return `${n} unscheduled runs in the last hour (limit ${perHour})`
   }
   if (idle > 0) {
-    // Scheduled runs that find nothing are normal; runs that queue each other are what loops
-    const recent = db.prepare(`SELECT items_resolved FROM goal_runs
-      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND ${unscheduled} AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
-      .all(planId, since, idle) as { items_resolved: number }[]
-    if (recent.length === idle && recent.every((r) => r.items_resolved === 0)) {
+    // Scheduled runs that find nothing are normal; runs that queue each other are what loops.
+    // The streak is the last `idle` finished runs of any trigger but manual, all started within the
+    // last hour: it trips only when every one of them is counted and resolved nothing, so an uncounted
+    // run in between (a scheduled run, a watch run started by someone else's change) breaks it, and
+    // coincidences hours apart can't add up to one.
+    const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
+    const recent = db.prepare(`SELECT items_resolved, ${unscheduled} AS counted, started_at FROM goal_runs
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND trigger != 'manual' AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all(planId, since, idle) as { items_resolved: number; counted: number; started_at: string }[]
+    if (recent.length === idle && recent.every((r) => r.counted === 1 && r.items_resolved === 0 && r.started_at >= hourAgo)) {
       return `${idle} unscheduled runs in a row resolved no item`
     }
   }
