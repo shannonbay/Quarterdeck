@@ -275,6 +275,23 @@ test("edit_todo rewords a to-do as the agent and shows the old wording", async (
   expect(String(empty.result)).toContain('needs some text')
 })
 
+test('edit_todo changes only the notes when given no text, or the same text', async ($, on) => {
+  const { toasts } = engine(on)
+  const fake = fakeQuarterdeck(on, [], { todos: [roadmap()] })
+  await $.session.start(START)
+  const before = toasts.length
+  const r = await $.tool.call({ tool: 'mcp__quarterdeck-goals__edit_todo', item: '1.3', notes: 'Issue #35' } as never)
+  expect(String(r.result)).toBe('Changed the notes on 1.3.')
+  expect(fake.of('todo_set').at(-1)?.input).toEqual({ list_id: 'p1', item_id: '1.3', changed_by: 'agent', notes: 'Issue #35' })
+  const same = await $.tool.call({ tool: 'mcp__quarterdeck-goals__edit_todo', item: '1.3', text: 'Set autonomy from Claude Code', notes: 'Issue #36' } as never)
+  expect(String(same.result)).toBe('Changed the notes on 1.3.')
+  expect(fake.of('todo_set').at(-1)?.input).not.toHaveProperty('text')
+  expect(toasts.length).toBe(before) // no "It said" when the wording stays
+  const nothing = await $.tool.call({ tool: 'mcp__quarterdeck-goals__edit_todo', item: '1.3' } as never)
+  expect(String(nothing.result)).toContain('Nothing to change')
+  expect(fake.of('todo_set')).toHaveLength(2)
+})
+
 test('Edit opens a box holding the to-do; Save rewords it, Cancel and unchanged text change nothing', async ($, on) => {
   const { toasts } = engine(on)
   const fake = fakeQuarterdeck(on, [], { todos: [roadmap()] })

@@ -243,6 +243,6 @@ export async function setTodo($: Engine, listId: string, itemId: string, status:
 }
 
 /** Rewords a to-do (and its notes, when given). */
-export async function editTodo($: Engine, listId: string, itemId: string, input: { text: string; notes?: string; by: 'human' | 'agent' }): Promise<void> {
-  await call($, 'todo_set', { list_id: listId, item_id: itemId, text: input.text, changed_by: input.by, ...(input.notes !== undefined && { notes: input.notes }) })
+export async function editTodo($: Engine, listId: string, itemId: string, input: { text?: string; notes?: string; by: 'human' | 'agent' }): Promise<void> {
+  await call($, 'todo_set', { list_id: listId, item_id: itemId, changed_by: input.by, ...(input.text !== undefined && { text: input.text }), ...(input.notes !== undefined && { notes: input.notes }) })
 }

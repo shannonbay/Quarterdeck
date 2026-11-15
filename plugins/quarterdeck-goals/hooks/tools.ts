@@ -99,16 +99,16 @@ export const TOOLS = [
   },
   {
     name: 'edit_todo',
-    description: "Rewords a to-do on the person's list (and its notes, when given). Only when they ask you to; the old wording is shown to them so they can put it back.",
+    description: "Rewords a to-do on the person's list, or changes its notes (give text, notes or both). Only when they ask you to; a changed wording's old one is shown to them so they can put it back.",
     inputSchema: {
       type: 'object',
       properties: {
         item: { type: 'string', description: 'The to-do id from the todos tool, e.g. 3 or 1.4' },
-        text: { type: 'string', description: 'The new wording, short and in their words' },
+        text: { type: 'string', description: 'The new wording, short and in their words; left out, the wording stays as it is' },
         notes: { type: 'string', description: 'New notes; left out, the notes stay as they are' },
         list: { type: 'string', description: 'A list name or id, when more than one list has that id' },
       },
-      required: ['item', 'text'],
+      required: ['item'],
     },
   },
   {
@@ -547,13 +547,16 @@ async function todoTool($: Engine, name: 'todos' | 'add_todo' | 'complete_todo' 
   const found = findTodo(lists, String(input.item ?? ''), listArg)
   if ('error' in found) return { text: found.error, isError: true }
   if (name === 'edit_todo') {
-    const text = String(input.text ?? '').trim()
-    if (!text) return { text: 'A to-do needs some text.', isError: true }
+    const text = typeof input.text === 'string' ? input.text.trim() : undefined
+    if (text === '') return { text: 'A to-do needs some text.', isError: true }
     const notes = typeof input.notes === 'string' ? input.notes : undefined
-    await editTodo($, found.list.id, found.item.id, { text, notes, by: 'agent' })
+    const reworded = text !== undefined && text !== found.item.text
+    if (!reworded && notes === undefined) return { text: `Nothing to change on ${found.item.id}: give new text or notes.`, isError: text === undefined }
+    await editTodo($, found.list.id, found.item.id, { ...(reworded && { text }), notes, by: 'agent' })
     await refreshTodos($)
+    if (!reworded) return { text: `Changed the notes on ${found.item.id}.`, isError: false }
     $.ui.toast(`Reworded to-do ${found.item.id}. It said: ${clip(found.item.text, 80)}`)
-    return { text: `Reworded ${found.item.id}: ${text} (it said: ${found.item.text})`, isError: false }
+    return { text: `Reworded ${found.item.id}${notes !== undefined ? ' and its notes' : ''}: ${text} (it said: ${found.item.text})`, isError: false }
   }
   await setTodo($, found.list.id, found.item.id, 'completed')
   await refreshTodos($)

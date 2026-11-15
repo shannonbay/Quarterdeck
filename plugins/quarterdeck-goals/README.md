@@ -197,7 +197,7 @@ A **one-off** goal runs once, straight away. When its run ends with nothing left
 | `approve_item`, `reject_item` | Approve or reject a proposal. **Asks you first.** |
 | `new_goal` | Create a goal in this directory, as `/goal-new <objective>` does: it suggests a schedule and model, and **you pick the schedule** (dismissing the question creates nothing). Every category starts at propose; instructions, tool rules and watches come after, through `update_goal`. |
 | `run_goal` | Queue a run. **Asks you first.** |
-| `todos`, `add_todo`, `complete_todo`, `edit_todo` | Read your to-do lists (long ones cut to a line; one to-do in full, or one list, when you name it), add to one (when you ask, or after offering), tick one off (when you say it's done), reword one (when you ask; a toast shows the old wording). |
+| `todos`, `add_todo`, `complete_todo`, `edit_todo` | Read your to-do lists (long ones cut to a line; one to-do in full, or one list, when you name it), add to one (when you ask, or after offering), tick one off (when you say it's done), reword one or change its notes (when you ask; a toast shows the old wording when it changes). |
 | `update_goal` | Change a goal's name, objective, standing instructions, autonomy per category, tool rules, memory, watches or model, or pause it. **Shows you each change and asks you first.** Runs can't use it. |
 | `set_schedule` | Set or clear a goal's schedule (same forms as `/goal-schedule`). **Asks you first.** |
 
