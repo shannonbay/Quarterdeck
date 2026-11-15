@@ -119,6 +119,29 @@ test("a run stopped by the usage limit is reported to Quarterdeck; an ordinary t
   expect(reports).toEqual([{ run_id: 'run_abc123', answer: "You've hit your 5-hour limit · resets 8:10pm", reason: 'answer' }])
 })
 
+test("a run whose turn died on an API error with no answer is reported as the usage limit when a window is full", async ($, on) => {
+  world(on)
+  const reports: unknown[] = []
+  on('tool.call', { tool: 'mcp__quarterdeck__report_run_end' }, (_, e) => {
+    const { answer, reason } = e as unknown as Record<string, unknown>
+    reports.push({ answer, reason })
+    return { result: '{"outcome":"held"}' } as never
+  })
+  const windows = { value: [{ kind: 'five_hour', percentUsed: 40 }] as unknown[] }
+  on('session.usage', () => ({ value: { startedAt: 0, context: {}, rateLimits: windows.value } }) as never)
+  on('turn.complete', (_, e) => ({ text: e.answer }) as never)
+  await $.session.start(START)
+  const died = () => $.turn.complete({ answer: '', agentId: 'run-agent', reason: 'error', durationMs: 10, isAborted: false, turnId: 't1' } as never)
+  await died()
+  const resetsAt = new Date(2026, 10, 16, 0, 30).toISOString()
+  windows.value = [{ kind: 'seven_day', percentUsed: 12 }, { kind: 'five_hour', percentUsed: 100, resetsAt }]
+  await died()
+  expect(reports).toEqual([
+    { answer: '', reason: 'error' },
+    { answer: `You've hit your 5-hour limit · resets 12:30am (${resetsAt})`, reason: 'error' },
+  ])
+})
+
 test("one-click unsubscribe goes through the goal's guard, and carries the run once allowed", async ($, on) => {
   const { scopes } = world(on)
   const sent: unknown[] = []
