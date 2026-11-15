@@ -79,9 +79,10 @@ npm run typecheck   # Type-check without emitting
 npm run start       # Run compiled output from dist/
 npm test            # Run all tests (vitest)
 npm run test:watch  # Watch mode
+npm run test:live   # Live tests: bundles the server and plays Claude Code's parts against it over stdio (CI runs them)
 ```
 
-Tests live in `mcp/src/tests/`. `vitest.config.ts` sets `QUARTERDECK_DB=:memory:`. Each test gets a clean slate via `beforeEach` in `src/tests/setup.ts`. Call tool handlers directly as async functions — no MCP transport needed.
+Tests live in `mcp/src/tests/`. `vitest.config.ts` sets `QUARTERDECK_DB=:memory:`. Each test gets a clean slate via `beforeEach` in `src/tests/setup.ts`. Call tool handlers directly as async functions — no MCP transport needed. Live tests are `src/tests/live/*.live.ts` (`vitest.live.config.ts`): they start the bundle (`plugins/quarterdeck-goals/server/quarterdeck-mcp.mjs`) over stdio with a database file and home folder of their own under the temp folder (`server.ts`), so they cover the bundle, the wire, migrations on a real file and watch commands that really run. `npm test` leaves them out; `npm run test:live` builds the bundle first. Watch commands in them are `node print.cjs`, never `cat`, so they run on Windows; a flaky timing gets a longer wait in `server.ts` (15 ms after each call), never a looser assertion.
 
 To run a single test file: `npm test -- src/tests/tools/create_plan.test.ts`
 

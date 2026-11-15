@@ -28,10 +28,14 @@ type Answer = any
 export interface LiveServer {
   /** Calls a tool and gives its answer; throws when the server refuses the call. */
   call(tool: string, args?: Record<string, unknown>): Promise<Answer>
+  /** Calls a tool and gives its answer's text as it came over the wire (for its size and form). */
+  text(tool: string, args?: Record<string, unknown>): Promise<string>
   /** Calls a tool the server should refuse and gives the refusal's text; throws when it goes through. */
   refused(tool: string, args?: Record<string, unknown>): Promise<string>
   /** The server's database, for what no tool reports (a run's self_caused) and for moving a watch's clock. */
   db: Database
+  /** The server's home folder (HOME and USERPROFILE), under the temp folder. */
+  home: string
   /** A new working directory for a goal, with lines.txt and the script PRINT_LINES runs. */
   workDir(name: string): string
   stop(): Promise<void>
@@ -97,6 +101,12 @@ export async function startLiveServer(): Promise<LiveServer> {
 
   return {
     db,
+    home,
+    async text(tool, args = {}) {
+      const r = await raw(tool, args)
+      if (r.isError) throw new Error(`${tool} was refused: ${r.text}`)
+      return r.text
+    },
     async call(tool, args = {}) {
       const r = await raw(tool, args)
       if (r.isError) throw new Error(`${tool} was refused: ${r.text}`)
