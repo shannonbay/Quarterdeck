@@ -500,6 +500,16 @@ describe('runaway breaker', () => {
     expect(breakerAsks()).toHaveLength(0)
   }))
 
+  it('trips on runs that keep failing or timing out', () => {
+    for (let i = 0; i < 5; i++) {
+      const run = queueRun(db, 'g1', 'event')
+      startRun(db, run.id, null)
+      failRun(db, run.id, i % 2 ? 'timed_out' : 'failed', 'crashed')
+    }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
   it('counts self-caused watch runs toward the idle rule', () => {
     for (let i = 0; i < 4; i++) finishRun('self-watch')
     finishRun('watch') // one started by someone else doesn't count
@@ -577,6 +587,26 @@ describe('per-item attempt limits', () => {
     decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going, try the other API' })
     expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
     expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(1)
+  })
+
+  it("doesn't count updates that leave the status alone: a tracking item checked each run stays unblocked", () => {
+    const item = addItem(db, 'g1', null, { goal: 'PR 31 waiting for review', external_ref: 'github-pr:31' }).task
+    for (let i = 0; i < 5; i++) {
+      const r = newRun()
+      recordAttempt(db, 'g1', item.id, r, new Date(), false) // update_task with fresh notes
+      endRun(db, r, 'still waiting')
+    }
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(0)
+    expect(question()).toBeUndefined()
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(false)
+  })
+
+  it('refuses even an uncounted update while the item is blocked', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(), false)).toThrow(/blocked/)
   })
 
   it('is off at 0', () => {

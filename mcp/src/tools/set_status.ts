@@ -1,4 +1,4 @@
-import { getTask, getChildren, updateTask, touchPlan, getPlan, checkCompletion, describeBlockers , recordItemAttempt } from '../db.js'
+import { getTask, getChildren, updateTask, touchPlan, getPlan, checkCompletion, describeBlockers, recordItemAttempt } from '../db.js'
 import { getOpenPlan, getOpenRun } from '../session.js'
 import { buildContext } from '../context.js'
 import { SetStatusSchema } from '../schema.js'
@@ -13,9 +13,6 @@ export async function set_status(args: unknown) {
 
   const task = getTask(planId, input.task_id)
   if (!task) throw new Error(`Task ${input.task_id} not found.`)
-  // A goal run working on an item counts as an attempt (server-side; refuses once it is out of attempts)
-  recordItemAttempt(planId, input.task_id, getOpenRun())
-
   let warning: string | undefined
 
   if (input.status === 'abandoned') {
@@ -46,6 +43,10 @@ export async function set_status(args: unknown) {
       )
     }
   }
+
+  // A goal run changing an item's status counts as an attempt, once the input is valid (server-side;
+  // refuses once it is out of attempts). Setting the status it already has only checks the block.
+  recordItemAttempt(planId, input.task_id, getOpenRun(), input.status !== task.status)
 
   if (input.status === 'completed') {
     const children = getChildren(planId, input.task_id)

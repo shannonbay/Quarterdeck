@@ -517,13 +517,17 @@ export function isAttemptBlocked(db: Database, planId: string, task: Task): bool
 }
 
 /**
- * Called by the server whenever a goal run updates an item or carries out its approved
- * action: records the run as an attempt, and refuses (GoalError) once the item's thread of
- * work (the item, or every item with its external_ref) has used up max_item_attempts runs.
+ * Called by the server whenever a goal run updates an item or changes its status. Refuses
+ * (GoalError) work on an item whose thread of work waits on the person's answer. With
+ * `count` (the run changes the item's status, which includes carrying out an approved
+ * action), it records the run as an attempt, and refuses once the item's thread of work
+ * (the item, or every item with its external_ref) has used up max_item_attempts runs.
+ * Updates that only change notes, result or state don't count: an item a goal keeps open
+ * and checks each run (a PR waiting for review) isn't being retried.
  * At the limit it adds a Needs-you question; until the person answers it, every run is
  * refused work on that item. The answer lifts the block and starts a fresh count.
  */
-export function recordAttempt(db: Database, planId: string, taskId: string, runId: string, now: Date = new Date()): void {
+export function recordAttempt(db: Database, planId: string, taskId: string, runId: string, now: Date = new Date(), count = true): void {
   const goal = getGoal(db, planId)
   const task = getTask(db, planId, taskId)
   if (!goal || !task) return
@@ -534,6 +538,7 @@ export function recordAttempt(db: Database, planId: string, taskId: string, runI
   if (isAttemptBlocked(db, planId, task)) {
     throw new GoalError(`Item ${taskId} is blocked: it reached its attempt limit and waits for the person's answer (item ${asked!.id}). Leave it alone this run.`)
   }
+  if (!count) return
   const limit = goal.limits.max_item_attempts
   const already = db.prepare('SELECT 1 FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND run_id = ?').get(planId, taskId, runId)
   if (already) return
@@ -570,6 +575,8 @@ export function failRun(db: Database, runId: string, status: 'failed' | 'timed_o
   updateRun(db, runId, { status, ended_at: new Date().toISOString(), summary: run.summary ?? reason })
   // What its watches reported goes to the next run instead
   releaseWatchEvents(db, runId)
+  // Runs that keep crashing or timing out can loop too
+  tripBreakerIfRunaway(db, run.plan_id)
 }
 
 /** Hides resolved items older than the goal's retention period. Returns how many were archived. */

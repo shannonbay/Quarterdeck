@@ -650,7 +650,7 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
       <Text bold>Open items</Text>
       {g.openItems.length === 0 && <Text dimColor>  none</Text>}
       {g.openItems.map((item) => (
-        <Text key={`item-${g.id}/${item.id}`}>  · {item.title}</Text>
+        <Text key={`item-${g.id}/${item.id}`}>  · {item.title}{item.blocked && <Text color="yellow"> · blocked: out of attempts, waits for your answer</Text>}</Text>
       ))}
       {g.openItemCount > g.openItems.length && <Text dimColor>  … and {g.openItemCount - g.openItems.length} more</Text>}
 
