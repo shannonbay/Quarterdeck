@@ -28,10 +28,15 @@ type Answer = any
 export interface LiveServer {
   /** Calls a tool and gives its answer; throws when the server refuses the call. */
   call(tool: string, args?: Record<string, unknown>): Promise<Answer>
+  /** Calls a tool and gives its answer's text as it came over the wire (for its size and form). */
+  text(tool: string, args?: Record<string, unknown>): Promise<string>
   /** Calls a tool the server should refuse and gives the refusal's text; throws when it goes through. */
   refused(tool: string, args?: Record<string, unknown>): Promise<string>
   /** The server's database, for what no tool reports (a run's self_caused) and for moving a watch's clock. */
   db: Database
+  /** The server's home folder (HOME and USERPROFILE), under the temp folder. It has a standing session's
+   *  `launch.mjs`, so the server records its CLI there (home.live.ts proves it went there and not to the real home). */
+  home: string
   /** A new working directory for a goal, with lines.txt and the script PRINT_LINES runs. */
   workDir(name: string): string
   stop(): Promise<void>
@@ -44,7 +49,10 @@ export async function startLiveServer(): Promise<LiveServer> {
   const root = mkdtempSync(join(tmpdir(), 'quarterdeck-live-'))
   const home = join(root, 'home')
   const dbPath = join(root, 'tasks.db')
-  mkdirSync(home)
+  // A standing session's launch.mjs (never run), so recordCliPath writes its cli-path here at start-up
+  const runner = join(home, '.quarterdeck', 'runner')
+  mkdirSync(runner, { recursive: true })
+  writeFileSync(join(runner, 'launch.mjs'), '// live test: never run\n')
 
   const child: ChildProcess = spawn(process.execPath, [BUNDLE], {
     env: { ...process.env, USERPROFILE: home, HOME: home, QUARTERDECK_DB: dbPath, QUARTERDECK_UPDATE_CHECK: '0', QUARTERDECK_SKIP_HOOKS: '1' },
@@ -92,15 +100,23 @@ export async function startLiveServer(): Promise<LiveServer> {
     return { text: r.result?.content?.[0]?.text ?? '', isError: Boolean(r.result?.isError) }
   }
 
+  /** The tool's answer as text; throws when the server refused the call. */
+  async function text(tool: string, args: Record<string, unknown> = {}): Promise<string> {
+    const r = await raw(tool, args)
+    if (r.isError) throw new Error(`${tool} was refused: ${r.text}`)
+    return r.text
+  }
+
   // The server made the database (and ran its migrations) when it started
   const db = new Database(dbPath)
 
   return {
     db,
+    home,
+    text,
     async call(tool, args = {}) {
-      const r = await raw(tool, args)
-      if (r.isError) throw new Error(`${tool} was refused: ${r.text}`)
-      try { return JSON.parse(r.text) } catch { return r.text }
+      const answer = await text(tool, args)
+      try { return JSON.parse(answer) } catch { return answer }
     },
     async refused(tool, args = {}) {
       const r = await raw(tool, args)

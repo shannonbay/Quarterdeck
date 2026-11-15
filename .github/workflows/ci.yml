@@ -42,6 +42,8 @@ jobs:
           npm run typecheck --prefix web
       - name: Test (core, mcp, web)
         run: npm test
+      - name: Live tests (the bundled MCP server over stdio)
+        run: npm run test:live --prefix mcp
 
   plugins:
     name: Plugins (validate and test)

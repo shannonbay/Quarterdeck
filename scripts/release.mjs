@@ -2,7 +2,8 @@
 /**
  * Publishes a Quarterdeck release: `npm run release -- 0.12.0 [--push]`.
  *
- * 1. Checks main is clean, then runs every test (workspaces and both plugins).
+ * 1. Checks main is clean, then runs every test (workspaces, the live tests
+ *    against the bundled server, and both plugins).
  * 2. Sets the version in both plugin.json files and commits that on main.
  * 3. Builds, then commits the installable marketplace (marketplace.json, the
  *    plugins with the bundled server and each plugin's hooks in one file
@@ -55,6 +56,7 @@ if (git('tag', '--list', `v${version}`)) fail(`tag v${version} already exists`)
 
 if (!skipTests) {
   run('npm', ['test'])
+  run('npm', ['run', 'test:live', '--prefix', 'mcp'])
   for (const p of PLUGINS) run('claude', ['plugin', 'test', `plugins/${p}`])
 }
 
