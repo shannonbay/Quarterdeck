@@ -94,6 +94,25 @@ test('update_goal applies confirmed changes', async ($, on) => {
   expect(fake.of('update_goal')[0]?.input).toEqual({ goal_id: 'g1', autonomy: { 'email.delete': 'off' } })
 })
 
+test('update_goal takes edits to part of the instructions, shows just those, and refuses one that would miss', async ($, on) => {
+  const asked = engine(on, { answer: 'Apply changes' })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Unsubscribe', instructions: 'Find stale senders. Propose one item per sender. Never send mail.' })])
+  await $.session.start(START)
+  const edits = [{ old: 'Propose one item per sender.', new: 'Propose one item per sender, with its count.' }, { old: ' Never send mail.', new: '' }]
+  await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', instructions_edits: edits } as never)
+  expect(asked.asked[0]).toBe('Change the goal "Unsubscribe"?\n• Instructions: replace "Propose one item per sender." with "Propose one item per sender, with its count."\n• Instructions: remove " Never send mail."')
+  expect(fake.of('update_goal')[0]?.input).toEqual({ goal_id: 'g1', instructions_edits: edits })
+
+  const missing = await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', instructions_edits: [{ old: 'Archive newsletters.', new: 'x' }] } as never)
+  expect(String(missing.result)).toContain("don't contain the text to replace")
+  const twice = await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', instructions_edits: [{ old: 'sender', new: 'x' }] } as never)
+  expect(String(twice.result)).toContain('more than once')
+  const both = await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', instructions: 'x', instructions_edits: edits } as never)
+  expect(String(both.result)).toContain('not both')
+  expect(asked.asked).toHaveLength(1) // none of those asked the person
+  expect(fake.of('update_goal')).toHaveLength(1)
+})
+
 test('update_goal passes a confirmed category merge to the server', async ($, on) => {
   const asked = engine(on, { answer: 'Apply changes' })
   const fake = fakeQuarterdeck(on, [failed()])

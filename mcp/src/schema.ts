@@ -255,6 +255,8 @@ export const UpdateGoalSchema = z.object({
   name: z.string().trim().min(1).optional(),
   objective: z.string().trim().min(1).optional(),
   instructions: z.string().optional().describe('Standing instructions; "" clears them'),
+  instructions_edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).optional()
+    .describe('Replacements in the current instructions, applied in order: each old must appear exactly once. Not with instructions'),
   autonomy: z.record(Mode.nullable()).optional().describe('Category → off | propose | auto; null removes the category'),
   tool_map: z.record(z.string().nullable()).optional().describe('Tool name pattern → category; null removes the rule'),
   merge_categories: z.record(z.string().trim().min(1)).optional().describe('Old action category → the category to merge it into: past items, autonomy and tool rules take the new name, so earlier approvals count toward the Switch to auto suggestion'),

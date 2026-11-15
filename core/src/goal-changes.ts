@@ -17,6 +17,12 @@ export interface GoalChanges {
   name?: string
   objective?: string
   instructions?: string
+  /**
+   * Replacements in the current instructions, in order, each against the text
+   * the ones before it left: `old` must appear exactly once. Cheaper to send
+   * than the whole text, and the person reviews only what changes.
+   */
+  instructions_edits?: InstructionEdit[]
   /** Category → mode; null removes the category (it falls back to "propose"). */
   autonomy?: Record<string, AutonomyMode | null>
   /** Tool name pattern → category; null removes the rule. */
@@ -37,6 +43,29 @@ export interface GoalChanges {
   model?: string | null
 }
 
+export interface InstructionEdit { old: string; new: string }
+
+/**
+ * The instructions after `edits`, each applied to what the ones before it
+ * left. Throws when an edit's `old` is empty, missing or there more than once,
+ * so a change never lands somewhere nobody meant. The quarterdeck-goals plugin
+ * has its own copy (`editInstructions`), to show the person before asking.
+ */
+export function applyInstructionEdits(text: string, edits: InstructionEdit[]): string {
+  let out = text
+  edits.forEach((e, i) => {
+    const which = edits.length > 1 ? ` (edit ${i + 1})` : ''
+    if (!e.old) throw new GoalError(`An instructions edit needs the text to replace${which}.`)
+    const at = out.indexOf(e.old)
+    if (at < 0) throw new GoalError(`The instructions don't contain the text to replace${which}: "${clipText(e.old)}". Read them again with goal_detail.`)
+    if (out.indexOf(e.old, at + 1) >= 0) throw new GoalError(`The text to replace is in the instructions more than once${which}: "${clipText(e.old)}". Give more of it, so it's there once.`)
+    out = out.slice(0, at) + e.new + out.slice(at + e.old.length)
+  })
+  return out
+}
+
+const clipText = (s: string) => (s.length > 80 ? `${s.slice(0, 79)}…` : s)
+
 const MODES = new Set(['off', 'propose', 'auto'])
 
 /** Applies a set of changes the person confirmed. Returns one line per change made. */
@@ -54,6 +83,10 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
   for (const id of changes.forget_memory ?? []) {
     if (getMemory(db, id)?.plan_id !== planId) throw new GoalError(`Memory ${id} isn't this goal's.`)
   }
+  if (changes.instructions !== undefined && changes.instructions_edits?.length) {
+    throw new GoalError('Give the instructions in full or as edits, not both.')
+  }
+  const edited = changes.instructions_edits?.length ? applyInstructionEdits(goal.instructions, changes.instructions_edits) : undefined
 
   const done: string[] = []
   db.transaction(() => {
@@ -69,6 +102,11 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
     if (changes.instructions !== undefined && changes.instructions !== goal.instructions) {
       updateGoal(db, planId, { instructions: changes.instructions })
       done.push(changes.instructions.trim() ? 'instructions changed' : 'instructions cleared')
+    }
+    if (edited !== undefined && edited !== goal.instructions) {
+      updateGoal(db, planId, { instructions: edited })
+      const n = changes.instructions_edits!.length
+      done.push(`instructions edited (${n} ${n === 1 ? 'change' : 'changes'})`)
     }
     if (changes.autonomy && Object.keys(changes.autonomy).length) {
       const autonomy = { ...goal.autonomy }

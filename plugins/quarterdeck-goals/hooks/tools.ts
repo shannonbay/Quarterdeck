@@ -7,7 +7,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { GoalCard } from '../types'
 import { addTodo, answerItem, approve, createGoal, fetchOverview, editTodo, fetchTodos, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
-import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, toCard } from './model'
+import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
@@ -110,7 +110,12 @@ export const TOOLS = [
         goal: GOAL,
         name: { type: 'string' },
         objective: { type: 'string' },
-        instructions: { type: 'string', description: 'The new standing instructions in full; "" clears them' },
+        instructions: { type: 'string', description: 'The new standing instructions in full; "" clears them. To change part of them, use instructions_edits instead' },
+        instructions_edits: {
+          type: 'array',
+          description: 'Changes to part of the standing instructions, like the Edit tool: each replaces old (copied exactly from goal_detail, there exactly once) with new ("" removes it), in order. The person sees just these. Not with instructions',
+          items: { type: 'object', properties: { old: { type: 'string' }, new: { type: 'string' } }, required: ['old', 'new'] },
+        },
         autonomy: { type: 'object', additionalProperties: { type: ['string', 'null'], enum: ['off', 'propose', 'auto', null] } },
         tool_map: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
         merge_categories: {
@@ -234,8 +239,15 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
 
   if (name === 'update_goal') {
     // Only the change fields: the call also carries the engine's own (tool, tool_use_id)
-    const keys = ['name', 'objective', 'instructions', 'autonomy', 'tool_map', 'merge_categories', 'add_memory', 'forget_memory', 'watches', 'status', 'model'] as const
+    const keys = ['name', 'objective', 'instructions', 'instructions_edits', 'autonomy', 'tool_map', 'merge_categories', 'add_memory', 'forget_memory', 'watches', 'status', 'model'] as const
     const changes = Object.fromEntries(keys.filter((k) => input[k] !== undefined).map((k) => [k, input[k]])) as GoalChanges
+    if (changes.instructions_edits !== undefined) {
+      if (!Array.isArray(changes.instructions_edits)) return fail('instructions_edits is a list of {old, new}.')
+      if (changes.instructions !== undefined) return fail('Give the instructions in full or as edits, not both.')
+      const edited = editInstructions(goal.instructions, changes.instructions_edits)
+      if ('error' in edited) return fail(edited.error)
+      if (edited.text === goal.instructions) delete changes.instructions_edits
+    }
     const lines = describeGoalChanges(goal, changes)
     if (lines.length === 0) return fail(`Nothing to change in ${goal.name}: give at least one new value.`)
     if (!(await confirmWith($, `Change the goal "${goal.name}"?\n${lines.map((l) => `• ${l}`).join('\n')}`, 'Apply changes'))) return fail('The person declined; the goal is unchanged.')

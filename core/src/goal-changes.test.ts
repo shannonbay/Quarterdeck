@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, getGoal, getPlan, listMemory, insertMemory, queueRun, getRun, claimRun, schedulerPass, buildOverview,
-  applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, parseLimitReset, isUsageLimit, addItem, getTask,
+  applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
 } from './index.js'
 
 let db: Database
@@ -12,6 +12,29 @@ const plan = { id: 'g1', name: 'Inbox', description: null, status: 'active' as c
 beforeEach(() => {
   db = openDatabase(':memory:')
   createGoal(db, plan, { objective: 'Inbox zero', instructions: '', autonomy: { 'email.archive': 'auto' } })
+})
+
+describe('instruction edits', () => {
+  beforeEach(() => { updateGoal(db, 'g1', { instructions: 'Find stale senders. Propose one item per sender. Never send mail.' }) })
+
+  it('replaces each old text, in order, and says how many', () => {
+    expect(applyGoalChanges(db, 'g1', { instructions_edits: [
+      { old: 'Propose one item per sender.', new: 'Propose one item per sender, with its count.' },
+      { old: 'its count', new: 'its message count' }, // sees the edit before it
+      { old: ' Never send mail.', new: '' },
+    ] })).toEqual(['instructions edited (3 changes)'])
+    expect(getGoal(db, 'g1')!.instructions).toBe('Find stale senders. Propose one item per sender, with its message count.')
+  })
+
+  it('refuses text that is missing, there twice or empty, or edits with full instructions, changing nothing', () => {
+    expect(() => applyGoalChanges(db, 'g1', { name: 'Other', instructions_edits: [{ old: 'Archive', new: 'x' }] })).toThrow(/don't contain/)
+    expect(() => applyGoalChanges(db, 'g1', { instructions_edits: [{ old: 'sender', new: 'x' }] })).toThrow(/more than once/)
+    expect(() => applyGoalChanges(db, 'g1', { instructions_edits: [{ old: '', new: 'x' }] })).toThrow(/needs the text/)
+    expect(() => applyGoalChanges(db, 'g1', { instructions: 'x', instructions_edits: [{ old: 'Find', new: 'x' }] })).toThrow(/not both/)
+    expect(getPlan(db, 'g1')!.name).toBe('Inbox')
+    expect(getGoal(db, 'g1')!.instructions).toBe('Find stale senders. Propose one item per sender. Never send mail.')
+    expect(applyInstructionEdits('a b a', [{ old: 'a b', new: 'c' }])).toBe('c a')
+  })
 })
 
 describe('goal model', () => {

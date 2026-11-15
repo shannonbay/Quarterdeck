@@ -586,6 +586,8 @@ export type GoalChanges = {
   name?: string
   objective?: string
   instructions?: string
+  /** Replacements in the current instructions, in order; each `old` must be there exactly once. */
+  instructions_edits?: InstructionEdit[]
   autonomy?: Record<string, string | null>
   tool_map?: Record<string, string | null>
   /** Old action category → the one to merge it into (past items, autonomy and tool rules). */
@@ -617,11 +619,36 @@ export function watchSetupPrompt(name: string, watch: string): string {
 }
 
 /** The changes as the person reads them before confirming: one line each, from what is to what will be. */
+export type InstructionEdit = { old: string; new: string }
+
+/**
+ * The instructions after `edits`, or why they can't be applied: an `old` that
+ * is empty, missing or there more than once. The same rules as the server's
+ * applyInstructionEdits (core/src/goal-changes.ts), checked here so the person
+ * is never asked to confirm an edit that would fail.
+ */
+export function editInstructions(text: string, edits: InstructionEdit[]): { text: string } | { error: string } {
+  let out = text
+  for (const [i, e] of edits.entries()) {
+    const which = edits.length > 1 ? ` (edit ${i + 1})` : ''
+    if (typeof e?.old !== 'string' || !e.old || typeof e.new !== 'string') return { error: `Each instructions edit needs old (the text to replace) and new${which}.` }
+    const at = out.indexOf(e.old)
+    if (at < 0) return { error: `The instructions don't contain the text to replace${which}: "${clip(e.old, 80)}". Read them again with goal_detail.` }
+    if (out.indexOf(e.old, at + 1) >= 0) return { error: `The text to replace is in the instructions more than once${which}: "${clip(e.old, 80)}". Give more of it, so it's there once.` }
+    out = out.slice(0, at) + e.new + out.slice(at + e.old.length)
+  }
+  return { text: out }
+}
+
 export function describeGoalChanges(g: GoalCard, c: GoalChanges): string[] {
   const lines: string[] = []
   if (c.name && c.name !== g.name) lines.push(`Name: "${g.name}" → "${c.name}"`)
   if (c.objective && c.objective !== g.objective) lines.push(`Objective → ${c.objective}`)
   if (c.instructions !== undefined && c.instructions !== g.instructions) lines.push(c.instructions.trim() ? `Instructions → ${c.instructions}` : 'Instructions: cleared')
+  // Each edit in full: the person reviews exactly the text that changes
+  for (const e of c.instructions_edits ?? []) {
+    if (e.old !== e.new) lines.push(e.new ? `Instructions: replace "${e.old}" with "${e.new}"` : `Instructions: remove "${e.old}"`)
+  }
   for (const [cat, mode] of Object.entries(c.autonomy ?? {})) lines.push(`${cat}: ${g.autonomy[cat] ?? 'propose'} → ${mode ?? 'propose (default)'}`)
   for (const [pat, cat] of Object.entries(c.tool_map ?? {})) lines.push(cat === null ? `Tool rule removed: ${pat}` : `Tool rule: ${pat} → ${cat}${cat === 'untrusted' ? ' (reads outside content: auto actions then need approval for the rest of the run)' : ''}`)
   for (const [from, to] of Object.entries(c.merge_categories ?? {})) {
