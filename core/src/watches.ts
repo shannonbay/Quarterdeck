@@ -18,7 +18,8 @@ import { runVerifyCommand } from './gates.js'
 import { getGoal, newId } from './goals.js'
 import { canonicalToolName, matchToolCategory, QUARTERDECK_TOOL_PREFIX } from './guard.js'
 import { getPlan } from './queries.js'
-import type { Watch, WatchEvent, WatchSpec } from './types.js'
+import { STATUS_TONES } from './status-check.js'
+import type { Watch, WatchEvent, WatchSpec, WatchStatusOutcome, WatchStatusRules } from './types.js'
 
 export const WATCH_TIMEOUT_S = 30
 /** Lines read from one check; more are ignored. */
@@ -40,13 +41,67 @@ export const WATCH_DEFAULT_MATCH = String.raw`"id"\s*:\s*"([^"]+)"`
 export const WATCH_REPORT_GRACE_MS = 2 * 60_000
 /** The event a 'change' watch records when its output becomes empty. */
 export const WATCH_NONE_LINE = '(none)'
+/** Status rules a watch may have. */
+export const WATCH_STATUS_RULES_MAX = 10
+/** A status a watch sets is at most this long (the pane's one-line summary). */
+export const WATCH_STATUS_CHARS = 40
 /** Events a run has taken are kept this long. */
 const EVENT_RETENTION_MS = 30 * 86_400_000
 
 type Row = Record<string, unknown>
 
 function deserializeWatch(r: Row): Watch {
-  return { ...r, tool_input: JSON.parse((r.tool_input as string) || '{}'), seen: JSON.parse((r.seen as string) || '[]') } as Watch
+  return {
+    ...r,
+    tool_input: JSON.parse((r.tool_input as string) || '{}'),
+    seen: JSON.parse((r.seen as string) || '[]'),
+    status_rules: r.status_rules ? JSON.parse(r.status_rules as string) : null,
+  } as Watch
+}
+
+/** Checks a watch's status rules and returns them in the form stored; null for none. */
+export function validateStatusRules(label: string, input: unknown): WatchStatusRules | null {
+  if (input === undefined || input === null) return null
+  const fail = (why: string): never => { throw new Error(`The watch "${label}" has status rules that ${why}.`) }
+  if (typeof input !== 'object' || Array.isArray(input)) fail('are not an object with rules and a default')
+  const given = input as { rules?: unknown; default?: unknown }
+  const outcome = (o: unknown, where: string): WatchStatusOutcome => {
+    if (!o || typeof o !== 'object') fail(`need a status in ${where}`)
+    const { status, tone, run } = o as Record<string, unknown>
+    const text = typeof status === 'string' ? status.replace(/\s+/g, ' ').trim() : ''
+    if (!text) fail(`need a status in ${where}`)
+    if (text.length > WATCH_STATUS_CHARS) fail(`give a status longer than ${WATCH_STATUS_CHARS} characters in ${where}`)
+    if (tone !== undefined && !(STATUS_TONES as readonly unknown[]).includes(tone)) fail(`give a tone other than ${STATUS_TONES.join(', ')} in ${where}`)
+    if (run !== undefined && typeof run !== 'boolean') fail(`give run as something other than true or false in ${where}`)
+    return { status: text, ...(tone !== undefined ? { tone: tone as WatchStatusOutcome['tone'] } : {}), ...(run ? { run: true } : {}) }
+  }
+  const list = given.rules ?? []
+  if (!Array.isArray(list)) fail('give rules as something other than a list')
+  const rules = (list as unknown[]).map((r, i) => {
+    const match = (r as { match?: unknown })?.match
+    if (typeof match !== 'string' || !match) fail(`need a match in rule ${i + 1}`)
+    try { new RegExp(match as string) } catch { fail(`have a match that isn't a regular expression in rule ${i + 1}: ${match}`) }
+    return { match: match as string, ...outcome(r, `rule ${i + 1}`) }
+  })
+  if (rules.length > WATCH_STATUS_RULES_MAX) fail(`number more than ${WATCH_STATUS_RULES_MAX}`)
+  const fallback = given.default === undefined || given.default === null ? undefined : outcome(given.default, 'the default')
+  if (!rules.length && !fallback) fail('have neither rules nor a default')
+  return fallback ? { rules, default: fallback } : { rules }
+}
+
+/** The outcome a check's lines give: the first rule matching any line, else the default. */
+export function matchStatusRules(rules: WatchStatusRules, lines: string[]): WatchStatusOutcome | undefined {
+  for (const rule of rules.rules) {
+    const re = new RegExp(rule.match)
+    if (lines.some((l) => re.test(l))) return rule
+  }
+  return rules.default
+}
+
+/** A watch's status rules in a line, for the person to read before setting them. */
+export function describeStatusRules(r: WatchStatusRules): string {
+  const one = (o: WatchStatusOutcome) => `"${o.status}"${o.tone ? ` (${o.tone})` : ''}${o.run ? ' and a run' : ''}`
+  return [...r.rules.map((x) => `/${x.match}/ → ${one(x)}`), ...(r.default ? [`otherwise ${one(r.default)}`] : [])].join('; ')
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────
@@ -74,6 +129,8 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   if (!Number.isInteger(every) || every < WATCH_MIN_MINUTES) throw new Error(`The watch "${label}" must check every ${WATCH_MIN_MINUTES} minute or more.`)
   const fires = spec.fires ?? 'new'
   if (fires !== 'new' && fires !== 'change') throw new Error(`The watch "${label}" fires on "new" or "change", not ${JSON.stringify(fires)}.`)
+  const statusRules = validateStatusRules(label, (spec as { status?: unknown }).status)
+  const rulesText = statusRules ? JSON.stringify(statusRules) : null
 
   // What it checks: a command, or a tool with its input and how to read the answer
   const what: Check = { kind: 'command', command: null, tool: null, tool_input: '{}', match: null }
@@ -105,19 +162,20 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   const existing = listWatches(db, planId).find((w) => w.name === label)
   if (!existing) {
     const id = newId('wch')
-    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, match, every_minutes, fires, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, new Date().toISOString())
+    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, new Date().toISOString())
     return getWatch(db, id)!
   }
   const same = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool
     && JSON.stringify(existing.tool_input) === what.tool_input && existing.match === what.match && existing.fires === fires
+    && JSON.stringify(existing.status_rules) === JSON.stringify(statusRules)
   if (same) {
     db.prepare('UPDATE goal_watches SET every_minutes = ? WHERE id = ?').run(every, existing.id)
   } else {
     db.prepare(`
-      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, match = ?, every_minutes = ?, fires = ?, seen = '[]', baseline_at = NULL,
+      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
         last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0 WHERE id = ?
-    `).run(what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, existing.id)
+    `).run(what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, existing.id)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(existing.id)
   }
   return getWatch(db, existing.id)!
@@ -168,8 +226,10 @@ export interface WatchCheck {
   baseline: boolean
   /** How many lines the check gave. */
   lines: number
-  /** The lines not seen before (none on the baseline). */
+  /** The lines not seen before (none on the baseline), or none when the watch's status rules start no run. */
   fresh: string[]
+  /** The status the watch's rules set, when this check changed it. */
+  status?: WatchStatusOutcome
   error?: string
 }
 
@@ -202,7 +262,23 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     seen = [...result.lines, ...watch.seen.filter((l) => !current.has(l))].slice(0, WATCH_SEEN_MAX)
   }
 
+  // Status rules: the watch sets the goal's status, and starts a run only when the rule says so
+  let status: WatchStatusOutcome | undefined
+  if (watch.status_rules) {
+    const outcome = matchStatusRules(watch.status_rules, result.lines)
+    if (!outcome?.run) fresh = []
+    const goal = getGoal(db, watch.plan_id)
+    const source = `watch:${watch.name}`
+    if (outcome && goal && (goal.status_note !== outcome.status || goal.status_tone !== (outcome.tone ?? null) || goal.status_source !== source)) status = outcome
+  }
+
   db.transaction(() => {
+    if (status) {
+      // Most recent writer wins: a watch's status replaces a run's, and any check a run attached to it
+      db.prepare(`UPDATE goals SET status_note = ?, status_tone = ?, status_note_at = ?, status_note_untrusted = NULL, status_source = ?,
+        status_check = NULL, status_check_at = NULL, status_check_failures = 0 WHERE plan_id = ?`)
+        .run(status.status, status.tone ?? null, at, `watch:${watch.name}`, watch.plan_id)
+    }
     const insert = db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)')
     for (const line of fresh) insert.run(newId('wev'), watchId, watch.plan_id, line, at, duringRun)
     // last_error and last_fired_at are written only when they change: the pane re-reads on those
@@ -213,7 +289,7 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NOT NULL AND created_at < ?')
       .run(watchId, new Date(now.getTime() - EVENT_RETENTION_MS).toISOString())
   })()
-  return { baseline, lines: result.lines.length, fresh }
+  return { baseline, lines: result.lines.length, fresh, ...(status ? { status } : {}) }
 }
 
 /**

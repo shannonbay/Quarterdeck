@@ -16,7 +16,7 @@ export type OverviewGoal = {
   /** Missing from a server older than per-goal models. */
   model?: string | null
   /** A short status a run set through end_run; missing from a server older than goal statuses. */
-  status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null } | null
+  status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null; source?: string | null } | null
   instructions?: string
   autonomy?: Record<string, string>
   tool_map?: Record<string, string>
@@ -57,7 +57,7 @@ const WATCH_EVENTS_SOURCE = 'watch events'
  */
 function toStatusNote(n: NonNullable<OverviewGoal['status_note']>): NonNullable<GoalCard['statusNote']> {
   const watchEvents = n.untrusted === WATCH_EVENTS_SOURCE
-  return { text: n.text, at: n.at ?? null, stale: n.stale, untrusted: watchEvents ? null : n.untrusted ?? null, watchEvents, tone: n.tone ?? null }
+  return { text: n.text, at: n.at ?? null, stale: n.stale, untrusted: watchEvents ? null : n.untrusted ?? null, watchEvents, tone: n.tone ?? null, byWatch: n.source?.startsWith('watch:') ? n.source.slice(6) : null }
 }
 
 export function toCard(g: OverviewGoal): GoalCard {
@@ -615,7 +615,16 @@ export type GoalChanges = {
 }
 
 /** A watch as update_goal takes it: a command to run, or a tool to call with its input. */
-export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: 'new' | 'change' }
+export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** Rules by which a watch sets the goal's status (and tone) from its lines, with no run. */
+export type WatchStatusOutcome = { status: string; tone?: 'ok' | 'attention' | 'problem'; run?: boolean }
+export type WatchStatusChange = { rules?: (WatchStatusOutcome & { match: string })[]; default?: WatchStatusOutcome }
+
+/** A watch's status rules in a line, as the person reads them before saying yes. */
+export function describeWatchStatus(r: WatchStatusChange): string {
+  const one = (o: WatchStatusOutcome) => `"${o.status}"${o.tone ? ` (${o.tone})` : ''}${o.run ? ' and a run starts' : ''}`
+  return [...(r.rules ?? []).map((x) => `/${x.match}/ → ${one(x)}`), ...(r.default ? [`otherwise ${one(r.default)}`] : [])].join('; ')
+}
 
 /** How often a watch checks when it isn't said (the server's default). */
 export const WATCH_DEFAULT_MINUTES = 5
@@ -675,8 +684,8 @@ export function describeGoalChanges(g: GoalCard, c: GoalChanges): string[] {
   for (const [name, w] of Object.entries(c.watches ?? {})) {
     const had = g.watches.some((x) => x.name === name.trim())
     if (w === null) lines.push(`Watch removed: ${name}`)
-    else if (w.tool) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this tool is called without asking you, and a run starts when ${w.fires === 'change' ? 'its answer changes' : "its answer has something it hasn't before"}: ${w.tool} ${JSON.stringify(w.input ?? {})}${w.match ? ` (read with ${w.match})` : ''}`)
-    else lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this command runs on your computer, and a run starts when ${w.fires === 'change' ? 'its output changes' : "it prints a line it hasn't before"}: ${w.command ?? ''}`)
+    else if (w.tool) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this tool is called without asking you, and a run starts when ${w.fires === 'change' ? 'its answer changes' : "its answer has something it hasn't before"}: ${w.tool} ${JSON.stringify(w.input ?? {})}${w.match ? ` (read with ${w.match})` : ''}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
+    else lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this command runs on your computer, and a run starts when ${w.fires === 'change' ? 'its output changes' : "it prints a line it hasn't before"}: ${w.command ?? ''}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
   }
   if (c.model !== undefined && (c.model || null) !== g.model) lines.push(`Model: ${goalModelLabel(g.model)} → ${goalModelLabel(c.model || null)}`)
   if (c.status && c.status !== g.status) lines.push(c.status === 'paused' ? 'Pause the goal' : 'Resume the goal')

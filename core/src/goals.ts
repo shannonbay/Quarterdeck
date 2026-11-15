@@ -36,6 +36,7 @@ function deserializeGoal(r: Row): Goal {
     status_check_at: (r.status_check_at as string | null | undefined) ?? null,
     status_check_failures: (r.status_check_failures as number | undefined) ?? 0,
     status_tone: (r.status_tone as Goal['status_tone'] | undefined) ?? null,
+    status_source: (r.status_source as string | null | undefined) ?? null,
     resumed_at: (r.resumed_at as string | null | undefined) ?? null,
   } as Goal
 }
