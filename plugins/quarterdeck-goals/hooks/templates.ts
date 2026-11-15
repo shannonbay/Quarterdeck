@@ -210,7 +210,7 @@ const OWN_CLONE = (suffix: string) =>
 
 /** What a GitHub fixer's goal status means, with a github_pr check so it stays current between runs. */
 export const STATUS = (open: string, pr: string) =>
-  `Status: end each run with a status saying how the goal stands: "${open}" while a ${pr} you opened waits (the oldest, if there are several; add "+N more" for the rest), otherwise "clean". Give it a status_tone: attention while a ${pr} waits, ok when clean, problem when something is broken that you couldn't fix. With a ${pr} status, attach a status_check (kind github_pr, this repo as owner/name, its number, holds_while ["OPEN"], otherwise {"MERGED": {"status": "PR #<number> merged", "tone": "ok"}, "CLOSED": {"status": "PR #<number> closed", "tone": "problem"}}), so it updates without a run.`
+  `Status: end each run with a status saying how the goal stands: "${open}" while a ${pr} you opened waits (the oldest, if there are several; add "+N more" for the rest), otherwise "clean". Give it a status_tone: attention while a ${pr} waits, ok when clean, problem when something is broken that you couldn't fix. With a ${pr} status, attach a status_check (kind github_pr, this repo as owner/name, its number, holds_while ["OPEN"], otherwise {"MERGED": {"status": "PR #<number> merged", "tone": "ok"}, "CLOSED": {"status": "PR #<number> closed", "tone": "attention"}}), so it updates without a run.`
 
 /** The CI fixer's standing instructions, after which branch. */
 export const CI_FIX = [
