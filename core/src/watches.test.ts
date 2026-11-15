@@ -265,8 +265,47 @@ describe('the scheduler pass', () => {
     for (let i = 0; i < 3; i++) expect((await schedulerPass(db, { holder: 'A' })).claimed).toEqual([])
     expect(listRuns(db, 'g1').filter((r) => r.status === 'skipped')).toHaveLength(1)
     expect(getOpenRun(db, 'g1')).toBeUndefined()
-    // The news waits for whatever run comes next
-    expect(takeWatchEvents(db, 'g1')).toEqual([{ watch: 'x', new: ['a'], omitted: 0 }])
+    // The news waits for whatever run comes next ('1' was seen by the re-check made as the day's run ended)
+    expect(takeWatchEvents(db, 'g1')).toEqual([{ watch: 'x', new: ['a', '1'], omitted: 0 }])
+  })
+
+  it('re-checks command watches as a run ends and marks the run they start self-caused', async () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0, max_idle_runs: 2 } })
+    items('a')
+    const w = setWatch(db, 'g1', 'x', { command: LIST, every_minutes: 1000 })
+    await checkWatches(db, ['g1'])
+    // A goal whose run causes what its watch sees (it commits, and its watch lists commits)
+    const selfLoop = async (line: string) => {
+      const queued = getOpenRun(db, 'g1')
+      const claimed = claimRun(db, 'g1', { holder: 'A', ...(queued ? { queuedRunId: queued.id } : {}) })!
+      buildBrief(db, 'g1', claimed.run_id)
+      items('a', line)
+      endRun(db, claimed.run_id, 'nothing to do')
+      await checkWatches(db, ['g1']) // not due (every 1000 minutes), but the run just ended
+      expect(listWatchEvents(db, 'g1').at(-1)).toMatchObject({ line, seen_during_run: claimed.run_id })
+      if (getGoal(db, 'g1')!.status === 'active') queueForWatchEvents(db, 'g1')
+      return claimed.run_id
+    }
+    // The first run was started by hand; the run its re-check queues is the first self-caused one
+    expect(getRun(db, await selfLoop('b'))!.self_caused).toBe(0)
+    const second = await selfLoop('c')
+    expect(getRun(db, second)!.self_caused).toBe(1)
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    await selfLoop('d')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(getWatch(db, w.id)!.last_fired_at).not.toBeNull()
+  })
+
+  it('a watch run started by an ordinary check is not self-caused', async () => {
+    items('a')
+    setWatch(db, 'g1', 'x', { command: LIST, every_minutes: 1 })
+    await checkWatches(db, ['g1'])
+    items('a', 'b') // someone else opened an issue
+    await checkWatches(db, ['g1'], later(2))
+    const run = queueForWatchEvents(db, 'g1')!
+    const claimed = claimRun(db, 'g1', { holder: 'A', queuedRunId: run.id })!
+    buildBrief(db, 'g1', claimed.run_id)
+    expect(getRun(db, claimed.run_id)!.self_caused).toBe(0)
   })
 
   it('checks nothing for a paused goal, and stops starting checks once out of time', async () => {

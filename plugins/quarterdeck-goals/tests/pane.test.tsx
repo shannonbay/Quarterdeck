@@ -167,7 +167,7 @@ test('expanding a goal shows open items, runs and memory; memory delete asks fir
     goal({
       id: 'g1',
       name: 'Inbox',
-      open_items: [{ id: '5', goal: 'Invoice from Acme' }],
+      open_items: [{ id: '5', goal: 'Invoice from Acme' }, { id: '6', goal: 'Fix CI on PR 31', blocked: true }],
       runs: [{ id: 'r1', status: 'completed', trigger: 'schedule', summary: 'Triaged 4 emails', started_at: '2026-11-07T07:00:00Z', ended_at: '2026-11-07T07:02:00Z' }],
       memory: [{ id: 'm1', kind: 'preference', text: 'Alice likes short replies', pinned: false }],
     }),
@@ -179,6 +179,8 @@ test('expanding a goal shows open items, runs and memory; memory delete asks fir
     expect(await ui.find({ type: 'Text', text: /Invoice from Acme/ })).toBeUndefined()
     await ui.press({ key: 'toggle-g1' })
     expect(await ui.find({ type: 'Text', text: /Invoice from Acme/ })).toBeDefined()
+    expect((await ui.find({ type: 'Text', text: /Invoice from Acme/ }))?.text).not.toContain('blocked')
+    expect((await ui.find({ type: 'Text', text: /Fix CI on PR 31/ }))?.text).toContain('blocked: out of attempts')
     expect((await ui.find({ type: 'Text', text: /Triaged 4 emails/ }))?.text).toContain('schedule')
     expect(await ui.find({ type: 'Text', text: /Alice likes short replies/ })).toBeDefined()
     expect((await ui.find({ type: 'Link', text: /Open in browser/ }))?.props.href).toBe('http://localhost:3000/goals/g1')

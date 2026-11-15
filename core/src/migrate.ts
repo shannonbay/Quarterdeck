@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 11
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -333,6 +333,8 @@ export function runMigrations(db: Database): void {
     ['status_check_failures', 'INTEGER NOT NULL DEFAULT 0'],
     // How the goal stands by its status (ok / attention / problem): the pane colours the status by it
     ['status_tone', 'TEXT'],
+    // When the goal last went back to active: the runaway breaker counts only runs since then
+    ['resumed_at', 'TEXT'],
   ]
   for (const [col, def] of addedGoalColumns) {
     try { db.exec(`ALTER TABLE goals ADD COLUMN ${col} ${def}`) } catch { /* already exists */ }
@@ -391,6 +393,15 @@ export function runMigrations(db: Database): void {
   for (const col of ['holder', 'agent_id']) {
     try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
   }
+  // Schema version 11, the runaway breaker's loop signal: a watch run is self-caused when the
+  // events that started it were seen by the re-check made as the goal's previous run ended
+  try { db.exec('ALTER TABLE goal_runs ADD COLUMN self_caused INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  try {
+    db.exec('ALTER TABLE goal_runs ADD COLUMN watch_rechecked_at TEXT')
+    // Runs that ended before the upgrade count as re-checked, so the first scheduler pass
+    // doesn't re-check every goal's watches at once and tag what it sees with an old run
+    db.exec('UPDATE goal_runs SET watch_rechecked_at = ended_at WHERE ended_at IS NOT NULL')
+  } catch { /* already exists */ }
   db.exec(`
     -- One row per scheduler; only the holder whose lease hasn't expired starts runs
     CREATE TABLE IF NOT EXISTS scheduler_lease (
@@ -442,13 +453,17 @@ export function runMigrations(db: Database): void {
       line       TEXT NOT NULL,
       created_at TEXT NOT NULL,
       queued_at  TEXT,
-      run_id     TEXT
+      run_id     TEXT,
+      -- the run whose end the check that saw it was made for (null: an ordinary check)
+      seen_during_run TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
   `)
   // Added while version 2 was being built: a database that already has the table needs the column
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN asked_at TEXT') } catch { /* already exists */ }
+  // Schema version 11: events seen by the re-check made as a run ended
+  try { db.exec('ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT') } catch { /* already exists */ }
   // Schema version 8: a watch can fire on change
   try { db.exec("ALTER TABLE goal_watches ADD COLUMN fires TEXT NOT NULL DEFAULT 'new' CHECK (fires IN ('new', 'change'))") } catch { /* already exists */ }
   db.exec(`
@@ -459,6 +474,19 @@ export function runMigrations(db: Database): void {
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;
+  `)
+
+  // Schema version 10: which runs worked on each goal item, written by the server (never reported by the agent)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS goal_item_attempts (
+      plan_id      TEXT NOT NULL REFERENCES plans(id),
+      task_id      TEXT NOT NULL,
+      run_id       TEXT NOT NULL,
+      external_ref TEXT,
+      at           TEXT NOT NULL,
+      PRIMARY KEY (plan_id, task_id, run_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_item_attempts_ref ON goal_item_attempts(plan_id, external_ref);
   `)
 
   // ── Agent transcripts ───────────────────────────────────────────────────────

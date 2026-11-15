@@ -177,7 +177,7 @@ export interface WatchCheck {
  * Records one check's result: the lines it gave, or why it failed. New lines
  * become events. A failed check leaves what was seen alone and fires nothing.
  */
-export function recordWatchLines(db: Database, watchId: string, result: { lines: string[] } | { error: string }, now: Date = new Date()): WatchCheck {
+export function recordWatchLines(db: Database, watchId: string, result: { lines: string[] } | { error: string }, now: Date = new Date(), duringRun: string | null = null): WatchCheck {
   const watch = getWatch(db, watchId)
   if (!watch) throw new Error(`Watch ${watchId} not found`)
   const at = now.toISOString()
@@ -203,8 +203,8 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
   }
 
   db.transaction(() => {
-    const insert = db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at) VALUES (?, ?, ?, ?, ?)')
-    for (const line of fresh) insert.run(newId('wev'), watchId, watch.plan_id, line, at)
+    const insert = db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)')
+    for (const line of fresh) insert.run(newId('wev'), watchId, watch.plan_id, line, at, duringRun)
     // last_error and last_fired_at are written only when they change: the pane re-reads on those
     db.prepare('UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?')
       .run(JSON.stringify(seen), at, at, watchId)
@@ -216,18 +216,22 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
   return { baseline, lines: result.lines.length, fresh }
 }
 
-/** Runs a command watch in its goal's working directory and records the result. */
-export async function checkCommandWatch(db: Database, watchId: string, now: Date = new Date()): Promise<WatchCheck> {
+/**
+ * Runs a command watch in its goal's working directory and records the result.
+ * `duringRun`: the check is the re-check made as that run ended, so its new lines
+ * are what the run itself may have caused.
+ */
+export async function checkCommandWatch(db: Database, watchId: string, now: Date = new Date(), duringRun: string | null = null): Promise<WatchCheck> {
   const watch = getWatch(db, watchId)
   if (!watch) throw new Error(`Watch ${watchId} not found`)
   const plan = getPlan(db, watch.plan_id)
   if (!plan || watch.kind !== 'command' || !watch.command) throw new Error(`Watch ${watchId} has no command to run`)
   const r = await runVerifyCommand(watch.command, plan.working_dir, WATCH_TIMEOUT_S, { stdoutOnly: true, tailChars: WATCH_OUTPUT_CHARS })
-  if (r.passed) return recordWatchLines(db, watchId, { lines: toLines(r.output) }, now)
+  if (r.passed) return recordWatchLines(db, watchId, { lines: toLines(r.output) }, now, duringRun)
   const why = r.timed_out
     ? `Timed out after ${WATCH_TIMEOUT_S} s`
     : r.exit_code === null ? r.output : `Exit code ${r.exit_code}${r.stderr?.trim() ? `: ${r.stderr.trim()}` : ''}`
-  return recordWatchLines(db, watchId, { error: why }, now)
+  return recordWatchLines(db, watchId, { error: why }, now, duringRun)
 }
 
 // ── Tool watches: the plugin makes the call, since only a session can reach a connector ──
@@ -306,7 +310,14 @@ export interface WatchNews {
  * without, they are only listed.
  */
 export function takeWatchEvents(db: Database, planId: string, runId?: string): WatchNews[] {
-  if (runId) db.prepare('UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL').run(runId, planId)
+  if (runId) {
+    db.prepare('UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL').run(runId, planId)
+    // Self-caused: an event it was given was seen by the re-check made as the goal's previous run ended
+    db.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
+      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND e.seen_during_run = (
+        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
+        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1))`).run(runId, runId, planId, runId, runId)
+  }
   const rows = db.prepare(`
     SELECT e.line, COALESCE(w.name, 'a removed watch') AS watch
     FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id

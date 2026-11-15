@@ -3,7 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateTask, getTask, getPlan,
   addItem, buildBrief, queueRun, startRun, endRun, failRun, archiveResolved, withinActiveHours, decideTick, nextIntervalRun, recordSkip,
-  approveTask, rejectTask, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule,
+  approveTask, rejectTask, recordAttempt, countAttempts, isAttemptBlocked, decideItem, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule, buildOverview,
 } from './index.js'
 
 let db: Database
@@ -351,5 +351,352 @@ describe('scheduler decisions', () => {
     expect(recordSkip(db, 'g1', 'interval', 'channel busy')).toBeNull()
     expect(recordSkip(db, 'g1', 'interval', 'not connected')).not.toBeNull()
     expect(listRuns(db, 'g1')).toHaveLength(2)
+  })
+})
+
+describe('runaway breaker', () => {
+  // 'self-watch': a watch run started by what the goal's own previous run caused
+  const finishRun = (trigger: 'manual' | 'event' | 'interval' | 'watch' | 'self-watch' | 'health' = 'event') => {
+    const run = queueRun(db, 'g1', trigger === 'self-watch' ? 'watch' : trigger)
+    if (trigger === 'self-watch') db.prepare('UPDATE goal_runs SET self_caused = 1 WHERE id = ?').run(run.id)
+    startRun(db, run.id, null)
+    return endRun(db, run.id, 'nothing to do')
+  }
+
+  it('pauses the goal and asks the person after too many unscheduled runs that resolve nothing', () => {
+    for (let i = 0; i < 4; i++) finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    const ask = breakerAsks()
+    expect(ask).toHaveLength(1)
+    expect(ask[0].notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
+  const breakerAsks = () => db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref = 'runaway-breaker'").all() as
+    { id: string; goal: string; notes: string; status: string; result: string | null; review_requested_at: string | null }[]
+
+  /** A fake clock stepped a second per call, so runs and the resume never share a millisecond. */
+  const withClock = (fn: (tick: () => void) => void) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let t = Date.parse('2026-01-01T00:00:00.000Z')
+      fn(() => vi.setSystemTime((t += 1000)))
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('counts only runs since the goal was resumed, and asks again with the same question', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    updateGoal(db, 'g1', { status: 'active' })
+    expect(getGoal(db, 'g1')!.resumed_at).toBe(new Date().toISOString())
+    // Resuming answered "Resume it?", so it leaves Needs you
+    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'completed', result: 'Resumed' })])
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // The same item, open again: a second trip in the hour isn't lost
+    const asks = breakerAsks()
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ status: 'active', result: null })
+    expect(asks[0]!.review_requested_at).toBe(new Date().toISOString())
+  }))
+
+  it('counts the hour from the resume too', () => withClock((tick) => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    updateGoal(db, 'g1', { status: 'active' })
+    for (let i = 0; i < 3; i++) { tick(); finishRun('self-watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    tick(); finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  }))
+
+  it('asks with a request, not a question: Approve / Reject, no free-text answer', () => {
+    for (let i = 0; i < 5; i++) finishRun()
+    const ask = breakerAsks()[0]!
+    expect(JSON.parse((db.prepare('SELECT state FROM tasks WHERE id = ? AND plan_id = ?').get(ask.id, 'g1') as { state: string }).state)).toEqual({})
+    expect(ask.notes).toMatch(/approve this to resume the goal.*reject it to leave the goal paused/)
+    expect(() => decideItem(db, 'g1', ask.id, { decision: 'answer', feedback: 'no, leave it paused' })).toThrow(/isn't a question/)
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  })
+
+  it('approving the request resumes the goal and starts the count afresh', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'approve' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', resumed_at: new Date().toISOString() })
+    // Resumed as the Resume button would: no run is queued
+    expect(task).toMatchObject({ status: 'completed', result: 'Resumed', review_requested_at: null })
+    expect(queuedRun).toBeNull()
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // Tripping again reopens the same item as a request
+    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'active', result: null })])
+  }))
+
+  it('rejecting the request marks it done and leaves the goal paused', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick()
+    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject', feedback: 'look at it later' })
+    expect(task).toMatchObject({ status: 'completed', result: 'Left paused: look at it later', review_requested_at: null })
+    expect(queuedRun).toBeNull()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // No feedback needed to leave it paused
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick()
+    expect(decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject' }).task).toMatchObject({ status: 'completed', result: 'Left paused' })
+  }))
+
+  it("keeps a scheduled goal's next run, so its schedule is due again once resumed", () => withClock((tick) => {
+    const due = '2026-01-01T01:00:00.000Z'
+    updateGoal(db, 'g1', { next_run_at: due })
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'paused', next_run_at: due })
+    tick()
+    decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'approve' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', next_run_at: due })
+    // And after an ordinary Resume too
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', next_run_at: due })
+  }))
+
+  it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
+    tick(); updateGoal(db, 'g1', { status: 'paused' })
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+  }))
+
+  it('leaves idle scheduled runs alone', () => {
+    for (let i = 0; i < 6; i++) finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('a run that resolves an item resets the idle count', () => {
+    for (let i = 0; i < 4; i++) finishRun()
+    const run = queueRun(db, 'g1', 'event')
+    startRun(db, run.id, null)
+    const item = addItem(db, 'g1', run.id, { goal: 'x' }).task
+    updateTask(db, 'g1', item.id, { status: 'completed' })
+    endRun(db, run.id, 'did one')
+    finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('pauses after more unscheduled runs in an hour than max_runs_per_hour', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
+    finishRun('self-watch'); finishRun('health'); finishRun('event')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/4 unscheduled runs in the last hour \(limit 3\)/)
+  })
+
+  it('leaves watch runs started by others out of both counts: Repo Clean Check stays active', () => withClock((tick) => {
+    // Replay of Repo Clean Check: a report-only goal on a 1-minute watch, about 13 runs an
+    // hour, none resolving an item, none started by what its own previous run did
+    for (let i = 0; i < 13; i++) { tick(); finishRun('watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+  }))
+
+  it('trips on runs that keep failing or timing out', () => {
+    for (let i = 0; i < 5; i++) {
+      const run = queueRun(db, 'g1', 'event')
+      startRun(db, run.id, null)
+      failRun(db, run.id, i % 2 ? 'timed_out' : 'failed', 'crashed')
+    }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
+  it('counts self-caused watch runs toward the idle rule', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0 } }) // the idle rule alone
+    for (let i = 0; i < 4; i++) finishRun('self-watch')
+    finishRun('watch') // one started by someone else doesn't count, and breaks the streak
+    for (let i = 0; i < 4; i++) finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/5 unscheduled runs in a row resolved no item/)
+  })
+
+  it('an uncounted run breaks the idle streak: a report-only goal with coincidental self-caused runs stays active', () => withClock((tick) => {
+    // A report-only goal on a 1-minute watch: changes land sometimes during a run (so the
+    // re-check tags the next run self-caused) and sometimes between runs (an ordinary watch run)
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0 } }) // the idle rule alone
+    for (let i = 0; i < 36; i++) { tick(); finishRun(i % 3 === 2 ? 'watch' : 'self-watch') }
+    // A scheduled run breaks the streak too
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
+    tick(); finishRun('interval')
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+    // A goal that really does trigger its own watch every run still trips
+    tick(); finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  }))
+
+  it('only counts an idle streak whose runs all started within the last hour', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let t = Date.parse('2026-01-01T00:00:00.000Z')
+      // 5 self-caused idle runs, 20 minutes apart: the first is over an hour before the last
+      for (let i = 0; i < 5; i++) { vi.setSystemTime((t += 20 * 60_000)); finishRun('self-watch') }
+      expect(getGoal(db, 'g1')!.status).toBe('active')
+      expect(breakerAsks()).toHaveLength(0)
+      // Two hours on: 4 more in a minute don't trip it while the 5th of the streak is old
+      t += 2 * 3_600_000
+      for (let i = 0; i < 4; i++) { vi.setSystemTime((t += 60_000)); finishRun('self-watch') }
+      expect(getGoal(db, 'g1')!.status).toBe('active')
+      // The 5th within the hour trips it
+      vi.setSystemTime((t += 60_000)); finishRun('self-watch')
+      expect(getGoal(db, 'g1')!.status).toBe('paused')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('leaves scheduled runs out of max_runs_per_hour: a goal on the shortest interval stays active', () => {
+    // 5 minutes is the shortest interval: 12 runs an hour, over the default limit of 8
+    for (let i = 0; i < 12; i++) finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it("leaves the person's own runs (manual) out of both counts", () => {
+    // Run now pressed again and again on a quiet goal, and runs queued by answers and approvals
+    for (let i = 0; i < 12; i++) finishRun('manual')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    // Manual runs don't break a run of idle unscheduled ones either: they're skipped, not counted
+    for (let i = 0; i < 4; i++) { finishRun('event'); finishRun('manual') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('event')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  })
+
+  it('is off when both limits are 0', () => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0, max_idle_runs: 0 } })
+    for (let i = 0; i < 12; i++) finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+})
+
+describe('per-item attempt limits', () => {
+  const newRun = () => { const r = queueRun(db, 'g1', 'event'); startRun(db, r.id, null); return r.id }
+  const question = () => db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref LIKE 'attempt-limit:%'").get() as { id: string; goal: string; status: string } | undefined
+
+  beforeEach(() => updateGoal(db, 'g1', { limits: { max_idle_runs: 0, max_runs_per_hour: 0 } }))
+
+  it('counts each run once, and asks the person instead of a fourth attempt', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Fix CI on PR 31', external_ref: 'ci:31' }).task
+    for (let i = 0; i < 3; i++) {
+      const run = newRun()
+      recordAttempt(db, 'g1', item.id, run)
+      recordAttempt(db, 'g1', item.id, run) // same run again: still one attempt
+      endRun(db, run, 'tried')
+    }
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(3)
+    const fourth = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, fourth)).toThrow(/limit of 3 attempts/)
+    expect(question()).toMatchObject({ status: 'active' })
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(true)
+    expect(() => recordAttempt(db, 'g1', item.id, fourth)).toThrow(/blocked/)
+    expect(buildBrief(db, 'g1').open_items.find((i) => i.id === item.id)).toMatchObject({ blocked: true })
+  })
+
+  it('counts a new item with the same external_ref as the same thread of work', () => {
+    for (let i = 0; i < 3; i++) {
+      const run = newRun()
+      const item = addItem(db, 'g1', run, { goal: `Fix CI on PR 31, try ${i}`, external_ref: 'ci:31' }).task
+      recordAttempt(db, 'g1', item.id, run)
+      endRun(db, run, 'tried')
+    }
+    // A fresh item for the same PR under the same ref is returned, not created; a different item sharing the ref still counts
+    const run = newRun()
+    const again = addItem(db, 'g1', run, { goal: 'Fix CI on PR 31 again', external_ref: 'ci:31' }).task
+    expect(() => recordAttempt(db, 'g1', again.id, run)).toThrow(/limit of 3 attempts/)
+  })
+
+  it("the person's answer lifts the block and starts a fresh count", () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going, try the other API' })
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(1)
+  })
+
+  it('rejecting the question answers it too: the block lifts and the feedback is kept', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    rejectTask(db, 'g1', question()!.id, 'Drop it')
+    expect(question()).toMatchObject({ status: 'completed' })
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(false)
+    expect(listMemory(db, 'g1').some((m) => m.text.includes('Drop it'))).toBe(true)
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
+  })
+
+  it('marks an item out of attempts as blocked in the overview, until the question is answered', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    const other = addItem(db, 'g1', null, { goal: 'Something else' }).task
+    const overviewItem = (id: string) => {
+      const g = buildOverview(db).goals.find((x) => x.id === 'g1')!
+      return [...g.open_items, ...g.needs_you].find((i) => i.id === id) as Record<string, unknown> | undefined
+    }
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    expect(overviewItem(item.id)).not.toHaveProperty('blocked')
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    endRun(db, r, 'blocked')
+    expect(overviewItem(item.id)).toMatchObject({ blocked: true })
+    // Only the blocked item carries the key, so other items' JSON stays as it was
+    expect(overviewItem(other.id)).not.toHaveProperty('blocked')
+    expect(overviewItem(question()!.id)).not.toHaveProperty('blocked')
+    decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going' })
+    expect(overviewItem(item.id)).not.toHaveProperty('blocked')
+  })
+
+  it("doesn't count updates that leave the status alone: a tracking item checked each run stays unblocked", () => {
+    const item = addItem(db, 'g1', null, { goal: 'PR 31 waiting for review', external_ref: 'github-pr:31' }).task
+    for (let i = 0; i < 5; i++) {
+      const r = newRun()
+      recordAttempt(db, 'g1', item.id, r, new Date(), false) // update_task with fresh notes
+      endRun(db, r, 'still waiting')
+    }
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(0)
+    expect(question()).toBeUndefined()
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(false)
+  })
+
+  it('refuses even an uncounted update while the item is blocked', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(), false)).toThrow(/blocked/)
+  })
+
+  it('is off at 0', () => {
+    updateGoal(db, 'g1', { limits: { max_item_attempts: 0 } })
+    const item = addItem(db, 'g1', null, { goal: 'x' }).task
+    for (let i = 0; i < 6; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    expect(question()).toBeUndefined()
   })
 })

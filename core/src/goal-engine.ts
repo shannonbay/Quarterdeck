@@ -5,9 +5,9 @@
 import { validateStatusCheck, validateStatusTone } from './status-check.js'
 import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
-import { isProposal } from './gates.js'
+import { ATTEMPT_REF, isProposal } from './gates.js'
 import {
-  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal,
+  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { listHealth } from './health.js'
@@ -175,6 +175,8 @@ export interface ItemSummary {
   /** Approved proposal: carry out its action, then complete it. */
   approved_to_execute: boolean
   action?: ProposedAction
+  /** Out of attempts: waits for the person's answer, and runs are refused work on it. */
+  blocked?: boolean
 }
 
 function summarizeItem(t: Task): ItemSummary {
@@ -277,7 +279,10 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
 
   const items = (db.prepare("SELECT * FROM tasks WHERE plan_id = ? AND archived_at IS NULL AND status IN ('pending', 'active')").all(planId) as Record<string, unknown>[])
     .map(deserializeTask)
-    .map(summarizeItem)
+    .map((t) => {
+      const item = summarizeItem(t)
+      return isAttemptBlocked(db, planId, t) ? { ...item, blocked: true } : item
+    })
     .sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id))
 
   // Watch lines are outside text (issue titles, email subjects): handing them to the run marks it
@@ -395,7 +400,163 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   }
   archiveResolved(db, run.plan_id)
   finishIfDone(db, run.plan_id)
+  tripBreakerIfRunaway(db, run.plan_id)
   return getRun(db, runId)!
+}
+
+/**
+ * The runs the runaway breaker counts: health and event runs, and watch runs that are
+ * self-caused (started by what the re-check made as the goal's previous run ended saw).
+ * A schedule can't run away, the person's own runs can't be a loop the goal made, and a
+ * watch that fires on what others do (a new issue, a new email) isn't a loop either.
+ */
+const COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))"
+
+/** Why the runaway breaker should trip after this run, or null. Uses goal_runs only. */
+export function runawayReason(db: Database, planId: string, now: Date = new Date()): string | null {
+  const goal = getGoal(db, planId)
+  if (!goal) return null
+  const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits
+  // Only runs since the person last resumed the goal count: resuming is their say-so to carry on
+  const since = goal.resumed_at ?? ''
+  // Only unscheduled runs that could be a loop count (see COUNTED_RUNS): a schedule can't run away, and the person's own runs
+  // (manual: Run now, or a run queued by their answer or approval) can't be a loop the goal made
+  const unscheduled = COUNTED_RUNS
+  if (perHour > 0) {
+    const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
+    const n = (db.prepare(`SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND ${unscheduled} AND started_at >= ? AND started_at >= ?`)
+      .get(planId, hourAgo, since) as { n: number }).n
+    if (n > perHour) return `${n} unscheduled runs in the last hour (limit ${perHour})`
+  }
+  if (idle > 0) {
+    // Scheduled runs that find nothing are normal; runs that queue each other are what loops.
+    // The streak is the last `idle` finished runs of any trigger but manual, all started within the
+    // last hour: it trips only when every one of them is counted and resolved nothing, so an uncounted
+    // run in between (a scheduled run, a watch run started by someone else's change) breaks it, and
+    // coincidences hours apart can't add up to one.
+    const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
+    const recent = db.prepare(`SELECT items_resolved, ${unscheduled} AS counted, started_at FROM goal_runs
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND trigger != 'manual' AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all(planId, since, idle) as { items_resolved: number; counted: number; started_at: string }[]
+    if (recent.length === idle && recent.every((r) => r.counted === 1 && r.items_resolved === 0 && r.started_at >= hourAgo)) {
+      return `${idle} unscheduled runs in a row resolved no item`
+    }
+  }
+  return null
+}
+
+/**
+ * The runaway breaker: when a goal's runs keep coming back (too many in an hour, or
+ * unscheduled runs in a row that resolve nothing), pause it and ask the person.
+ * Returns the reason when it tripped.
+ */
+export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = new Date()): string | null {
+  const goal = getGoal(db, planId)
+  if (!goal || goal.status !== 'active') return null
+  const reason = runawayReason(db, planId, now)
+  if (!reason) return null
+  // Keeps next_run_at, as an ordinary Pause does, so a scheduled goal's schedule is due again once resumed
+  updateGoal(db, planId, { status: 'paused' })
+  // A request, not a question: Approve resumes the goal, Reject leaves it paused (no free text to misread)
+  askPersonUnder(db, planId, RUNAWAY_REF, 'This goal may be looping, so I paused it. Resume it?',
+    `Runaway breaker: ${reason}. Look at its recent runs, then approve this to resume the goal (as pressing Resume does), or reject it to leave the goal paused; you can change its instructions or limits first.`, now, 'request')
+  return reason
+}
+
+/**
+ * Puts a question (Answer… / Done) or a request (Approve / Reject) of the server's own under
+ * Needs you, under a fixed ref: a new item the first time, and the same item reopened after
+ * that (addItem would only return the answered one).
+ */
+function askPersonUnder(db: Database, planId: string, ref: string, goal: string, notes: string, now: Date, kind: 'question' | 'request' = 'question'): void {
+  const asked = db.prepare('SELECT id FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ref) as { id: string } | undefined
+  const state = JSON.stringify(kind === 'question' ? { asks_person: true } : {})
+  const at = now.toISOString()
+  if (!asked) {
+    if (kind === 'question') {
+      addItem(db, planId, null, { goal, notes, external_ref: ref, ask_person: true })
+      return
+    }
+    const id = nextChildId(db, planId, null)
+    insertTask(db, {
+      id, plan_id: planId, goal, result: null, abandon_reason: null, depends_on: null, notes, run_id: null, external_ref: ref,
+      created_by: 'agent', created_at: at, updated_at: at, status: 'active', state: {}, requires_approval: true, review_requested_at: at,
+    })
+    return
+  }
+  db.prepare(`UPDATE tasks SET goal = ?, notes = ?, state = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
+    approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`)
+    .run(goal, notes, state, at, at, planId, asked.id)
+}
+
+// -- Per-item attempt limits --------------------------------------------------
+
+
+/** The thread of work an item belongs to: its external_ref, or the item itself. */
+function attemptKey(task: Task): string {
+  return task.external_ref ? `ref:${task.external_ref}` : `item:${task.id}`
+}
+
+/** The escalation question for an item's thread of work, if any. */
+function attemptQuestion(db: Database, planId: string, key: string): Task | undefined {
+  const row = db.prepare('SELECT * FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ATTEMPT_REF + key) as Record<string, unknown> | undefined
+  return row ? deserializeTask(row) : undefined
+}
+
+/** Distinct runs that worked on this item, or on any item with its external_ref, since the person last answered. */
+export function countAttempts(db: Database, planId: string, task: Task): number {
+  const q = attemptQuestion(db, planId, attemptKey(task))
+  const since = q && (q.status === 'completed' || q.status === 'abandoned') ? q.updated_at : ''
+  const row = task.external_ref
+    ? db.prepare('SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND (external_ref = ? OR task_id = ?) AND at > ?')
+      .get(planId, task.external_ref, task.id, since)
+    : db.prepare('SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND at > ?')
+      .get(planId, task.id, since)
+  return (row as { n: number }).n
+}
+
+/** True while the item's thread of work waits on the person's answer to an attempt-limit question. */
+export function isAttemptBlocked(db: Database, planId: string, task: Task): boolean {
+  const q = attemptQuestion(db, planId, attemptKey(task))
+  return Boolean(q && q.status !== 'completed' && q.status !== 'abandoned')
+}
+
+/**
+ * Called by the server whenever a goal run updates an item or changes its status. Refuses
+ * (GoalError) work on an item whose thread of work waits on the person's answer. With
+ * `count` (the run changes the item's status, which includes carrying out an approved
+ * action), it records the run as an attempt, and refuses once the item's thread of work
+ * (the item, or every item with its external_ref) has used up max_item_attempts runs.
+ * Updates that only change notes, result or state don't count: an item a goal keeps open
+ * and checks each run (a PR waiting for review) isn't being retried.
+ * At the limit it adds a Needs-you question; until the person answers it, every run is
+ * refused work on that item. The answer lifts the block and starts a fresh count.
+ */
+export function recordAttempt(db: Database, planId: string, taskId: string, runId: string, now: Date = new Date(), count = true): void {
+  const goal = getGoal(db, planId)
+  const task = getTask(db, planId, taskId)
+  if (!goal || !task) return
+  // The server's own questions are the person's to answer, not attempts
+  if (task.external_ref?.startsWith(ATTEMPT_REF) || task.external_ref === RUNAWAY_REF) return
+  const key = attemptKey(task)
+  const asked = attemptQuestion(db, planId, key)
+  if (isAttemptBlocked(db, planId, task)) {
+    throw new GoalError(`Item ${taskId} is blocked: it reached its attempt limit and waits for the person's answer (item ${asked!.id}). Leave it alone this run.`)
+  }
+  if (!count) return
+  const limit = goal.limits.max_item_attempts
+  const already = db.prepare('SELECT 1 FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND run_id = ?').get(planId, taskId, runId)
+  if (already) return
+  if (limit > 0 && countAttempts(db, planId, task) >= limit) {
+    const lastNote = (task.notes || task.result || 'none').slice(0, 500)
+    const goalText = `Tried "${task.goal}" ${limit} times without finishing. Keep going, change approach, or drop it?`
+    const notes = `Item ${task.id}${task.external_ref ? ` (${task.external_ref})` : ''} has had ${limit} runs work on it. Its last note: ${lastNote}. Until you answer, runs are refused work on it; your answer lands in memory for the next attempt.`
+    // Asked before and answered: asked again under the same ref
+    askPersonUnder(db, planId, ATTEMPT_REF + key, goalText, notes, now)
+    throw new GoalError(`Item ${taskId} reached its limit of ${limit} attempts, so the person was asked whether to keep going. Leave it alone this run.`)
+  }
+  db.prepare('INSERT INTO goal_item_attempts (plan_id, task_id, run_id, external_ref, at) VALUES (?, ?, ?, ?, ?)')
+    .run(planId, taskId, runId, task.external_ref ?? null, now.toISOString())
 }
 
 /** Open items: pending, or active (which includes proposals waiting for review and approved ones not yet carried out). */
@@ -419,6 +580,8 @@ export function failRun(db: Database, runId: string, status: 'failed' | 'timed_o
   updateRun(db, runId, { status, ended_at: new Date().toISOString(), summary: run.summary ?? reason })
   // What its watches reported goes to the next run instead
   releaseWatchEvents(db, runId)
+  // Runs that keep crashing or timing out can loop too
+  tripBreakerIfRunaway(db, run.plan_id)
 }
 
 /** Hides resolved items older than the goal's retention period. Returns how many were archived. */

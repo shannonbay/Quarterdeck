@@ -10,7 +10,7 @@
 import type { Database } from './sqlite.js'
 import { getTask, updateTask } from './queries.js'
 import { approveTask, isProposal, rejectTask, asksPerson } from './gates.js'
-import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory } from './goals.js'
+import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory, RUNAWAY_REF } from './goals.js'
 import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, recordSkip, GoalError, ANSWER_PREFIX } from './goal-engine.js'
 import { healthDue, runHealthCheck } from './health.js'
 import { checkCommandWatch, countUnqueuedWatchEvents, listWatches, markWatchEventsQueued, takeDueToolWatches, watchDue, type ToolWatchCall } from './watches.js'
@@ -156,8 +156,27 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
   const started = Date.now()
   let checked = 0
   for (const planId of planIds) {
+    // As a run ends, its command watches are checked once more straight away (not waiting for
+    // their interval), and what they see is tagged with that run: the runaway breaker counts a
+    // watch run only when it was started by what the goal's own previous run caused
+    const ended = db.prepare(`SELECT id FROM goal_runs WHERE plan_id = ? AND ended_at IS NOT NULL AND status != 'skipped'
+      AND watch_rechecked_at IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(planId) as { id: string } | undefined
+    const rechecked = new Set<string>()
+    if (ended && !getOpenRun(db, planId)) {
+      db.prepare('UPDATE goal_runs SET watch_rechecked_at = ? WHERE plan_id = ? AND ended_at IS NOT NULL AND watch_rechecked_at IS NULL').run(now.toISOString(), planId)
+      for (const watch of listWatches(db, planId)) {
+        if (watch.kind !== 'command' || !watch.baseline_at) continue
+        // Out of budget: the watches not reached yet are never re-checked for this run (it is already
+        // stamped watch_rechecked_at), so they fall back to their ordinary check. A self-caused run
+        // can then be missed (not counted by the breaker), but never wrongly counted
+        if (Date.now() - started >= budgetMs) return checked
+        await checkCommandWatch(db, watch.id, now, ended.id).catch(() => { /* the watch or its goal went away meanwhile */ })
+        rechecked.add(watch.id)
+        checked++
+      }
+    }
     for (const watch of listWatches(db, planId)) {
-      if (watch.kind !== 'command' || !watchDue(watch, now)) continue
+      if (watch.kind !== 'command' || rechecked.has(watch.id) || !watchDue(watch, now)) continue
       if (Date.now() - started >= budgetMs) return checked
       await checkCommandWatch(db, watch.id, now).catch(() => { /* the watch or its goal went away meanwhile */ })
       checked++
@@ -305,6 +324,19 @@ export function decideItem(
     const context = task.notes?.trim() ? ` (the question said: ${clipText(task.notes.trim().replace(/\s+/g, ' '), ANSWER_CONTEXT_CHARS)})` : ''
     insertMemory(db, { plan_id: planId, kind: 'fact', text: `You answered "${task.goal}": ${answer}${context}`, source: 'human', source_ref: taskId })
     if (active()) queuedRun = queueRun(db, planId)
+  } else if (task.external_ref === RUNAWAY_REF) {
+    // The runaway breaker's "Resume it?" is a request: Approve resumes the goal, as pressing
+    // Resume does (no run queued: it carries on from its schedule and watches); Reject marks
+    // it done and leaves the goal paused
+    if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`)
+    const now = new Date().toISOString()
+    const resume = input.decision === 'approve'
+    const feedback = (input.feedback ?? '').trim()
+    updateTask(db, planId, taskId, {
+      status: 'completed', review_requested_at: null, updated_at: now,
+      ...(resume ? { approved_by: 'human', approved_at: now, result: 'Resumed' } : { result: `Left paused${feedback ? `: ${feedback}` : ''}` }),
+    })
+    if (resume && getGoal(db, planId)?.status === 'paused') updateGoal(db, planId, { status: 'active' })
   } else if (input.decision === 'approve') {
     approveTask(db, planId, taskId)
     // An approved proposal is carried out by a run; a done request lets the run carry on

@@ -487,6 +487,12 @@ function Settings({ data, busy, patch, call }: { data: GoalData; busy: string | 
               <input value={limits[k]} onChange={(e) => setLimits({ ...limits, [k]: Number(e.target.value.replace(/\D/g, '')) || 1 })} className={`${input} w-24`} />
             </label>
           ))}
+          {([['max_runs_per_hour', 'Pause after runs per hour (0: off)'], ['max_idle_runs', 'Pause after idle runs in a row (0: off)'], ['max_item_attempts', 'Ask after attempts per item (0: off)']] as const).map(([k, label]) => (
+            <label key={k} className="space-y-1">
+              <span className="block text-xs font-medium text-gray-600">{label}</span>
+              <input value={limits[k]} onChange={(e) => setLimits({ ...limits, [k]: Number(e.target.value.replace(/\D/g, '')) || 0 })} className={`${input} w-24`} />
+            </label>
+          ))}
           <label className="space-y-1">
             <span className="block text-xs font-medium text-gray-600">Hide resolved items after (days)</span>
             <input value={retention} onChange={(e) => setRetention(Number(e.target.value.replace(/\D/g, '')) || 1)} className={`${input} w-24`} />
