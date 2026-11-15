@@ -10,7 +10,7 @@
 import type { Database } from './sqlite.js'
 import { getTask, updateTask } from './queries.js'
 import { approveTask, isProposal, rejectTask, asksPerson } from './gates.js'
-import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory } from './goals.js'
+import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory, RUNAWAY_REF } from './goals.js'
 import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, recordSkip, GoalError, ANSWER_PREFIX } from './goal-engine.js'
 import { healthDue, runHealthCheck } from './health.js'
 import { checkCommandWatch, countUnqueuedWatchEvents, listWatches, markWatchEventsQueued, takeDueToolWatches, watchDue, type ToolWatchCall } from './watches.js'
@@ -304,7 +304,11 @@ export function decideItem(
     // With the question's context (its options, often): an answer like "c" means nothing without it
     const context = task.notes?.trim() ? ` (the question said: ${clipText(task.notes.trim().replace(/\s+/g, ' '), ANSWER_CONTEXT_CHARS)})` : ''
     insertMemory(db, { plan_id: planId, kind: 'fact', text: `You answered "${task.goal}": ${answer}${context}`, source: 'human', source_ref: taskId })
-    if (active()) queuedRun = queueRun(db, planId)
+    if (task.external_ref === RUNAWAY_REF && getGoal(db, planId)?.status === 'paused') {
+      // Answering the runaway breaker's "Resume it?" resumes the goal, as pressing Resume would
+      // (no run queued: the goal carries on from its schedule and watches)
+      updateGoal(db, planId, { status: 'active' })
+    } else if (active()) queuedRun = queueRun(db, planId)
   } else if (input.decision === 'approve') {
     approveTask(db, planId, taskId)
     // An approved proposal is carried out by a run; a done request lets the run carry on

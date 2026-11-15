@@ -416,16 +416,20 @@ describe('runaway breaker', () => {
     expect(getGoal(db, 'g1')!.status).toBe('paused')
   }))
 
-  it('answering the question and then resuming also starts the count afresh', () => withClock((tick) => {
+  it('answering the question resumes the goal and starts the count afresh', () => withClock((tick) => {
     for (let i = 0; i < 5; i++) { tick(); finishRun() }
-    tick()
-    decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'answer', feedback: 'Yes, carry on' })
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     tick()
-    updateGoal(db, 'g1', { status: 'active' })
-    tick(); finishRun()
+    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'answer', feedback: 'Yes, carry on' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', resumed_at: new Date().toISOString() })
+    // Resumed as the Resume button would: the answer is kept, and no run is queued
+    expect(task).toMatchObject({ status: 'completed', result: expect.stringContaining('Yes, carry on') })
+    expect(queuedRun).toBeNull()
+    expect(listMemory(db, 'g1').some((m) => m.text.includes('Yes, carry on'))).toBe(true)
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
     expect(getGoal(db, 'g1')!.status).toBe('active')
-    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'completed' })])
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
   }))
 
   it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {

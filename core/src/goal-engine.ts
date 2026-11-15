@@ -441,7 +441,7 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
   if (!reason) return null
   updateGoal(db, planId, { status: 'paused', next_run_at: null })
   askPersonUnder(db, planId, RUNAWAY_REF, 'This goal may be looping, so I paused it. Resume it?',
-    `Runaway breaker: ${reason}. Look at its recent runs, then resume the goal to keep going, change its instructions or limits first, or leave it paused.`, now)
+    `Runaway breaker: ${reason}. Look at its recent runs, then answer this to resume it (or press Resume), change its instructions or limits first, or leave this open to keep it paused.`, now)
   return reason
 }
 
