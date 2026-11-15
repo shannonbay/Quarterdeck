@@ -231,6 +231,14 @@ test("Claude's to-do tools: list, add (as the agent), tick off", async ($, on) =
   expect(String(nope.result)).toContain('No list "nowhere"')
 })
 
+test("a to-do tool whose server call fails says why, not only that it failed", async ($, on) => {
+  engine(on)
+  fakeQuarterdeck(on, [], { todos: [roadmap()], errors: { todo_list: 'database is locked' } })
+  await $.session.start(START)
+  const added = await $.tool.call({ tool: 'mcp__quarterdeck-goals__add_todo', text: 'Rename the package' } as never)
+  expect(String(added.result)).toBe('Error: database is locked')
+})
+
 test('the todos tool clips long to-dos, and gives one to-do or one list on its own', async ($, on) => {
   engine(on)
   const long = `Sandbox goal runs: ${'refuse file tools outside the folder, '.repeat(8)}and more`

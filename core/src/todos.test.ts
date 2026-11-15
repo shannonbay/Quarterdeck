@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
-import { openDatabase, insertPlan, insertTask, createGoal, todoLists, addTodo, setTodo, getTask, DEFAULT_LIST } from './index.js'
+import { openDatabase, insertPlan, insertTask, createGoal, todoLists, addTodo, setTodo, getTask, DEFAULT_LIST, DONE_TEXT_CHARS } from './index.js'
 
 let db: Database
 const now = new Date().toISOString()
@@ -53,6 +53,20 @@ describe('to-do lists', () => {
     expect(getTask(db, listId, '1')).toMatchObject({ status: 'active', notes: 'Running as the one-off goal "Write the docs"' })
     expect(() => setTodo(db, listId, '9', { status: 'completed' })).toThrow(/not found/)
     expect(() => addTodo(db, { workingDir: DIR, text: '  ' })).toThrow(/needs some text/)
+  })
+
+  it('cuts a done to-do to one clipped line without notes, so the lists stay small', () => {
+    const long = 'x'.repeat(DONE_TEXT_CHARS + 50)
+    const { listId } = addTodo(db, { workingDir: DIR, text: long })
+    addTodo(db, { workingDir: DIR, text: long })
+    setTodo(db, listId, '1', { status: 'completed', notes: 'how it went' })
+    setTodo(db, listId, '2', { notes: 'still open' })
+    const [done, open] = todoLists(db, DIR)[0]!.items
+    expect(done).toMatchObject({ status: 'completed', notes: null })
+    expect(done!.text).toHaveLength(DONE_TEXT_CHARS)
+    expect(done!.text.endsWith('…')).toBe(true)
+    expect(open).toMatchObject({ text: long, notes: 'still open' })
+    expect(getTask(db, listId, '1')).toMatchObject({ goal: long, notes: 'how it went' })
   })
 
   it('rewords a to-do without touching its status or notes', () => {

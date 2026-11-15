@@ -75,7 +75,7 @@ import { recordCliPath } from './runner-session.js'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 
-const COMPACT_TOOLS = new Set(['goals_overview', 'goals_tick'])
+const COMPACT_TOOLS = new Set(['goals_overview', 'goals_tick', 'todo_list'])
 
 const TOOLS = [
   {

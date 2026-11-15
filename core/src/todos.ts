@@ -48,13 +48,28 @@ function headingOf(tasks: Task[]): string | null {
   return tasks.some((t) => t.id.startsWith(`${roots[0]!.id}.`)) ? roots[0]!.id : null
 }
 
+/**
+ * A done to-do's text is cut to this many characters, and its notes left out. The pane shows
+ * a done one as a single clipped line, and done ones pile up: with them in full, todo_list's
+ * answer passed Claude Code's ~50,000-character limit for a tool answer (Nov 2026), which
+ * saves it to a file instead, and every to-do tool and the pane's lists stopped working.
+ */
+export const DONE_TEXT_CHARS = 200
+
+const isDone = (status: TaskStatus) => status === 'completed' || status === 'abandoned'
+
 function toList(db: Database, plan: PlanRow): TodoList {
   const tasks = getAllTasks(db, plan.id).filter((t) => !t.archived_at)
   const heading = headingOf(tasks)
   const shown = heading ? tasks.filter((t) => t.id !== heading) : tasks
   const base = heading ? 2 : 1
-  const items = shown.map((t) => ({ id: t.id, text: t.goal, status: t.status, depth: t.id.split('.').length - base, notes: t.notes }))
-  const done = items.filter((i) => i.status === 'completed' || i.status === 'abandoned').length
+  const items = shown.map((t) => {
+    const depth = t.id.split('.').length - base
+    if (!isDone(t.status)) return { id: t.id, text: t.goal, status: t.status, depth, notes: t.notes }
+    const text = t.goal.length > DONE_TEXT_CHARS ? `${t.goal.slice(0, DONE_TEXT_CHARS - 1).trimEnd()}…` : t.goal
+    return { id: t.id, text, status: t.status, depth, notes: null }
+  })
+  const done = items.filter((i) => isDone(i.status)).length
   return { id: plan.id, name: plan.name, items, open: items.length - done, done }
 }
 
