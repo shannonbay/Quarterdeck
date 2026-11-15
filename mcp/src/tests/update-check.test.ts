@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { CHECK_EVERY_MS, RETRY_AFTER_MS, createUpdateCheck, installedVersion, isNewer } from '../update-check.js'
+import { CHECK_EVERY_MS, RETRY_AFTER_MS, createUpdateCheck, installedVersion, isNewer, versionOnDisk } from '../update-check.js'
 import { goals_overview, overviewAnswer } from '../tools/goal_runner.js'
 
 describe('isNewer', () => {
@@ -117,7 +117,45 @@ describe('goals_overview with an update', () => {
     expect(overviewAnswer(withUpdate.etag, body, '"abc"', update)).toEqual({ changed: false, etag: withUpdate.etag })
   })
 
+  it("changes its etag when an update becomes ready, so the pane swaps Install for Reload", () => {
+    const body = JSON.stringify({ goals: [] })
+    const available = overviewAnswer(undefined, body, '"abc"', update)
+    expect(overviewAnswer(available.etag, body, '"abc"', { ...update, ready: true })).toMatchObject({ changed: true, update: { ready: true } })
+  })
+
   it('reports none from a checkout (where these tests run)', async () => {
     expect(await goals_overview({})).not.toHaveProperty('update')
+  })
+})
+
+describe('an update already installed on disk', () => {
+  it('is ready (reload, not install) when Claude Code has a newer version installed than this server runs', async () => {
+    let disk: string | null = '0.16.0'
+    const check = createUpdateCheck({ installed: '0.15.0', now: () => 0, fetchLatest: async () => '0.17.0', onDisk: () => disk })
+    expect(check.available()).toEqual({ installed: '0.15.0', latest: '0.16.0', ready: true })
+    disk = '0.15.0' // reloaded, or never installed: the published one, once the check answers
+    check.available()
+    await check.check()
+    expect(check.available()).toEqual({ installed: '0.15.0', latest: '0.17.0' })
+    disk = null
+    expect(check.available()).toEqual({ installed: '0.15.0', latest: '0.17.0' })
+  })
+
+  it("reads the newest of the goals plugin's entries in installed_plugins.json, under CLAUDE_CONFIG_DIR or ~/.claude", () => {
+    const home = mkdtempSync(join(tmpdir(), 'qd-home-'))
+    expect(versionOnDisk({}, home)).toBeNull()
+    mkdirSync(join(home, '.claude', 'plugins'), { recursive: true })
+    const write = (dir: string, plugins: unknown) => writeFileSync(join(dir, 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins }))
+    write(join(home, '.claude'), {
+      'quarterdeck-goals@quarterdeck': [{ scope: 'user', version: '0.9.0' }, { scope: 'project', version: '0.10.0' }, { scope: 'local', version: 'junk' }],
+      'quarterdeck-guard@quarterdeck': [{ scope: 'user', version: '9.9.9' }],
+    })
+    expect(versionOnDisk({}, home)).toBe('0.10.0')
+    const config = join(home, 'elsewhere')
+    mkdirSync(join(config, 'plugins'), { recursive: true })
+    write(config, { 'quarterdeck-goals@quarterdeck': [{ version: '0.26.0' }] })
+    expect(versionOnDisk({ CLAUDE_CONFIG_DIR: config }, home)).toBe('0.26.0')
+    writeFileSync(join(config, 'plugins', 'installed_plugins.json'), '{not json')
+    expect(versionOnDisk({ CLAUDE_CONFIG_DIR: config }, home)).toBeNull()
   })
 })

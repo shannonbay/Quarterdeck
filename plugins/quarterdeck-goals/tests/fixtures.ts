@@ -93,7 +93,7 @@ const TOOLS = [
  */
 type FakeTodoList = { id: string; name: string; items: { id: string; text: string; status: string; depth: number; notes: string | null }[] }
 
-export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolean; errors?: Record<string, string>; todos?: FakeTodoList[]; hold?: { until: string; reason: string }; outdated?: boolean; standing?: boolean; update?: { installed: string; latest: string }; prefix?: string; /** Tool watches the next pass hands out, once. A report with text for watch `w-<goal id>` queues that goal's run. */ toolWatches?: { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown> }[]; /** get_item's full text for clipped items, by item id. */ full?: Record<string, Item> } = {}) {
+export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolean; errors?: Record<string, string>; todos?: FakeTodoList[]; hold?: { until: string; reason: string }; outdated?: boolean; standing?: boolean; update?: { installed: string; latest: string; ready?: true }; prefix?: string; /** Tool watches the next pass hands out, once. A report with text for watch `w-<goal id>` queues that goal's run. */ toolWatches?: { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown> }[]; /** get_item's full text for clipped items, by item id. */ full?: Record<string, Item> } = {}) {
   const prefix = opts.prefix ?? 'mcp__quarterdeck__'
   const lists: FakeTodoList[] = opts.todos ?? []
   const listView = () => lists.map((l) => {

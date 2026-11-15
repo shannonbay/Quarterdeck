@@ -4,11 +4,18 @@
  * install from) and says so in `goals_overview`, where the Goals pane offers
  * to ask Claude to install it.
  *
+ * Claude Code may already have installed a newer version (plugin auto-update,
+ * or an update made in another session) while this session still runs the old
+ * one until /reload-plugins. Then the update is `ready`: the pane offers to
+ * reload rather than to install. Claude Code's own record of what is installed,
+ * `installed_plugins.json`, says which version is on disk.
+ *
  * It never checks from a checkout (which updates with git, and whose tests
  * must not reach the network) or with `QUARTERDECK_UPDATE_CHECK=0`. The request
  * carries nothing about the person: it is a plain GET of a public file.
  */
 import { existsSync, readFileSync } from 'fs'
+import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 import { envVar } from '@quarterdeck/core'
@@ -19,7 +26,11 @@ export const RELEASE_MANIFEST_URL = 'https://raw.githubusercontent.com/shannonba
 export const CHECK_EVERY_MS = 6 * 60 * 60_000
 export const RETRY_AFTER_MS = 30 * 60_000
 
-export type AvailableUpdate = { installed: string; latest: string }
+/** `installed` is what this server runs; `ready`: `latest` is already installed and needs only /reload-plugins. */
+export type AvailableUpdate = { installed: string; latest: string; ready?: true }
+
+/** How Claude Code names the goals plugin in installed_plugins.json. */
+export const PLUGIN_ID = 'quarterdeck-goals@quarterdeck'
 
 const VERSION = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?$/
 
@@ -40,6 +51,8 @@ export type UpdateDeps = {
   installed: string | null
   /** The published version, or null when it can't be read. */
   fetchLatest: () => Promise<string | null>
+  /** The newest version Claude Code has installed on disk, or null when unknown. */
+  onDisk?: () => string | null
   now: () => number
 }
 
@@ -65,6 +78,9 @@ export function createUpdateCheck(deps: UpdateDeps) {
     /** The update known so far; starts a check in the background when one is due, so it never waits on the network. */
     available(): AvailableUpdate | null {
       if (!deps.installed) return null
+      // Installed but not loaded comes first: a reload is all it takes
+      const disk = deps.onDisk?.() ?? null
+      if (disk && isNewer(deps.installed, disk)) return { installed: deps.installed, latest: disk, ready: true }
       if (!pending && deps.now() >= nextCheckAt) void check()
       return latest && isNewer(deps.installed, latest) ? { installed: deps.installed, latest } : null
     },
@@ -88,6 +104,26 @@ export function installedVersion(scriptDir: string = dirname(fileURLToPath(impor
   }
 }
 
+/**
+ * The newest version of the goals plugin in Claude Code's installed_plugins.json
+ * (in CLAUDE_CONFIG_DIR, or ~/.claude), or null. Each scope it is installed in
+ * has an entry; the newest counts.
+ */
+export function versionOnDisk(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string | null {
+  try {
+    const file = join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'plugins', 'installed_plugins.json')
+    const entries = (JSON.parse(readFileSync(file, 'utf8')) as { plugins?: Record<string, { version?: unknown }[]> }).plugins?.[PLUGIN_ID]
+    let newest: string | null = null
+    for (const e of Array.isArray(entries) ? entries : []) {
+      const v = typeof e?.version === 'string' && VERSION.test(e.version) ? e.version : null
+      if (v && (!newest || isNewer(newest, v))) newest = v
+    }
+    return newest
+  } catch {
+    return null
+  }
+}
+
 async function fetchReleaseVersion(): Promise<string | null> {
   const res = await fetch(RELEASE_MANIFEST_URL, { signal: AbortSignal.timeout(10_000) })
   if (!res.ok) return null
@@ -99,6 +135,6 @@ let shared: ReturnType<typeof createUpdateCheck> | null = null
 
 /** This server's update, if a newer Quarterdeck is published (see `createUpdateCheck`). */
 export function availableUpdate(): AvailableUpdate | null {
-  shared ??= createUpdateCheck({ installed: installedVersion(), fetchLatest: fetchReleaseVersion, now: Date.now })
+  shared ??= createUpdateCheck({ installed: installedVersion(), fetchLatest: fetchReleaseVersion, onDisk: () => versionOnDisk(), now: Date.now })
   return shared.available()
 }

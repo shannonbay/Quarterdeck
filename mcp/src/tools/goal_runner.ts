@@ -50,7 +50,7 @@ export async function goals_overview(args: unknown) {
 
 /** The overview's answer; a published update is part of it, so the etag changes when one appears. */
 export function overviewAnswer(asked: string | undefined, body: string, etag: string, update: AvailableUpdate | null) {
-  const tag = update ? `${etag}+update-${update.latest}` : etag
+  const tag = update ? `${etag}+update-${update.latest}${update.ready ? '-ready' : ''}` : etag
   if (asked === tag) return { changed: false, etag: tag }
   return { changed: true, etag: tag, ...JSON.parse(body) as object, ...(update ? { update } : {}) }
 }

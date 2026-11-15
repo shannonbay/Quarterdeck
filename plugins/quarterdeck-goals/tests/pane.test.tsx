@@ -555,12 +555,45 @@ test("with the server from this plugin (mcp__plugin_quarterdeck-goals_quarterdec
   await ui.unmount()
 })
 
-test('when a newer Quarterdeck has upgraded the database, the pane asks for /reload-plugins', async ($, on) => {
-  engine(on)
+test('when a newer Quarterdeck has upgraded the database, the pane offers to reload plugins', async ($, on) => {
+  const { toasts } = engine(on)
+  on('command.list', () => ({ value: [] }) as never)
   fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })], { outdated: true })
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /updated in another session/ }))?.text).toContain('/reload-plugins')
+  expect((await ui.find({ type: 'Text', text: /updated in another session/ }))?.text).toContain('reload plugins here')
+  await ui.press({ key: 'update-reload' })
+  expect(toasts.at(-1)).toBe('Type /reload-plugins to use the new Quarterdeck.')
+  await ui.unmount()
+})
+
+test('when a newer Quarterdeck is already installed, Reload now runs /reload-plugins, or says to type it', async ($, on) => {
+  const { prompts, toasts } = engine(on)
+  const ran: string[] = []
+  let has = true
+  on('command.list', () => ({ value: has ? [{ name: 'reload-plugins', description: 'Reload plugins', source: 'builtin' }] : [] }) as never)
+  on('command.run', { command: 'reload-plugins' }, () => {
+    ran.push('reload-plugins')
+    return { text: '' } as never
+  })
+  fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })], { outdated: true, update: { installed: '0.25.0', latest: '0.26.0', ready: true } })
+  await $.session.start(START)
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ type: 'Text', text: /is installed/ }))?.text).toBe('Quarterdeck 0.26.0 is installed; this session still runs 0.25.0 until plugins are reloaded. ')
+    expect(await ui.find({ type: 'Text', text: /is available|updated in another session/ })).toBeUndefined() // one notice, not three
+    expect(await ui.find({ key: 'update-install' })).toBeUndefined()
+    await ui.unmount()
+  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'update-reload' })
+  expect(ran).toEqual(['reload-plugins'])
+  expect(toasts.at(-1)).toBe('Reloading plugins to use Quarterdeck 0.26.0…')
+  expect(prompts).toEqual([]) // nothing sent to Claude
+  has = false
+  await ui.press({ key: 'update-reload' })
+  expect(ran).toEqual(['reload-plugins'])
+  expect(toasts.at(-1)).toBe('Type /reload-plugins to use Quarterdeck 0.26.0.')
   await ui.unmount()
 })
 

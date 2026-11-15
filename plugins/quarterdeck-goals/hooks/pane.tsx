@@ -200,8 +200,19 @@ export async function renderPane($: Engine, e: E) {
   return (
     <Box flexDirection="column">
       {guardMissing && <Text color="yellow">{GUARD_MISSING}</Text>}
-      {s.outdated && <Text color="yellow">Quarterdeck was updated in another session: run /reload-plugins here to use the new version (this session won't start goal runs until then).</Text>}
-      {s.update && (
+      {s.outdated && !s.update?.ready && (
+        <Box>
+          <Text color="yellow">Quarterdeck was updated in another session: reload plugins here to use the new version (this session won't start goal runs until then). </Text>
+          {action($, e, { key: 'update-reload', label: 'Reload now', onPress: () => void reloadPlugins($, null) })}
+        </Box>
+      )}
+      {s.update?.ready && (
+        <Box>
+          <Text color="yellow">Quarterdeck {s.update.latest} is installed; this session still runs {s.update.installed} until plugins are reloaded. </Text>
+          {action($, e, { key: 'update-reload', label: 'Reload now', onPress: () => void reloadPlugins($, s.update!.latest) })}
+        </Box>
+      )}
+      {s.update && !s.update.ready && (
         <Box>
           <Text color="yellow">Quarterdeck {s.update.latest} is available (you have {s.update.installed}). </Text>
           {action($, e, { key: 'update-install', label: view.doing === 'update-install' ? 'Sending…' : 'Ask Claude to install it', onPress: () => void askToUpdate($, s.update!) })}
@@ -932,6 +943,32 @@ const PERMISSIONS_COMMAND = 'permissions'
 /** Asks Claude, in the conversation, to add the allow rules: it shows the change and waits for the person's yes. */
 async function askToAllow($: Engine, g: GoalCard, rules: string[]): Promise<boolean> {
   return act($, `allow:${g.id}`, 'ask Claude to add the allow rules', async () => void (await sendToChat($, allowRulesPrompt(g, rules), `add the Claude Code allow rules for goal "${g.name}" (${g.id})`)))
+}
+
+/** Claude Code's built-in command that reloads plugins (and with a new version, starts its MCP server). */
+const RELOAD_COMMAND = 'reload-plugins'
+
+/**
+ * Reload now: runs Claude Code's /reload-plugins (`$.command.list()` lists
+ * built-ins, and `$.command.run` queues it until the session is idle, so it
+ * never cuts into a turn), else a toast says to type it. Only ever on the
+ * person's press: a goal run's agent may still be working in the background.
+ * The toast goes first, as the reload replaces this module.
+ */
+async function reloadPlugins($: Engine, version: string | null): Promise<void> {
+  const what = version ? `Quarterdeck ${version}` : 'the new Quarterdeck'
+  const fallback = `Type /reload-plugins to use ${what}.`
+  try {
+    const commands = await $.command.list()
+    if (!commands.some((c) => c.name === RELOAD_COMMAND)) {
+      $.ui.toast(fallback)
+      return
+    }
+    $.ui.toast(`Reloading plugins to use ${what}…`)
+    await $.command.run({ command: RELOAD_COMMAND })
+  } catch {
+    $.ui.toast(fallback)
+  }
 }
 
 /** Asks Claude, in the conversation, to install the published update. */

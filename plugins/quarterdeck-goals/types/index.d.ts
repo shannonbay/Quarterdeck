@@ -117,8 +117,8 @@ export type Snapshot = {
   update?: Update
 }
 
-/** A published Quarterdeck newer than the installed one. */
-export type Update = { installed: string; latest: string }
+/** A published Quarterdeck newer than the one this session runs; `ready`: already installed, needs only /reload-plugins. */
+export type Update = { installed: string; latest: string; ready?: true }
 
 /** One to-do on the person's list. */
 export type TodoItem = { id: string; text: string; status: string; depth: number; notes: string | null }
