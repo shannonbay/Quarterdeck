@@ -458,6 +458,20 @@ describe('runaway breaker', () => {
     expect(decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject' }).task).toMatchObject({ status: 'completed', result: 'Left paused' })
   }))
 
+  it("keeps a scheduled goal's next run, so its schedule is due again once resumed", () => withClock((tick) => {
+    const due = '2026-01-01T01:00:00.000Z'
+    updateGoal(db, 'g1', { next_run_at: due })
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'paused', next_run_at: due })
+    tick()
+    decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'approve' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', next_run_at: due })
+    // And after an ordinary Resume too
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', next_run_at: due })
+  }))
+
   it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {
     for (let i = 0; i < 4; i++) { tick(); finishRun() }
     tick(); updateGoal(db, 'g1', { status: 'paused' })
@@ -587,6 +601,18 @@ describe('per-item attempt limits', () => {
     decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going, try the other API' })
     expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
     expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(1)
+  })
+
+  it('rejecting the question answers it too: the block lifts and the feedback is kept', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    rejectTask(db, 'g1', question()!.id, 'Drop it')
+    expect(question()).toMatchObject({ status: 'completed' })
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(false)
+    expect(listMemory(db, 'g1').some((m) => m.text.includes('Drop it'))).toBe(true)
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
   })
 
   it("doesn't count updates that leave the status alone: a tracking item checked each run stays unblocked", () => {

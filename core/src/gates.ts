@@ -275,7 +275,11 @@ export function rejectTask(db: Database, planId: string, taskId: string, feedbac
   const now = new Date().toISOString()
   const v = insertVerification(db, { plan_id: planId, task_id: taskId, gate: 'approval', passed: false, actor: 'human', output: feedback })
   const note = `Review rejected (${now}): ${feedback}`
+  // Rejecting an attempt-limit question answers it (the feedback goes to memory below), so it
+  // lifts the block on its item instead of leaving the question unresolved for good
+  const answersAttemptLimit = task.external_ref?.startsWith('attempt-limit:') ?? false
   updateTask(db, planId, taskId, {
+    ...(answersAttemptLimit ? { status: 'completed' as const, result: `Your answer: ${feedback.trim()}` } : {}),
     review_requested_at: null,
     approved_by: null,
     approved_at: null,

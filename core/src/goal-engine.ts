@@ -450,7 +450,8 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
   if (!goal || goal.status !== 'active') return null
   const reason = runawayReason(db, planId, now)
   if (!reason) return null
-  updateGoal(db, planId, { status: 'paused', next_run_at: null })
+  // Keeps next_run_at, as an ordinary Pause does, so a scheduled goal's schedule is due again once resumed
+  updateGoal(db, planId, { status: 'paused' })
   // A request, not a question: Approve resumes the goal, Reject leaves it paused (no free text to misread)
   askPersonUnder(db, planId, RUNAWAY_REF, 'This goal may be looping, so I paused it. Resume it?',
     `Runaway breaker: ${reason}. Look at its recent runs, then approve this to resume the goal (as pressing Resume does), or reject it to leave the goal paused; you can change its instructions or limits first.`, now, 'request')

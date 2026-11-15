@@ -396,7 +396,12 @@ export function runMigrations(db: Database): void {
   // Schema version 11, the runaway breaker's loop signal: a watch run is self-caused when the
   // events that started it were seen by the re-check made as the goal's previous run ended
   try { db.exec('ALTER TABLE goal_runs ADD COLUMN self_caused INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
-  try { db.exec('ALTER TABLE goal_runs ADD COLUMN watch_rechecked_at TEXT') } catch { /* already exists */ }
+  try {
+    db.exec('ALTER TABLE goal_runs ADD COLUMN watch_rechecked_at TEXT')
+    // Runs that ended before the upgrade count as re-checked, so the first scheduler pass
+    // doesn't re-check every goal's watches at once and tag what it sees with an old run
+    db.exec('UPDATE goal_runs SET watch_rechecked_at = ended_at WHERE ended_at IS NOT NULL')
+  } catch { /* already exists */ }
   db.exec(`
     -- One row per scheduler; only the holder whose lease hasn't expired starts runs
     CREATE TABLE IF NOT EXISTS scheduler_lease (

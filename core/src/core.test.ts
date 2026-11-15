@@ -4,7 +4,7 @@ import {
   openDatabase, runMigrations, insertPlan, insertTask, updateTask, updatePlan, touchPlan,
   deleteTaskTree, getPlanRevision, getTask, getChildren, getSiblings, nextChildId,
   insertVerification, getVerifications, getLatestVerification, REVISION_TRIGGERS,
-  createGoal, getGoal, envVar, defaultDbPath, type NewTask,
+  createGoal, getGoal, insertRun, envVar, defaultDbPath, type NewTask,
 } from './index.js'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -60,6 +60,18 @@ describe('runMigrations', () => {
     runMigrations(db)
     runMigrations(db)
     expect(getGoal(db, 'g1')!.tool_map).toEqual({ mcp__quarterdeck__unsubscribe_one_click: 'email.unsubscribe', 'mcp__claude_ai_Gmail__*': 'email.delete' })
+  })
+
+  it('marks runs that ended before the watch re-check existed as re-checked', () => {
+    createGoal(db, { ...plan('g1'), kind: 'goal' }, { objective: 'Inbox' })
+    const ended = insertRun(db, 'g1', 'watch', 'completed')
+    const open = insertRun(db, 'g1', 'watch', 'running')
+    db.prepare('UPDATE goal_runs SET ended_at = ? WHERE id = ?').run('2026-01-01T00:00:00.000Z', ended.id)
+    db.exec('ALTER TABLE goal_runs DROP COLUMN watch_rechecked_at')
+    runMigrations(db)
+    const at = (id: string) => (db.prepare('SELECT watch_rechecked_at a FROM goal_runs WHERE id = ?').get(id) as { a: string | null }).a
+    expect(at(ended.id)).toBe('2026-01-01T00:00:00.000Z')
+    expect(at(open.id)).toBeNull()
   })
 })
 

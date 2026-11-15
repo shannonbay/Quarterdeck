@@ -166,6 +166,7 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
       db.prepare('UPDATE goal_runs SET watch_rechecked_at = ? WHERE plan_id = ? AND ended_at IS NOT NULL AND watch_rechecked_at IS NULL').run(now.toISOString(), planId)
       for (const watch of listWatches(db, planId)) {
         if (watch.kind !== 'command' || !watch.baseline_at) continue
+        if (Date.now() - started >= budgetMs) return checked
         await checkCommandWatch(db, watch.id, now, ended.id).catch(() => { /* the watch or its goal went away meanwhile */ })
         rechecked.add(watch.id)
         checked++
