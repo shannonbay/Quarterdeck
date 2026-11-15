@@ -64,10 +64,10 @@ export type GoalCard = {
   model: string | null
   /**
    * A short plain-text status the goal's runs set through end_run, shown in its one-line summary.
-   * `stale`: the last run failed or ended without setting it. `untrusted`: what the run that set it had read.
+   * `stale`: the last run failed or ended without setting it. `untrusted`: what the run that set it had read (the ⚠), null when it read only watch lines (`watchEvents`).
    * `tone`: how the goal stands by it (ok / attention / problem), which colours it; null: none given.
    */
-  statusNote: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone: 'ok' | 'attention' | 'problem' | null } | null
+  statusNote: { text: string; at: string | null; stale: boolean; untrusted: string | null; watchEvents: boolean; tone: 'ok' | 'attention' | 'problem' | null } | null
   instructions: string
   /** Action category → off | propose | auto (unlisted: propose). */
   autonomy: Record<string, string>

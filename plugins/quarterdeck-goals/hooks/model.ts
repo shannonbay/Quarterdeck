@@ -47,6 +47,19 @@ function toItem(t: OverviewItem): Item {
   return { id: t.id, title: t.goal, category: t.action?.category ?? null, summary: t.action?.summary ?? null, ...(t.asks_person && { asksPerson: true }), ...(t.notes && { notes: t.notes }), ...(t.clipped && { clipped: true }) }
 }
 
+/** The source core gives a run that read only watch lines (WATCH_EVENTS_SOURCE in core/src/goals.ts). */
+const WATCH_EVENTS_SOURCE = 'watch events'
+
+/**
+ * A goal's status for the pane. A run that read only watch lines (short lines from a
+ * command the person wrote) earns no ⚠: `untrusted` is null and `watchEvents` true, which
+ * the expanded card says in words. Any other read keeps `untrusted`, and the ⚠.
+ */
+function toStatusNote(n: NonNullable<OverviewGoal['status_note']>): NonNullable<GoalCard['statusNote']> {
+  const watchEvents = n.untrusted === WATCH_EVENTS_SOURCE
+  return { text: n.text, at: n.at ?? null, stale: n.stale, untrusted: watchEvents ? null : n.untrusted ?? null, watchEvents, tone: n.tone ?? null }
+}
+
 export function toCard(g: OverviewGoal): GoalCard {
   const latest = g.health[0]
   return {
@@ -67,7 +80,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
     model: g.model ?? null,
-    statusNote: g.status_note ? { text: g.status_note.text, at: g.status_note.at ?? null, stale: g.status_note.stale, untrusted: g.status_note.untrusted ?? null, tone: g.status_note.tone ?? null } : null,
+    statusNote: g.status_note ? toStatusNote(g.status_note) : null,
     instructions: g.instructions ?? '',
     autonomy: g.autonomy ?? {},
     toolMap: g.tool_map ?? {},

@@ -67,6 +67,8 @@ test("a goal's card shows its status in full, in its tone's colour, expanded or 
     goal({ id: 'g1', name: 'Fixer', status_note: { text: long, at: '2026-11-07T07:55:00Z', stale: false, untrusted: null, tone: 'attention' } }),
     // Something waits for you, so its card always shows
     goal({ id: 'g2', name: 'Inbox', needs_you: [proposal('11', 'Reply to Alice')], status_note: { text: 'CI failing', at: null, stale: true, untrusted: 'mail', tone: 'problem' } }),
+    // Set by a run that read only watch lines: no ⚠, the card says it in words
+    goal({ id: 'g3', name: 'Issues', status_note: { text: '2 triaged', at: '2026-11-07T07:55:00Z', stale: false, untrusted: 'watch events', tone: 'ok' } }),
   ])
   await $.session.start(START)
 
@@ -84,6 +86,12 @@ test("a goal's card shows its status in full, in its tone's colour, expanded or 
     const [busyNote] = busy!.children as Node[]
     expect(busyNote!.props.dimColor).toBe(true) // stale: dimmed, keeping its colour
     expect(colours(busyNote!)).toEqual(['yellow', 'red']) // ⚠, then the tone
+
+    expect(await ui.find({ type: 'Text', text: /⚠ \[2 triaged\]/ })).toBeUndefined() // its one line
+    await ui.press({ key: 'toggle-g3' })
+    const watched = await ui.find({ type: 'Text', text: '2 triaged · set 5m ago after reading watch events' })
+    expect(colours((watched!.children as Node[])[0]!)).toEqual(['green']) // no ⚠
+    await ui.press({ key: 'toggle-g3' })
     await ui.press({ key: 'toggle-g1' }) // collapse again for the next surface
     await ui.unmount()
   }

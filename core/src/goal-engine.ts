@@ -7,7 +7,7 @@ import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
 import { isProposal } from './gates.js'
 import {
-  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, updateMemory, updateRun, updateGoal,
+  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal,
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { listHealth } from './health.js'
@@ -282,7 +282,7 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
 
   // Watch lines are outside text (issue titles, email subjects): handing them to the run marks it
   const watchEvents = takeWatchEvents(db, planId, runId)
-  if (run && watchEvents.length) markRunUntrusted(db, run.id, 'watch events')
+  if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE)
   // So is memory a marked run wrote: otherwise injected text could wait one run and act unchecked
   const taintedMemory = memory.find((m) => m.untrusted_source)
   if (run && taintedMemory) markRunUntrusted(db, run.id, `memory ${taintedMemory.id} (written after ${taintedMemory.untrusted_source})`)
