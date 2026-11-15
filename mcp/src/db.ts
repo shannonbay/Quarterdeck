@@ -46,6 +46,13 @@ export const rejectTask = (planId: string, taskId: string, feedback: string) => 
 export const listGoals = (status?: core.Goal['status']) => core.listGoals(db, status)
 export const getGoal = (planId: string) => core.getGoal(db, planId)
 export const buildBrief = (planId: string, runId?: string) => core.buildBrief(db, planId, runId)
+/** A goal run touching a goal item: records the attempt and refuses once the item is out of attempts. */
+export function recordItemAttempt(planId: string, taskId: string, runId: string | null): void {
+  if (!runId || !core.getGoal(db, planId)) return
+  const run = core.getRun(db, runId)
+  if (!run || run.plan_id !== planId) return
+  core.recordAttempt(db, planId, taskId, runId)
+}
 export const addItem = (planId: string, runId: string | null, input: core.AddItemInput) => core.addItem(db, planId, runId, input)
 export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core.insertMemory(db, m)
 export const getMemory = (id: string) => core.getMemory(db, id)

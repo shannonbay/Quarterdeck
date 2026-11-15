@@ -175,6 +175,8 @@ export interface ItemSummary {
   /** Approved proposal: carry out its action, then complete it. */
   approved_to_execute: boolean
   action?: ProposedAction
+  /** Out of attempts: waits for the person's answer, and runs are refused work on it. */
+  blocked?: boolean
 }
 
 function summarizeItem(t: Task): ItemSummary {
@@ -277,7 +279,10 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
 
   const items = (db.prepare("SELECT * FROM tasks WHERE plan_id = ? AND archived_at IS NULL AND status IN ('pending', 'active')").all(planId) as Record<string, unknown>[])
     .map(deserializeTask)
-    .map(summarizeItem)
+    .map((t) => {
+      const item = summarizeItem(t)
+      return isAttemptBlocked(db, planId, t) ? { ...item, blocked: true } : item
+    })
     .sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id))
 
   // Watch lines are outside text (issue titles, email subjects): handing them to the run marks it
@@ -440,6 +445,79 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
     external_ref: ref, ask_person: true,
   })
   return reason
+}
+
+// -- Per-item attempt limits --------------------------------------------------
+
+const ATTEMPT_REF = 'attempt-limit:'
+
+/** The thread of work an item belongs to: its external_ref, or the item itself. */
+function attemptKey(task: Task): string {
+  return task.external_ref ? `ref:${task.external_ref}` : `item:${task.id}`
+}
+
+/** The escalation question for an item's thread of work, if any. */
+function attemptQuestion(db: Database, planId: string, key: string): Task | undefined {
+  const row = db.prepare('SELECT * FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ATTEMPT_REF + key) as Record<string, unknown> | undefined
+  return row ? deserializeTask(row) : undefined
+}
+
+/** Distinct runs that worked on this item, or on any item with its external_ref, since the person last answered. */
+export function countAttempts(db: Database, planId: string, task: Task): number {
+  const q = attemptQuestion(db, planId, attemptKey(task))
+  const since = q && (q.status === 'completed' || q.status === 'abandoned') ? q.updated_at : ''
+  const row = task.external_ref
+    ? db.prepare('SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND (external_ref = ? OR task_id = ?) AND at > ?')
+      .get(planId, task.external_ref, task.id, since)
+    : db.prepare('SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND at > ?')
+      .get(planId, task.id, since)
+  return (row as { n: number }).n
+}
+
+/** True while the item's thread of work waits on the person's answer to an attempt-limit question. */
+export function isAttemptBlocked(db: Database, planId: string, task: Task): boolean {
+  const q = attemptQuestion(db, planId, attemptKey(task))
+  return Boolean(q && q.status !== 'completed' && q.status !== 'abandoned')
+}
+
+/**
+ * Called by the server whenever a goal run updates an item or carries out its approved
+ * action: records the run as an attempt, and refuses (GoalError) once the item's thread of
+ * work (the item, or every item with its external_ref) has used up max_item_attempts runs.
+ * At the limit it adds a Needs-you question; until the person answers it, every run is
+ * refused work on that item. The answer lifts the block and starts a fresh count.
+ */
+export function recordAttempt(db: Database, planId: string, taskId: string, runId: string, now: Date = new Date()): void {
+  const goal = getGoal(db, planId)
+  const task = getTask(db, planId, taskId)
+  if (!goal || !task) return
+  // The server's own questions are the person's to answer, not attempts
+  if (task.external_ref?.startsWith(ATTEMPT_REF) || task.external_ref?.startsWith('runaway-breaker:')) return
+  const key = attemptKey(task)
+  const asked = attemptQuestion(db, planId, key)
+  if (isAttemptBlocked(db, planId, task)) {
+    throw new GoalError(`Item ${taskId} is blocked: it reached its attempt limit and waits for the person's answer (item ${asked!.id}). Leave it alone this run.`)
+  }
+  const limit = goal.limits.max_item_attempts
+  const already = db.prepare('SELECT 1 FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND run_id = ?').get(planId, taskId, runId)
+  if (already) return
+  if (limit > 0 && countAttempts(db, planId, task) >= limit) {
+    const lastNote = (task.notes || task.result || 'none').slice(0, 500)
+    const goalText = `Tried "${task.goal}" ${limit} times without finishing. Keep going, change approach, or drop it?`
+    const notes = `Item ${task.id}${task.external_ref ? ` (${task.external_ref})` : ''} has had ${limit} runs work on it. Its last note: ${lastNote}. Until you answer, runs are refused work on it; your answer lands in memory for the next attempt.`
+    const at = now.toISOString()
+    if (asked) {
+      // Asked before and answered: ask again under the same ref
+      db.prepare(`UPDATE tasks SET goal = ?, notes = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
+        approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`)
+        .run(goalText, notes, at, at, planId, asked.id)
+    } else {
+      addItem(db, planId, null, { goal: goalText, notes, external_ref: ATTEMPT_REF + key, ask_person: true })
+    }
+    throw new GoalError(`Item ${taskId} reached its limit of ${limit} attempts, so the person was asked whether to keep going. Leave it alone this run.`)
+  }
+  db.prepare('INSERT INTO goal_item_attempts (plan_id, task_id, run_id, external_ref, at) VALUES (?, ?, ?, ?, ?)')
+    .run(planId, taskId, runId, task.external_ref ?? null, now.toISOString())
 }
 
 /** Open items: pending, or active (which includes proposals waiting for review and approved ones not yet carried out). */

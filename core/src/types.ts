@@ -123,9 +123,11 @@ export interface GoalLimits {
   max_runs_per_hour: number
   /** Runaway breaker: this many unscheduled runs in a row that resolve no item pause the goal and ask the person (0: off). */
   max_idle_runs: number
+  /** Runs that may work on one item (or one external_ref) before it becomes a Needs-you question (0: off). */
+  max_item_attempts: number
 }
 
-export const DEFAULT_GOAL_LIMITS: GoalLimits = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48, max_runs_per_hour: 8, max_idle_runs: 5 }
+export const DEFAULT_GOAL_LIMITS: GoalLimits = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48, max_runs_per_hour: 8, max_idle_runs: 5, max_item_attempts: 3 }
 
 export interface Goal {
   plan_id: string

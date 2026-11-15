@@ -57,6 +57,10 @@ const PatchSchema = z.object({
     max_run_minutes: z.number().int().min(1).max(120),
     max_items_per_run: z.number().int().min(1).max(500),
     max_runs_per_day: z.number().int().min(1).max(1440),
+    // Loop protection: 0 turns each off
+    max_runs_per_hour: z.number().int().min(0).max(60),
+    max_idle_runs: z.number().int().min(0).max(100),
+    max_item_attempts: z.number().int().min(0).max(100),
   }).partial().optional(),
   item_retention_days: z.number().int().min(1).max(365).optional(),
   interval: z.object({

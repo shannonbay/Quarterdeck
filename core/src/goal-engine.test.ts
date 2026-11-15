@@ -3,7 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateTask, getTask, getPlan,
   addItem, buildBrief, queueRun, startRun, endRun, failRun, archiveResolved, withinActiveHours, decideTick, nextIntervalRun, recordSkip,
-  approveTask, rejectTask, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule,
+  approveTask, rejectTask, recordAttempt, countAttempts, isAttemptBlocked, decideItem, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule,
 } from './index.js'
 
 let db: Database
@@ -399,5 +399,59 @@ describe('runaway breaker', () => {
     updateGoal(db, 'g1', { limits: { max_runs_per_hour: 0, max_idle_runs: 0 } })
     for (let i = 0; i < 12; i++) finishRun()
     expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+})
+
+describe('per-item attempt limits', () => {
+  const newRun = () => { const r = queueRun(db, 'g1', 'event'); startRun(db, r.id, null); return r.id }
+  const question = () => db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref LIKE 'attempt-limit:%'").get() as { id: string; goal: string; status: string } | undefined
+
+  beforeEach(() => updateGoal(db, 'g1', { limits: { max_idle_runs: 0, max_runs_per_hour: 0 } }))
+
+  it('counts each run once, and asks the person instead of a fourth attempt', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Fix CI on PR 31', external_ref: 'ci:31' }).task
+    for (let i = 0; i < 3; i++) {
+      const run = newRun()
+      recordAttempt(db, 'g1', item.id, run)
+      recordAttempt(db, 'g1', item.id, run) // same run again: still one attempt
+      endRun(db, run, 'tried')
+    }
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(3)
+    const fourth = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, fourth)).toThrow(/limit of 3 attempts/)
+    expect(question()).toMatchObject({ status: 'active' })
+    expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(true)
+    expect(() => recordAttempt(db, 'g1', item.id, fourth)).toThrow(/blocked/)
+    expect(buildBrief(db, 'g1').open_items.find((i) => i.id === item.id)).toMatchObject({ blocked: true })
+  })
+
+  it('counts a new item with the same external_ref as the same thread of work', () => {
+    for (let i = 0; i < 3; i++) {
+      const run = newRun()
+      const item = addItem(db, 'g1', run, { goal: `Fix CI on PR 31, try ${i}`, external_ref: 'ci:31' }).task
+      recordAttempt(db, 'g1', item.id, run)
+      endRun(db, run, 'tried')
+    }
+    // A fresh item for the same PR under the same ref is returned, not created; a different item sharing the ref still counts
+    const run = newRun()
+    const again = addItem(db, 'g1', run, { goal: 'Fix CI on PR 31 again', external_ref: 'ci:31' }).task
+    expect(() => recordAttempt(db, 'g1', again.id, run)).toThrow(/limit of 3 attempts/)
+  })
+
+  it("the person's answer lifts the block and starts a fresh count", () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going, try the other API' })
+    expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
+    expect(countAttempts(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(1)
+  })
+
+  it('is off at 0', () => {
+    updateGoal(db, 'g1', { limits: { max_item_attempts: 0 } })
+    const item = addItem(db, 'g1', null, { goal: 'x' }).task
+    for (let i = 0; i < 6; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    expect(question()).toBeUndefined()
   })
 })

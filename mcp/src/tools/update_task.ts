@@ -1,5 +1,5 @@
-import { getTask, updateTask, touchPlan } from '../db.js'
-import { getOpenPlan } from '../session.js'
+import { getTask, updateTask, touchPlan , recordItemAttempt } from '../db.js'
+import { getOpenPlan, getOpenRun } from '../session.js'
 import { buildContext } from '../context.js'
 import { UpdateTaskSchema } from '../schema.js'
 import { record } from '../history.js'
@@ -13,6 +13,8 @@ export async function update_task(args: unknown) {
 
   const task = getTask(planId, input.task_id)
   if (!task) throw new Error(`Task ${input.task_id} not found.`)
+  // A goal run working on an item counts as an attempt (server-side; refuses once it is out of attempts)
+  recordItemAttempt(planId, input.task_id, getOpenRun())
 
   if (input.goal !== undefined && task.status !== 'pending') {
     throw new Error(`Cannot rename task: goal can only be changed while the task is pending (current status: ${task.status})`)

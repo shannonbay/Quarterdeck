@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 9
+export const SCHEMA_VERSION = 10
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -459,6 +459,19 @@ export function runMigrations(db: Database): void {
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;
+  `)
+
+  // Schema version 10: which runs worked on each goal item, written by the server (never reported by the agent)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS goal_item_attempts (
+      plan_id      TEXT NOT NULL REFERENCES plans(id),
+      task_id      TEXT NOT NULL,
+      run_id       TEXT NOT NULL,
+      external_ref TEXT,
+      at           TEXT NOT NULL,
+      PRIMARY KEY (plan_id, task_id, run_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_item_attempts_ref ON goal_item_attempts(plan_id, external_ref);
   `)
 
   // ── Agent transcripts ───────────────────────────────────────────────────────
