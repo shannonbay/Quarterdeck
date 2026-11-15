@@ -36,6 +36,7 @@ function deserializeGoal(r: Row): Goal {
     status_check_at: (r.status_check_at as string | null | undefined) ?? null,
     status_check_failures: (r.status_check_failures as number | undefined) ?? 0,
     status_tone: (r.status_tone as Goal['status_tone'] | undefined) ?? null,
+    resumed_at: (r.resumed_at as string | null | undefined) ?? null,
   } as Goal
 }
 
@@ -110,11 +111,23 @@ export function updateGoal(
   if ('health_triggers_run' in fields) serialized.health_triggers_run = fields.health_triggers_run ? 1 : 0
   if ('one_off' in fields) serialized.one_off = fields.one_off ? 1 : 0
   if (fields.limits) serialized.limits = JSON.stringify({ ...current.limits, ...fields.limits })
+  // Every resume comes through here (pane, /goal-resume, update_goal, the web page, Run again)
+  const resuming = fields.status === 'active' && current.status !== 'active'
+  const now = new Date().toISOString()
+  if (resuming) serialized.resumed_at = now
   const entries = Object.entries(serialized)
   if (!entries.length) return
   db.prepare(`UPDATE goals SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE plan_id = ?`)
     .run(...entries.map(([, v]) => v), planId)
+  // Resuming answers the runaway breaker's "Resume it?", so it leaves Needs you
+  if (resuming) {
+    db.prepare("UPDATE tasks SET status = 'completed', result = 'Resumed', updated_at = ? WHERE plan_id = ? AND external_ref = ? AND status IN ('pending', 'active')")
+      .run(now, planId, RUNAWAY_REF)
+  }
 }
+
+/** The external_ref of a goal's one runaway-breaker question (reopened each time the breaker trips). */
+export const RUNAWAY_REF = 'runaway-breaker'
 
 // ── Triggers ──────────────────────────────────────────────────────────────────
 

@@ -166,6 +166,8 @@ export interface Goal {
   status_check_failures: number
   /** How the goal stands by its status: ok (green), attention (yellow), problem (red); null: no tone. */
   status_tone: import('./status-check.js').StatusTone | null
+  /** When the goal last went back to active (set by updateGoal); the runaway breaker counts only runs since then. */
+  resumed_at: string | null
 }
 
 export type NewGoal = Pick<Goal, 'plan_id' | 'objective'> & Partial<Omit<Goal, 'plan_id' | 'objective' | 'limits'>> & { limits?: Partial<GoalLimits> }

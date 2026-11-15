@@ -366,10 +366,76 @@ describe('runaway breaker', () => {
     expect(getGoal(db, 'g1')!.status).toBe('active')
     finishRun()
     expect(getGoal(db, 'g1')!.status).toBe('paused')
-    const ask = db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref LIKE 'runaway-breaker:%'").all() as { goal: string; notes: string }[]
+    const ask = breakerAsks()
     expect(ask).toHaveLength(1)
     expect(ask[0].notes).toMatch(/5 unscheduled runs in a row resolved no item/)
   })
+
+  const breakerAsks = () => db.prepare("SELECT * FROM tasks WHERE plan_id = 'g1' AND external_ref = 'runaway-breaker'").all() as
+    { id: string; goal: string; notes: string; status: string; result: string | null; review_requested_at: string | null }[]
+
+  /** A fake clock stepped a second per call, so runs and the resume never share a millisecond. */
+  const withClock = (fn: (tick: () => void) => void) => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let t = Date.parse('2026-01-01T00:00:00.000Z')
+      fn(() => vi.setSystemTime((t += 1000)))
+    } finally {
+      vi.useRealTimers()
+    }
+  }
+
+  it('counts only runs since the goal was resumed, and asks again with the same question', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    updateGoal(db, 'g1', { status: 'active' })
+    expect(getGoal(db, 'g1')!.resumed_at).toBe(new Date().toISOString())
+    // Resuming answered "Resume it?", so it leaves Needs you
+    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'completed', result: 'Resumed' })])
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // The same item, open again: a second trip in the hour isn't lost
+    const asks = breakerAsks()
+    expect(asks).toHaveLength(1)
+    expect(asks[0]).toMatchObject({ status: 'active', result: null })
+    expect(asks[0]!.review_requested_at).toBe(new Date().toISOString())
+  }))
+
+  it('counts the hour from the resume too', () => withClock((tick) => {
+    updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
+    for (let i = 0; i < 4; i++) { tick(); finishRun('interval') }
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    updateGoal(db, 'g1', { status: 'active' })
+    for (let i = 0; i < 3; i++) { tick(); finishRun('interval') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    tick(); finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  }))
+
+  it('answering the question and then resuming also starts the count afresh', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick()
+    decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'answer', feedback: 'Yes, carry on' })
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    tick()
+    updateGoal(db, 'g1', { status: 'active' })
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'completed' })])
+  }))
+
+  it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {
+    for (let i = 0; i < 4; i++) { tick(); finishRun() }
+    tick(); updateGoal(db, 'g1', { status: 'paused' })
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    tick(); finishRun()
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+  }))
 
   it('leaves idle scheduled runs alone', () => {
     for (let i = 0; i < 6; i++) finishRun('interval')

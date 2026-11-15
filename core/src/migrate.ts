@@ -333,6 +333,8 @@ export function runMigrations(db: Database): void {
     ['status_check_failures', 'INTEGER NOT NULL DEFAULT 0'],
     // How the goal stands by its status (ok / attention / problem): the pane colours the status by it
     ['status_tone', 'TEXT'],
+    // When the goal last went back to active: the runaway breaker counts only runs since then
+    ['resumed_at', 'TEXT'],
   ]
   for (const [col, def] of addedGoalColumns) {
     try { db.exec(`ALTER TABLE goals ADD COLUMN ${col} ${def}`) } catch { /* already exists */ }

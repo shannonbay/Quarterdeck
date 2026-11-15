@@ -7,7 +7,7 @@ import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
 import { isProposal } from './gates.js'
 import {
-  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, updateMemory, updateRun, updateGoal,
+  countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { listHealth } from './health.js'
@@ -409,17 +409,19 @@ export function runawayReason(db: Database, planId: string, now: Date = new Date
   const goal = getGoal(db, planId)
   if (!goal) return null
   const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits
+  // Only runs since the person last resumed the goal count: resuming is their say-so to carry on
+  const since = goal.resumed_at ?? ''
   if (perHour > 0) {
     const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
-    const n = (db.prepare("SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND started_at >= ?")
-      .get(planId, hourAgo) as { n: number }).n
+    const n = (db.prepare("SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND started_at >= ? AND started_at >= ?")
+      .get(planId, hourAgo, since) as { n: number }).n
     if (n > perHour) return `${n} runs in the last hour (limit ${perHour})`
   }
   if (idle > 0) {
     // Scheduled runs that find nothing are normal; runs that queue each other are what loops
     const recent = db.prepare(`SELECT trigger, items_resolved FROM goal_runs
-      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') ORDER BY started_at DESC, rowid DESC LIMIT ?`)
-      .all(planId, idle) as { trigger: string; items_resolved: number }[]
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all(planId, since, idle) as { trigger: string; items_resolved: number }[]
     if (recent.length === idle && recent.every((r) => r.items_resolved === 0 && r.trigger !== 'interval' && r.trigger !== 'cron')) {
       return `${idle} unscheduled runs in a row resolved no item`
     }
@@ -438,13 +440,25 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
   const reason = runawayReason(db, planId, now)
   if (!reason) return null
   updateGoal(db, planId, { status: 'paused', next_run_at: null })
-  const ref = `runaway-breaker:${now.toISOString().slice(0, 13)}`
-  addItem(db, planId, null, {
-    goal: 'This goal may be looping, so I paused it. Resume it?',
-    notes: `Runaway breaker: ${reason}. Look at its recent runs, then resume the goal to keep going, change its instructions or limits first, or leave it paused.`,
-    external_ref: ref, ask_person: true,
-  })
+  askPersonUnder(db, planId, RUNAWAY_REF, 'This goal may be looping, so I paused it. Resume it?',
+    `Runaway breaker: ${reason}. Look at its recent runs, then resume the goal to keep going, change its instructions or limits first, or leave it paused.`, now)
   return reason
+}
+
+/**
+ * Puts a question of the server's own under Needs you, under a fixed ref: a new item the first
+ * time, and the same item reopened after that (addItem would only return the answered one).
+ */
+function askPersonUnder(db: Database, planId: string, ref: string, goal: string, notes: string, now: Date): void {
+  const asked = db.prepare('SELECT id FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ref) as { id: string } | undefined
+  if (!asked) {
+    addItem(db, planId, null, { goal, notes, external_ref: ref, ask_person: true })
+    return
+  }
+  const at = now.toISOString()
+  db.prepare(`UPDATE tasks SET goal = ?, notes = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
+    approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`)
+    .run(goal, notes, at, at, planId, asked.id)
 }
 
 // -- Per-item attempt limits --------------------------------------------------
@@ -492,7 +506,7 @@ export function recordAttempt(db: Database, planId: string, taskId: string, runI
   const task = getTask(db, planId, taskId)
   if (!goal || !task) return
   // The server's own questions are the person's to answer, not attempts
-  if (task.external_ref?.startsWith(ATTEMPT_REF) || task.external_ref?.startsWith('runaway-breaker:')) return
+  if (task.external_ref?.startsWith(ATTEMPT_REF) || task.external_ref === RUNAWAY_REF) return
   const key = attemptKey(task)
   const asked = attemptQuestion(db, planId, key)
   if (isAttemptBlocked(db, planId, task)) {
@@ -505,15 +519,8 @@ export function recordAttempt(db: Database, planId: string, taskId: string, runI
     const lastNote = (task.notes || task.result || 'none').slice(0, 500)
     const goalText = `Tried "${task.goal}" ${limit} times without finishing. Keep going, change approach, or drop it?`
     const notes = `Item ${task.id}${task.external_ref ? ` (${task.external_ref})` : ''} has had ${limit} runs work on it. Its last note: ${lastNote}. Until you answer, runs are refused work on it; your answer lands in memory for the next attempt.`
-    const at = now.toISOString()
-    if (asked) {
-      // Asked before and answered: ask again under the same ref
-      db.prepare(`UPDATE tasks SET goal = ?, notes = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
-        approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`)
-        .run(goalText, notes, at, at, planId, asked.id)
-    } else {
-      addItem(db, planId, null, { goal: goalText, notes, external_ref: ATTEMPT_REF + key, ask_person: true })
-    }
+    // Asked before and answered: asked again under the same ref
+    askPersonUnder(db, planId, ATTEMPT_REF + key, goalText, notes, now)
     throw new GoalError(`Item ${taskId} reached its limit of ${limit} attempts, so the person was asked whether to keep going. Leave it alone this run.`)
   }
   db.prepare('INSERT INTO goal_item_attempts (plan_id, task_id, run_id, external_ref, at) VALUES (?, ?, ?, ?, ?)')
