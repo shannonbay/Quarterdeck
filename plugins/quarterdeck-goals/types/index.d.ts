@@ -67,7 +67,7 @@ export type GoalCard = {
    * `stale`: the last run failed or ended without setting it. `untrusted`: what the run that set it had read.
    * `tone`: how the goal stands by it (ok / attention / problem), which colours it; null: none given.
    */
-  statusNote: { text: string; stale: boolean; untrusted: string | null; tone: 'ok' | 'attention' | 'problem' | null } | null
+  statusNote: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone: 'ok' | 'attention' | 'problem' | null } | null
   instructions: string
   /** Action category → off | propose | auto (unlisted: propose). */
   autonomy: Record<string, string>

@@ -284,9 +284,7 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
     nextRunText(g, view.now),
     g.openItemCount > 0 ? ` · ${g.openItemCount} open` : '',
   ].join('')
-  // The status a run set comes right after the name, in the pane's own colours: a run gives
-  // only the words and a tone (ok green, attention yellow, problem red). Dimmed when stale
-  // (it keeps its colour); ⚠ when the run that set it had read outside content.
+  // The status a run set comes right after the name, drawn as on the card (statusNoteText)
   const note = g.statusNote
   const noteText = note ? ` [${note.text}]` : ''
   const noteWidth = note ? [...noteText].length + (note.untrusted ? 2 : 0) : 0
@@ -297,9 +295,24 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
   return (
     <Box key={g.id} marginBottom={gap}>
       <Button key={`toggle-${g.id}`} plain label={`▸ ${g.name}`} hotkey={index < 9 ? String(index + 1) : undefined} onPress={() => void toggleExpanded($, g.id).then(() => refresh($))} />
-      {showNote && <Text key={`note-${g.id}`} dimColor={note.stale}>{note.untrusted ? <Text color="yellow"> ⚠</Text> : null}<Text color={toneColor(note.tone)} dimColor={note.stale}>{noteText}</Text></Text>}
+      {showNote && statusNoteText($, e, `note-${g.id}`, note, `[${note.text}]`, ' ')}
       {factsRoom >= 8 && <Text dimColor>{clip(facts, factsRoom)}</Text>}
     </Box>
+  )
+}
+
+/**
+ * The status a run set, drawn the same on a goal's one line and on its card, in the pane's
+ * own colours: a run gives only the words and a tone (ok green, attention yellow, problem
+ * red). Dimmed when stale (it keeps its colour); a yellow ⚠ first when the run that set it
+ * had read outside content. `lead` goes before it all (a space after the name on one line).
+ */
+function statusNoteText($: Engine, e: E, key: string, note: NonNullable<GoalCard['statusNote']>, text: string, lead = '') {
+  const { Text } = parts($, e)
+  return (
+    <Text key={key} dimColor={note.stale}>
+      {lead}{note.untrusted ? <Text color="yellow">⚠ </Text> : null}<Text color={toneColor(note.tone)} dimColor={note.stale}>{text}</Text>
+    </Text>
   )
 }
 
@@ -328,6 +341,13 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
         <Text dimColor> {g.status}</Text>
         {g.openRun && <Text color="cyan"> · run {g.openRun.status}</Text>}
       </Box>
+      {g.statusNote && (
+        // Under the name, in full (the one line clips it), with when a run set it
+        <Text key={`status-${g.id}`}>
+          {statusNoteText($, e, `status-text-${g.id}`, g.statusNote, g.statusNote.text)}
+          <Text dimColor>{g.statusNote.at ? ` · set ${ago(g.statusNote.at, view.now)}` : ''}{g.statusNote.stale ? ' · may be out of date' : ''}</Text>
+        </Text>
+      )}
       {activityLine($, e, view, g)}
       <Text dimColor>
         {run ? <Text color={isFailed(run.status) ? 'red' : undefined}>last run {run.status} {ago(run.endedAt ?? run.startedAt, view.now)}</Text> : 'no runs yet'}

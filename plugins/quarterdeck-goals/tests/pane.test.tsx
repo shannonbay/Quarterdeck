@@ -55,6 +55,40 @@ test("each goal shows a line of what its agent is doing, clipped to the pane", a
   }
 })
 
+type Node = { props: Record<string, unknown>; children?: (Node | string)[] }
+/** The colours set on a node's own Text children, in order. */
+const colours = (n: Node) => (n.children ?? []).flatMap((c) => typeof c === 'string' || !c.props.color ? [] : [c.props.color])
+
+test("a goal's card shows its status in full, in its tone's colour, expanded or not", async ($, on) => {
+  engine(on)
+  const long = `PR #12 awaiting review ${'and more '.repeat(12)}`.trim()
+  fakeQuarterdeck(on, [
+    // Quiet, so it shows as one line until expanded
+    goal({ id: 'g1', name: 'Fixer', status_note: { text: long, at: '2026-11-07T07:55:00Z', stale: false, untrusted: null, tone: 'attention' } }),
+    // Something waits for you, so its card always shows
+    goal({ id: 'g2', name: 'Inbox', needs_you: [proposal('11', 'Reply to Alice')], status_note: { text: 'CI failing', at: null, stale: true, untrusted: 'mail', tone: 'problem' } }),
+  ])
+  await $.session.start(START)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // Collapsed, the one line clips it and shows no time
+    expect(await ui.find({ type: 'Text', text: / · set / })).toBeUndefined()
+    await ui.press({ key: 'toggle-g1' })
+    const quiet = await ui.find({ type: 'Text', text: `${long} · set 5m ago` }) // not clipped
+    const [quietNote] = quiet!.children as Node[]
+    expect(quietNote!.props.dimColor).toBe(false)
+    expect(colours(quietNote!)).toEqual(['yellow'])
+
+    const busy = await ui.find({ type: 'Text', text: '⚠ CI failing · may be out of date' })
+    const [busyNote] = busy!.children as Node[]
+    expect(busyNote!.props.dimColor).toBe(true) // stale: dimmed, keeping its colour
+    expect(colours(busyNote!)).toEqual(['yellow', 'red']) // ⚠, then the tone
+    await ui.press({ key: 'toggle-g1' }) // collapse again for the next surface
+    await ui.unmount()
+  }
+})
+
 test("expanding a quiet goal adds no blank line above its title", async ($, on) => {
   engine(on)
   fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' }), goal({ id: 'g2', name: 'Invoices' })])

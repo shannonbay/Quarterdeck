@@ -50,6 +50,7 @@ type FakeGoal = {
   health: { passed: boolean; value: number | null }[]
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
   suggestions: { category: string; approved_in_a_row: number }[]
+  status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null } | null
   watches?: { name: string; every_minutes: number; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
 }
 
