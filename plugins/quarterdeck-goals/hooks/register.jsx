@@ -1632,8 +1632,15 @@ async function renderPane($, e) {
   if (current.some(isWorking)) spinOn($);
   return <Box flexDirection="column">
       {guardMissing2 && <Text color="yellow">{GUARD_MISSING}</Text>}
-      {s.outdated && <Text color="yellow">Quarterdeck was updated in another session: run /reload-plugins here to use the new version (this session won't start goal runs until then).</Text>}
-      {s.update && <Box>
+      {s.outdated && !s.update?.ready && <Box>
+          <Text color="yellow">Quarterdeck was updated in another session: reload plugins here to use the new version (this session won't start goal runs until then). </Text>
+          {action($, e, { key: "update-reload", label: "Reload now", onPress: () => void reloadPlugins($, null) })}
+        </Box>}
+      {s.update?.ready && <Box>
+          <Text color="yellow">Quarterdeck {s.update.latest} is installed; this session still runs {s.update.installed} until plugins are reloaded. </Text>
+          {action($, e, { key: "update-reload", label: "Reload now", onPress: () => void reloadPlugins($, s.update.latest) })}
+        </Box>}
+      {s.update && !s.update.ready && <Box>
           <Text color="yellow">Quarterdeck {s.update.latest} is available (you have {s.update.installed}). </Text>
           {action($, e, { key: "update-install", label: view.doing === "update-install" ? "Sending…" : "Ask Claude to install it", onPress: () => void askToUpdate($, s.update) })}
         </Box>}
@@ -2174,6 +2181,22 @@ async function addRule($, rule) {
 var PERMISSIONS_COMMAND = "permissions";
 async function askToAllow($, g, rules) {
   return act($, `allow:${g.id}`, "ask Claude to add the allow rules", async () => void await sendToChat($, allowRulesPrompt(g, rules), `add the Claude Code allow rules for goal "${g.name}" (${g.id})`));
+}
+var RELOAD_COMMAND = "reload-plugins";
+async function reloadPlugins($, version) {
+  const what = version ? `Quarterdeck ${version}` : "the new Quarterdeck";
+  const fallback = `Type /reload-plugins to use ${what}.`;
+  try {
+    const commands = await $.command.list();
+    if (!commands.some((c) => c.name === RELOAD_COMMAND)) {
+      $.ui.toast(fallback);
+      return;
+    }
+    $.ui.toast(`Reloading plugins to use ${what}…`);
+    await $.command.run({ command: RELOAD_COMMAND });
+  } catch {
+    $.ui.toast(fallback);
+  }
 }
 async function askToUpdate($, update2) {
   return act($, "update-install", "ask Claude to update", async () => void await sendToChat($, updatePrompt(update2), `install Quarterdeck ${update2.latest}: claude plugin update quarterdeck-goals@quarterdeck`));

@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.26.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.26.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -23336,11 +23336,13 @@ var RUNNER_USAGE = [
 // src/update-check.ts
 init_src();
 import { existsSync as existsSync4, readFileSync as readFileSync2 } from "fs";
+import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join4 } from "path";
 import { fileURLToPath } from "url";
 var RELEASE_MANIFEST_URL = "https://raw.githubusercontent.com/shannonbay/Quarterdeck/release/plugins/quarterdeck-goals/.claude-plugin/plugin.json";
 var CHECK_EVERY_MS = 6 * 60 * 6e4;
 var RETRY_AFTER_MS = 30 * 6e4;
+var PLUGIN_ID = "quarterdeck-goals@quarterdeck";
 var VERSION = /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.]+)?$/;
 function isNewer(installed, latest) {
   const a = VERSION.exec(installed);
@@ -23369,6 +23371,8 @@ function createUpdateCheck(deps) {
     /** The update known so far; starts a check in the background when one is due, so it never waits on the network. */
     available() {
       if (!deps.installed) return null;
+      const disk = deps.onDisk?.() ?? null;
+      if (disk && isNewer(deps.installed, disk)) return { installed: deps.installed, latest: disk, ready: true };
       if (!pending && deps.now() >= nextCheckAt) void check2();
       return latest && isNewer(deps.installed, latest) ? { installed: deps.installed, latest } : null;
     }
@@ -23385,6 +23389,20 @@ function installedVersion(scriptDir = dirname3(fileURLToPath(import.meta.url)), 
     return null;
   }
 }
+function versionOnDisk(env = process.env, home = homedir4()) {
+  try {
+    const file = join4(env.CLAUDE_CONFIG_DIR || join4(home, ".claude"), "plugins", "installed_plugins.json");
+    const entries = JSON.parse(readFileSync2(file, "utf8")).plugins?.[PLUGIN_ID];
+    let newest = null;
+    for (const e of Array.isArray(entries) ? entries : []) {
+      const v = typeof e?.version === "string" && VERSION.test(e.version) ? e.version : null;
+      if (v && (!newest || isNewer(newest, v))) newest = v;
+    }
+    return newest;
+  } catch {
+    return null;
+  }
+}
 async function fetchReleaseVersion() {
   const res = await fetch(RELEASE_MANIFEST_URL, { signal: AbortSignal.timeout(1e4) });
   if (!res.ok) return null;
@@ -23393,7 +23411,7 @@ async function fetchReleaseVersion() {
 }
 var shared = null;
 function availableUpdate() {
-  shared ??= createUpdateCheck({ installed: installedVersion(), fetchLatest: fetchReleaseVersion, now: Date.now });
+  shared ??= createUpdateCheck({ installed: installedVersion(), fetchLatest: fetchReleaseVersion, onDisk: () => versionOnDisk(), now: Date.now });
   return shared.available();
 }
 
@@ -23422,7 +23440,7 @@ async function goals_overview(args) {
   return overviewAnswer(input.etag, body, etag, availableUpdate());
 }
 function overviewAnswer(asked, body, etag, update) {
-  const tag = update ? `${etag}+update-${update.latest}` : etag;
+  const tag = update ? `${etag}+update-${update.latest}${update.ready ? "-ready" : ""}` : etag;
   if (asked === tag) return { changed: false, etag: tag };
   return { changed: true, etag: tag, ...JSON.parse(body), ...update ? { update } : {} };
 }
