@@ -221,6 +221,7 @@ test("Claude's to-do tools: list, add (as the agent), tick off", async ($, on) =
   await $.session.start(START)
   const listed = await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos' } as never)
   expect(String(listed.result)).toContain('1.1: Approvals away from the terminal')
+  expect(String(listed.result)).toContain('todos with item gives one in full')
   const added = await $.tool.call({ tool: 'mcp__quarterdeck-goals__add_todo', text: 'Rename the package', list: 'goals roadmap' } as never)
   expect(String(added.result)).toBe('Added to Goals roadmap as 4: Rename the package')
   expect(fake.of('todo_add').at(-1)?.input).toMatchObject({ added_by: 'agent', list_id: 'p1' })
@@ -228,6 +229,37 @@ test("Claude's to-do tools: list, add (as the agent), tick off", async ($, on) =
   expect(String(done.result)).toBe('Ticked off 1.1: Approvals away from the terminal')
   const nope = await $.tool.call({ tool: 'mcp__quarterdeck-goals__add_todo', text: 'x', list: 'nowhere' } as never)
   expect(String(nope.result)).toContain('No list "nowhere"')
+})
+
+test('the todos tool clips long to-dos, and gives one to-do or one list on its own', async ($, on) => {
+  engine(on)
+  const long = `Sandbox goal runs: ${'refuse file tools outside the folder, '.repeat(8)}and more`
+  const todo = { id: 'p2', name: 'To do', items: [
+    { id: '31', text: 'Show the status on the expanded card', status: 'pending', depth: 0, notes: null },
+    { id: '32', text: long, status: 'active', depth: 0, notes: 'Planned in issue 3' },
+  ] }
+  fakeQuarterdeck(on, [], { todos: [todo, roadmap()] })
+  await $.session.start(START)
+  const all = String((await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos' } as never)).result)
+  expect(all).toContain('- [~] 32: Sandbox goal runs:')
+  expect(all).toContain('… (+ notes)')
+  expect(all).not.toContain('and more')
+  expect(all).not.toContain('Planned in issue 3')
+
+  const one = await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos', item: '32' } as never)
+  expect(String(one.result)).toBe(`To-do 32 on "To do" (list p2), under way:\n\n${long}\n\nNotes: Planned in issue 3`)
+  expect(String(one.result)).not.toContain('Goals roadmap')
+
+  const list = String((await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos', list: 'goals roadmap' } as never)).result)
+  expect(list).toContain('1.1: Approvals away from the terminal')
+  expect(list).not.toContain('31:')
+
+  const scoped = await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos', item: '1.3', list: 'p1' } as never)
+  expect(String(scoped.result)).toContain('To-do 1.3 on "Goals roadmap" (list p1), open:')
+  const missing = await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos', item: '9.9' } as never)
+  expect(String(missing.result)).toContain('No to-do 9.9')
+  const nowhere = await $.tool.call({ tool: 'mcp__quarterdeck-goals__todos', list: 'nowhere' } as never)
+  expect(String(nowhere.result)).toContain('No list "nowhere"')
 })
 
 test("edit_todo rewords a to-do as the agent and shows the old wording", async ($, on) => {

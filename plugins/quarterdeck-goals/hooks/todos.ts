@@ -18,13 +18,28 @@ type Engine = EngineInterface
 const isDone = (i: TodoItem) => i.status === 'completed' || i.status === 'abandoned'
 
 /** The lists as text for Claude: each open to-do with the id to tick it off by. */
-export function describeTodos(lists: TodoList[], opts: { withDone?: boolean } = {}): string {
+export function describeTodos(lists: TodoList[], opts: { withDone?: boolean; clipAt?: number } = {}): string {
   if (lists.length === 0) return 'No to-do lists for this project yet. Add one with /todo <text> (or the add_todo tool).'
+  // Clipped (Claude's todos tool): each to-do on one line, its notes only flagged, so the
+  // overview stays small; the full text is one call away (todos with item).
+  const line = (i: TodoItem) => {
+    if (!opts.clipAt) return `${i.text}${i.notes ? ` (${i.notes})` : ''}`
+    const text = clip(i.text.replace(/\s+/g, ' ').trim(), opts.clipAt)
+    return `${text}${i.notes ? ' (+ notes)' : ''}`
+  }
   return lists.map((l) => {
     const items = l.items.filter((i) => opts.withDone || !isDone(i))
-    const lines = items.map((i) => `${'  '.repeat(i.depth)}- [${isDone(i) ? 'x' : i.status === 'active' ? '~' : ' '}] ${i.id}: ${i.text}${i.notes ? ` (${i.notes})` : ''}`)
+    const lines = items.map((i) => `${'  '.repeat(i.depth)}- [${mark(i)}] ${i.id}: ${line(i)}`)
     return [`## ${l.name} (list ${l.id}): ${l.open} open, ${l.done} done`, ...(lines.length ? lines : ['  nothing open'])].join('\n')
   }).join('\n\n')
+}
+
+const mark = (i: TodoItem) => (isDone(i) ? 'x' : i.status === 'active' ? '~' : ' ')
+
+/** One to-do in full, for Claude's todos tool with item. */
+export function describeTodo(list: TodoList, item: TodoItem): string {
+  const status = isDone(item) ? item.status : item.status === 'active' ? 'under way' : 'open'
+  return [`To-do ${item.id} on "${list.name}" (list ${list.id}), ${status}:`, '', item.text, ...(item.notes ? ['', `Notes: ${item.notes}`] : [])].join('\n')
 }
 
 /** Finds a to-do by its id, in the given list or the only list that has it. */

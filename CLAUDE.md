@@ -198,6 +198,8 @@ npm run release -- 0.12.0 [--push]   # Release (see Distribution and updates)
 
 **Goals are the product; plans are plumbing.** Don't track your own work here with Quarterdeck plans (`create_plan`, `provision_tasks`, ...): use plan mode and Claude Code's own task list, as anywhere else. Plans stay as the store under goal items and the person's to-do lists, so keep their code and tests working, but new features go to goals. When the person defers an idea, offer to add it to their to-do list (`add_todo`); the roadmap is the "Goals roadmap" list.
 
+**Claude is a user too.** When a Quarterdeck tool makes a simple task cost Claude more than it should (a read that returns far more than asked for, a missing filter or input, several calls where one would do, an answer that has to be parsed around), say so to the person and offer it as a to-do. Example (Nov 2026): reading one to-do returned every list; `todos` now takes `item` and `list`.
+
 ## Adding a New MCP Tool
 
 1. Add a Zod schema to `mcp/src/schema.ts`

@@ -11,12 +11,15 @@ import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChan
 import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
-import { describeTodos, findTodo } from './todos'
+import { describeTodo, describeTodos, findTodo } from './todos'
 import { act, refresh, refreshTodos } from './sync'
 import { phoneHint, readLastAlert, readLastPoll, readTrace } from './alerts'
 import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, MORE, TEMPLATES } from './templates'
 
 type Engine = EngineInterface
+
+/** How much of a to-do the todos overview shows; the rest is one call away (item). */
+const TODO_LINE = 120
 
 const GOAL = { type: 'string', description: 'Goal name (or a unique part of it) or goal id.' }
 const ITEM = { type: 'string', description: 'The item id, as goals_status lists it.' }
@@ -66,8 +69,15 @@ export const TOOLS = [
   },
   {
     name: 'todos',
-    description: "The person's to-do lists for this project, with each open to-do's id. Read-only. Use it when they ask what's on their list, or refer to it after a compaction.",
-    inputSchema: { type: 'object', properties: { include_done: { type: 'boolean', description: 'Also list ticked-off to-dos' } } },
+    description: "The person's to-do lists for this project, with each open to-do's id, long ones cut to one line. Read-only. When they mean one to-do (\"to-do 31\", \"1.37\"), pass item to get just that one in full rather than every list; pass list for one list. Use it when they ask what's on their list, or refer to it after a compaction.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        item: { type: 'string', description: 'One to-do id, e.g. 31 or 1.4: answers with only that to-do, in full' },
+        list: { type: 'string', description: 'A list name or id: only that list (with item, when more than one list has that id)' },
+        include_done: { type: 'boolean', description: 'Also list ticked-off to-dos' },
+      },
+    },
   },
   {
     name: 'add_todo',
@@ -514,7 +524,17 @@ async function todoTool($: Engine, name: 'todos' | 'add_todo' | 'complete_todo' 
   const dir = await $.session.root()
   const lists = await fetchTodos($, dir)
   const listArg = typeof input.list === 'string' && input.list.trim() ? input.list.trim() : undefined
-  if (name === 'todos') return { text: describeTodos(lists, { withDone: input.include_done === true }), isError: false }
+  if (name === 'todos') {
+    const itemArg = typeof input.item === 'string' ? input.item.trim() : typeof input.item === 'number' ? String(input.item) : ''
+    if (itemArg) {
+      const found = findTodo(lists, itemArg, listArg)
+      return 'error' in found ? { text: found.error, isError: true } : { text: describeTodo(found.list, found.item), isError: false }
+    }
+    const shown = listArg ? lists.filter((l) => l.id === listArg || l.name.toLowerCase() === listArg.toLowerCase()) : lists
+    if (listArg && shown.length === 0) return { text: `No list "${listArg}". Lists: ${lists.map((l) => l.name).join(', ') || 'none'}.`, isError: true }
+    const text = describeTodos(shown, { withDone: input.include_done === true, clipAt: TODO_LINE })
+    return { text: `${text}\n\nLong to-dos are cut to one line; todos with item gives one in full.`, isError: false }
+  }
   if (name === 'add_todo') {
     const text = String(input.text ?? '').trim()
     if (!text) return { text: 'A to-do needs some text.', isError: true }
