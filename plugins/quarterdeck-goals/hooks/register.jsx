@@ -1390,11 +1390,21 @@ async function refreshTodos($) {
 var isDone = (i) => i.status === "completed" || i.status === "abandoned";
 function describeTodos(lists, opts = {}) {
   if (lists.length === 0) return "No to-do lists for this project yet. Add one with /todo <text> (or the add_todo tool).";
+  const line = (i) => {
+    if (!opts.clipAt) return `${i.text}${i.notes ? ` (${i.notes})` : ""}`;
+    const text = clip(i.text.replace(/\s+/g, " ").trim(), opts.clipAt);
+    return `${text}${i.notes ? " (+ notes)" : ""}`;
+  };
   return lists.map((l) => {
     const items = l.items.filter((i) => opts.withDone || !isDone(i));
-    const lines = items.map((i) => `${"  ".repeat(i.depth)}- [${isDone(i) ? "x" : i.status === "active" ? "~" : " "}] ${i.id}: ${i.text}${i.notes ? ` (${i.notes})` : ""}`);
+    const lines = items.map((i) => `${"  ".repeat(i.depth)}- [${mark(i)}] ${i.id}: ${line(i)}`);
     return [`## ${l.name} (list ${l.id}): ${l.open} open, ${l.done} done`, ...lines.length ? lines : ["  nothing open"]].join("\n");
   }).join("\n\n");
+}
+var mark = (i) => isDone(i) ? "x" : i.status === "active" ? "~" : " ";
+function describeTodo(list, item) {
+  const status = isDone(item) ? item.status : item.status === "active" ? "under way" : "open";
+  return [`To-do ${item.id} on "${list.name}" (list ${list.id}), ${status}:`, "", item.text, ...item.notes ? ["", `Notes: ${item.notes}`] : []].join("\n");
 }
 function findTodo(lists, itemId, listId) {
   const matches = lists.filter((l) => !listId || l.id === listId || l.name.toLowerCase() === listId.toLowerCase()).flatMap((l) => l.items.filter((i) => i.id === itemId).map((item) => ({ list: l, item })));
@@ -1807,9 +1817,9 @@ function proposalRow($, e, view, g, item) {
     if (!reading && !view.full[key]) await act($, `read:${key}`, "read it in full", async () => setFullItem($, key, await getItem($, g.id, item.id)));
     else await refresh($);
   };
-  const titleLine = (mark) => {
-    if (!item.clipped) return <Text color="yellow">{mark} {item.title}</Text>;
-    const label = `${reading ? "▾" : "▸"} ${mark} ${shownItem.title}`;
+  const titleLine = (mark2) => {
+    if (!item.clipped) return <Text color="yellow">{mark2} {item.title}</Text>;
+    const label = `${reading ? "▾" : "▸"} ${mark2} ${shownItem.title}`;
     return <Button key={`read-${key}`} plain label={label} onPress={() => void toggle()}>
         <Text color="yellow">{label}</Text>
       </Button>;
@@ -2500,6 +2510,7 @@ ci.ask.laterText = ci.ask.fill("main");
 TEMPLATES.find((t) => t.name === "Issue Fixer").instructions = ISSUE_FIX;
 
 // tools.ts
+var TODO_LINE = 120;
 var GOAL = { type: "string", description: "Goal name (or a unique part of it) or goal id." };
 var ITEM = { type: "string", description: "The item id, as goals_status lists it." };
 var TOOLS = [
@@ -2547,8 +2558,15 @@ var TOOLS = [
   },
   {
     name: "todos",
-    description: "The person's to-do lists for this project, with each open to-do's id. Read-only. Use it when they ask what's on their list, or refer to it after a compaction.",
-    inputSchema: { type: "object", properties: { include_done: { type: "boolean", description: "Also list ticked-off to-dos" } } }
+    description: `The person's to-do lists for this project, with each open to-do's id, long ones cut to one line. Read-only. When they mean one to-do ("to-do 31", "1.37"), pass item to get just that one in full rather than every list; pass list for one list. Use it when they ask what's on their list, or refer to it after a compaction.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        item: { type: "string", description: "One to-do id, e.g. 31 or 1.4: answers with only that to-do, in full" },
+        list: { type: "string", description: "A list name or id: only that list (with item, when more than one list has that id)" },
+        include_done: { type: "boolean", description: "Also list ticked-off to-dos" }
+      }
+    }
   },
   {
     name: "add_todo",
@@ -2929,7 +2947,19 @@ async function todoTool($, name, input) {
   const dir = await $.session.root();
   const lists = await fetchTodos($, dir);
   const listArg = typeof input.list === "string" && input.list.trim() ? input.list.trim() : void 0;
-  if (name === "todos") return { text: describeTodos(lists, { withDone: input.include_done === true }), isError: false };
+  if (name === "todos") {
+    const itemArg = typeof input.item === "string" ? input.item.trim() : typeof input.item === "number" ? String(input.item) : "";
+    if (itemArg) {
+      const found2 = findTodo(lists, itemArg, listArg);
+      return "error" in found2 ? { text: found2.error, isError: true } : { text: describeTodo(found2.list, found2.item), isError: false };
+    }
+    const shown = listArg ? lists.filter((l) => l.id === listArg || l.name.toLowerCase() === listArg.toLowerCase()) : lists;
+    if (listArg && shown.length === 0) return { text: `No list "${listArg}". Lists: ${lists.map((l) => l.name).join(", ") || "none"}.`, isError: true };
+    const text = describeTodos(shown, { withDone: input.include_done === true, clipAt: TODO_LINE });
+    return { text: `${text}
+
+Long to-dos are cut to one line; todos with item gives one in full.`, isError: false };
+  }
   if (name === "add_todo") {
     const text = String(input.text ?? "").trim();
     if (!text) return { text: "A to-do needs some text.", isError: true };
