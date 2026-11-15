@@ -404,6 +404,9 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   return getRun(db, runId)!
 }
 
+/** The run triggers the runaway breaker counts: those that don't come from a schedule or the person. */
+const UNSCHEDULED_TRIGGERS = ['watch', 'health', 'event'] as const
+
 /** Why the runaway breaker should trip after this run, or null. Uses goal_runs only. */
 export function runawayReason(db: Database, planId: string, now: Date = new Date()): string | null {
   const goal = getGoal(db, planId)
@@ -411,18 +414,21 @@ export function runawayReason(db: Database, planId: string, now: Date = new Date
   const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits
   // Only runs since the person last resumed the goal count: resuming is their say-so to carry on
   const since = goal.resumed_at ?? ''
+  // Only unscheduled runs count: a schedule can't run away, and the person's own runs
+  // (manual: Run now, or a run queued by their answer or approval) can't be a loop the goal made
+  const unscheduled = `trigger IN (${UNSCHEDULED_TRIGGERS.map((t) => `'${t}'`).join(', ')})`
   if (perHour > 0) {
     const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
-    const n = (db.prepare("SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND started_at >= ? AND started_at >= ?")
+    const n = (db.prepare(`SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND ${unscheduled} AND started_at >= ? AND started_at >= ?`)
       .get(planId, hourAgo, since) as { n: number }).n
-    if (n > perHour) return `${n} runs in the last hour (limit ${perHour})`
+    if (n > perHour) return `${n} unscheduled runs in the last hour (limit ${perHour})`
   }
   if (idle > 0) {
     // Scheduled runs that find nothing are normal; runs that queue each other are what loops
-    const recent = db.prepare(`SELECT trigger, items_resolved FROM goal_runs
-      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
-      .all(planId, since, idle) as { trigger: string; items_resolved: number }[]
-    if (recent.length === idle && recent.every((r) => r.items_resolved === 0 && r.trigger !== 'interval' && r.trigger !== 'cron')) {
+    const recent = db.prepare(`SELECT items_resolved FROM goal_runs
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND ${unscheduled} AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`)
+      .all(planId, since, idle) as { items_resolved: number }[]
+    if (recent.length === idle && recent.every((r) => r.items_resolved === 0)) {
       return `${idle} unscheduled runs in a row resolved no item`
     }
   }
@@ -440,25 +446,36 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
   const reason = runawayReason(db, planId, now)
   if (!reason) return null
   updateGoal(db, planId, { status: 'paused', next_run_at: null })
+  // A request, not a question: Approve resumes the goal, Reject leaves it paused (no free text to misread)
   askPersonUnder(db, planId, RUNAWAY_REF, 'This goal may be looping, so I paused it. Resume it?',
-    `Runaway breaker: ${reason}. Look at its recent runs, then answer this to resume it (or press Resume), change its instructions or limits first, or leave this open to keep it paused.`, now)
+    `Runaway breaker: ${reason}. Look at its recent runs, then approve this to resume the goal (as pressing Resume does), or reject it to leave the goal paused; you can change its instructions or limits first.`, now, 'request')
   return reason
 }
 
 /**
- * Puts a question of the server's own under Needs you, under a fixed ref: a new item the first
- * time, and the same item reopened after that (addItem would only return the answered one).
+ * Puts a question (Answer… / Done) or a request (Approve / Reject) of the server's own under
+ * Needs you, under a fixed ref: a new item the first time, and the same item reopened after
+ * that (addItem would only return the answered one).
  */
-function askPersonUnder(db: Database, planId: string, ref: string, goal: string, notes: string, now: Date): void {
+function askPersonUnder(db: Database, planId: string, ref: string, goal: string, notes: string, now: Date, kind: 'question' | 'request' = 'question'): void {
   const asked = db.prepare('SELECT id FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ref) as { id: string } | undefined
+  const state = JSON.stringify(kind === 'question' ? { asks_person: true } : {})
+  const at = now.toISOString()
   if (!asked) {
-    addItem(db, planId, null, { goal, notes, external_ref: ref, ask_person: true })
+    if (kind === 'question') {
+      addItem(db, planId, null, { goal, notes, external_ref: ref, ask_person: true })
+      return
+    }
+    const id = nextChildId(db, planId, null)
+    insertTask(db, {
+      id, plan_id: planId, goal, result: null, abandon_reason: null, depends_on: null, notes, run_id: null, external_ref: ref,
+      created_by: 'agent', created_at: at, updated_at: at, status: 'active', state: {}, requires_approval: true, review_requested_at: at,
+    })
     return
   }
-  const at = now.toISOString()
-  db.prepare(`UPDATE tasks SET goal = ?, notes = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
+  db.prepare(`UPDATE tasks SET goal = ?, notes = ?, state = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
     approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`)
-    .run(goal, notes, at, at, planId, asked.id)
+    .run(goal, notes, state, at, at, planId, asked.id)
 }
 
 // -- Per-item attempt limits --------------------------------------------------

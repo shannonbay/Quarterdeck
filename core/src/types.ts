@@ -119,7 +119,7 @@ export interface GoalLimits {
   max_run_minutes: number
   max_items_per_run: number
   max_runs_per_day: number
-  /** Runaway breaker: more runs than this in an hour pauses the goal and asks the person (0: off). */
+  /** Runaway breaker: more unscheduled runs (watch, health, event) than this in an hour pauses the goal and asks the person (0: off). */
   max_runs_per_hour: number
   /** Runaway breaker: this many unscheduled runs in a row that resolve no item pause the goal and ask the person (0: off). */
   max_idle_runs: number

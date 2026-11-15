@@ -304,11 +304,20 @@ export function decideItem(
     // With the question's context (its options, often): an answer like "c" means nothing without it
     const context = task.notes?.trim() ? ` (the question said: ${clipText(task.notes.trim().replace(/\s+/g, ' '), ANSWER_CONTEXT_CHARS)})` : ''
     insertMemory(db, { plan_id: planId, kind: 'fact', text: `You answered "${task.goal}": ${answer}${context}`, source: 'human', source_ref: taskId })
-    if (task.external_ref === RUNAWAY_REF && getGoal(db, planId)?.status === 'paused') {
-      // Answering the runaway breaker's "Resume it?" resumes the goal, as pressing Resume would
-      // (no run queued: the goal carries on from its schedule and watches)
-      updateGoal(db, planId, { status: 'active' })
-    } else if (active()) queuedRun = queueRun(db, planId)
+    if (active()) queuedRun = queueRun(db, planId)
+  } else if (task.external_ref === RUNAWAY_REF) {
+    // The runaway breaker's "Resume it?" is a request: Approve resumes the goal, as pressing
+    // Resume does (no run queued: it carries on from its schedule and watches); Reject marks
+    // it done and leaves the goal paused
+    if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`)
+    const now = new Date().toISOString()
+    const resume = input.decision === 'approve'
+    const feedback = (input.feedback ?? '').trim()
+    updateTask(db, planId, taskId, {
+      status: 'completed', review_requested_at: null, updated_at: now,
+      ...(resume ? { approved_by: 'human', approved_at: now, result: 'Resumed' } : { result: `Left paused${feedback ? `: ${feedback}` : ''}` }),
+    })
+    if (resume && getGoal(db, planId)?.status === 'paused') updateGoal(db, planId, { status: 'active' })
   } else if (input.decision === 'approve') {
     approveTask(db, planId, taskId)
     // An approved proposal is carried out by a run; a done request lets the run carry on

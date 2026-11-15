@@ -355,7 +355,7 @@ describe('scheduler decisions', () => {
 })
 
 describe('runaway breaker', () => {
-  const finishRun = (trigger: 'manual' | 'event' | 'interval' = 'event') => {
+  const finishRun = (trigger: 'manual' | 'event' | 'interval' | 'watch' | 'health' = 'event') => {
     const run = queueRun(db, 'g1', trigger)
     startRun(db, run.id, null)
     return endRun(db, run.id, 'nothing to do')
@@ -406,31 +406,53 @@ describe('runaway breaker', () => {
 
   it('counts the hour from the resume too', () => withClock((tick) => {
     updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
-    for (let i = 0; i < 4; i++) { tick(); finishRun('interval') }
+    for (let i = 0; i < 4; i++) { tick(); finishRun('watch') }
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     tick()
     updateGoal(db, 'g1', { status: 'active' })
-    for (let i = 0; i < 3; i++) { tick(); finishRun('interval') }
+    for (let i = 0; i < 3; i++) { tick(); finishRun('watch') }
     expect(getGoal(db, 'g1')!.status).toBe('active')
-    tick(); finishRun('interval')
+    tick(); finishRun('watch')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
   }))
 
-  it('answering the question resumes the goal and starts the count afresh', () => withClock((tick) => {
+  it('asks with a request, not a question: Approve / Reject, no free-text answer', () => {
+    for (let i = 0; i < 5; i++) finishRun()
+    const ask = breakerAsks()[0]!
+    expect(JSON.parse((db.prepare('SELECT state FROM tasks WHERE id = ? AND plan_id = ?').get(ask.id, 'g1') as { state: string }).state)).toEqual({})
+    expect(ask.notes).toMatch(/approve this to resume the goal.*reject it to leave the goal paused/)
+    expect(() => decideItem(db, 'g1', ask.id, { decision: 'answer', feedback: 'no, leave it paused' })).toThrow(/isn't a question/)
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+  })
+
+  it('approving the request resumes the goal and starts the count afresh', () => withClock((tick) => {
     for (let i = 0; i < 5; i++) { tick(); finishRun() }
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     tick()
-    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'answer', feedback: 'Yes, carry on' })
+    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'approve' })
     expect(getGoal(db, 'g1')!).toMatchObject({ status: 'active', resumed_at: new Date().toISOString() })
-    // Resumed as the Resume button would: the answer is kept, and no run is queued
-    expect(task).toMatchObject({ status: 'completed', result: expect.stringContaining('Yes, carry on') })
+    // Resumed as the Resume button would: no run is queued
+    expect(task).toMatchObject({ status: 'completed', result: 'Resumed', review_requested_at: null })
     expect(queuedRun).toBeNull()
-    expect(listMemory(db, 'g1').some((m) => m.text.includes('Yes, carry on'))).toBe(true)
     for (let i = 0; i < 4; i++) { tick(); finishRun() }
     expect(getGoal(db, 'g1')!.status).toBe('active')
     tick(); finishRun()
     expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // Tripping again reopens the same item as a request
+    expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'active', result: null })])
   }))
+
+  it('rejecting the request marks it done and leaves the goal paused', () => {
+    for (let i = 0; i < 5; i++) finishRun()
+    const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject', feedback: 'look at it later' })
+    expect(task).toMatchObject({ status: 'completed', result: 'Left paused: look at it later', review_requested_at: null })
+    expect(queuedRun).toBeNull()
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    // No feedback needed to leave it paused
+    updateGoal(db, 'g1', { status: 'active' })
+    for (let i = 0; i < 5; i++) finishRun()
+    expect(decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject' }).task).toMatchObject({ status: 'completed', result: 'Left paused' })
+  })
 
   it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {
     for (let i = 0; i < 4; i++) { tick(); finishRun() }
@@ -457,11 +479,29 @@ describe('runaway breaker', () => {
     expect(getGoal(db, 'g1')!.status).toBe('active')
   })
 
-  it('pauses after more runs in an hour than max_runs_per_hour', () => {
+  it('pauses after more unscheduled runs in an hour than max_runs_per_hour', () => {
     updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
-    for (let i = 0; i < 3; i++) finishRun('interval')
+    finishRun('watch'); finishRun('health'); finishRun('event')
     expect(getGoal(db, 'g1')!.status).toBe('active')
-    finishRun('interval')
+    finishRun('watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/4 unscheduled runs in the last hour \(limit 3\)/)
+  })
+
+  it('leaves scheduled runs out of max_runs_per_hour: a goal on the shortest interval stays active', () => {
+    // 5 minutes is the shortest interval: 12 runs an hour, over the default limit of 8
+    for (let i = 0; i < 12; i++) finishRun('interval')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it("leaves the person's own runs (manual) out of both counts", () => {
+    // Run now pressed again and again on a quiet goal, and runs queued by answers and approvals
+    for (let i = 0; i < 12; i++) finishRun('manual')
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    // Manual runs don't break a run of idle unscheduled ones either: they're skipped, not counted
+    for (let i = 0; i < 4; i++) { finishRun('event'); finishRun('manual') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('event')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
   })
 
