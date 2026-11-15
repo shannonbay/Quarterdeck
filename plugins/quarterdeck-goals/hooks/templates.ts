@@ -218,6 +218,7 @@ export const TEMPLATES: Template[] = [
       [ISSUE_FIX_OTHERS_WATCH]: { command: issueWatch(false), every_minutes: 5 },
       [ISSUE_FIX_CI_WATCH]: { command: `gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | .databaseId"`, every_minutes: 5 },
       [ISSUE_FIX_CONFLICT_WATCH]: { command: `gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"`, every_minutes: 5 },
+      [ISSUE_FIX_COMMENT_WATCH]: { command: prCommentWatch(), every_minutes: 5 },
     }),
     model: 'opus',
     modelReason: 'it writes fixes and features for you to review',
@@ -241,6 +242,16 @@ export function issueWatch(trusted: boolean): string {
   const select = `.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not) and ${trusted ? assoc : `(${assoc} | not)`}`
   const out = trusted ? '.number' : '(.number | tostring) + \\" by \\" + .user.login'
   return `gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --jq ".[] | select(${select}) | ${out}"`
+}
+
+/**
+ * The issue fixer's comment watch: comments and reviews by trusted authors on its own open
+ * pull requests, as `<number> <comment or review id>`. Only ids reach the run. No jq variables
+ * (`$n`), since sh would expand them inside the double quotes cmd.exe needs.
+ */
+export function prCommentWatch(): string {
+  const assoc = `(.authorAssociation | IN(${TRUSTED_ASSOCIATIONS.map((a) => `\\"${a}\\"`).join(',')}))`
+  return `gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select(${assoc}) | .id] | .[0] + \\" \\" + .[1:][]"`
 }
 
 /** A branch name as typed, if it can go in a command as it is. */
@@ -276,6 +287,14 @@ export const ISSUE_FIX_CI_WATCH = 'failed CI on its pull requests'
 /** The issue fixer's third watch: its own pull requests that no longer merge cleanly, as <number>@<head sha>. A run merges the base in (a rebase would need a force-push, which auto mode refuses). */
 export const ISSUE_FIX_CONFLICT_WATCH = 'merge conflicts on its pull requests'
 
+/** The issue fixer's fifth watch: new comments and reviews from the people it trusts on its own open pull requests, as <number> <id>. */
+export const ISSUE_FIX_COMMENT_WATCH = 'comments on its pull requests'
+
+/** How the issue fixer reads a pull request's feedback: comments, reviews and inline review comments, only from the people it trusts. */
+const TRUSTED_JQ = TRUSTED_ASSOCIATIONS.map((a) => `"${a}"`).join(', ')
+const PR_READ = `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`
+const PR_INLINE_READ = `gh api "repos/{owner}/{repo}/pulls/<number>/comments" --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {path, line, author: .user.login, body}]'`
+
 /** The issue fixer's second watch: issues opened by anyone but the owner, members and collaborators, as <number> by <login>. */
 export const ISSUE_FIX_OTHERS_WATCH = 'new issues from others'
 /** How the issue fixer reads an issue: its text, and comments only from the people it trusts. */
@@ -293,6 +312,7 @@ export const ISSUE_FIX = [
   "If an issue is unclear, or isn't something this project should do, don't build it: say why in your summary. Remember which issues you've handled.",
   `Another watch starts a run when CI fails on one of your pull requests: watch_events lists the failed run ids under "${ISSUE_FIX_CI_WATCH}". For each, find its branch with gh run view <id> --json headBranch. If that pull request is closed or merged, or a later run on the branch has passed, add nothing. Otherwise read the failure with gh run view <id> --log-failed, fix it on that branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what failed and what you changed. Push to the same branch only once I approve, then complete the item. If the failure isn't caused by your change (a flaky test, something already broken on the default branch), change nothing and say so in your summary. Never force-push, or change the CI workflow to make it pass.`,
   `Another watch starts a run when one of your pull requests no longer merges cleanly: watch_events lists <number>@<head sha> under "${ISSUE_FIX_CONFLICT_WATCH}". For each, skip it if the pull request is closed or merged, or its head isn't that sha any more. Otherwise, in your clone, fetch, check out its branch and merge the latest of the pull request's base branch into it (git merge origin/<base>; find the base with gh pr view <number> --json baseRefName: it isn't always the default branch, since a pull request can be based on another). Never rebase: pushing a rebase needs a force-push. Resolve each conflict keeping what both sides meant; if one needs a design decision you can't make from the code, abort the merge (git merge --abort) and ask me (add_item with ask_person) instead. Run the checks until they pass, commit the merge, then propose one code.pull_request item (external_ref pr-conflict:<number>@<sha>) naming the files that conflicted and how you resolved each. Push to the same branch (a plain git push) only once I approve, then complete the item. If a pull request based on that branch now conflicts too, handle it the same way in the same run.`,
+  `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${PR_READ}, and a review's inline comments with ${PR_INLINE_READ}; these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked and saying what you changed. Push to the same branch (a plain git push) only once I approve, then complete the item. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on GitHub. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
   "The first run (no watch_events) only sets up the clone and lists the numbers and authors of the issues already open in its summary (gh issue list --json number,author, not their titles or text); fix those only when I ask.",
   STATUS('PR #<number> awaiting review', 'pull request'),
 ].join(' ')

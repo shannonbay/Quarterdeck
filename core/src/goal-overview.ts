@@ -236,7 +236,11 @@ const CARD_TEXT = 160
 const CARD_CONTEXT = 1
 
 /** `standingSession`: the standing session's id (`quarterdeck runner`), to say when it is the one starting runs. */
-export function buildOverview(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null) {
+/**
+ * `fullInstructions`: give the instructions uncut. The pane's view cuts them; Claude's goal_detail and
+ * update_goal need the whole text to read it and to check an edit (instructions_edits) against it.
+ */
+export function buildOverview(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false) {
   const all = listGoals(db)
   // Done one-offs (retired) are listed too, the newest few; other retired goals are not
   const done = all.filter(({ goal }) => goal.status === 'retired' && goal.one_off)
@@ -258,7 +262,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         one_off: goal.one_off,
         model: goal.model,
         status_note: statusNote(goal, runs),
-        instructions: clip(goal.instructions, CLIP.instructions)!,
+        instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions)!,
         autonomy: goal.autonomy,
         tool_map: goal.tool_map,
         next_run_at: goal.next_run_at,
@@ -321,7 +325,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
 export type Overview = ReturnType<typeof buildOverview>
 
 /** The overview's JSON and a strong ETag for it (quoted, as HTTP sends it). */
-export function overviewWithEtag(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null): { body: string; etag: string } {
-  const body = JSON.stringify(buildOverview(db, detail, standingSession))
+export function overviewWithEtag(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false): { body: string; etag: string } {
+  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions))
   return { body, etag: `"${createHash('sha256').update(body).digest('base64url').slice(0, 27)}"` }
 }

@@ -122,7 +122,8 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
       switch (name) {
         case 'goals_overview':
           if (input.etag === etag()) return ok({ changed: false, etag: etag() }) as never
-          return ok({ changed: true, etag: etag(), goals: goals.map((x) => ({ ...x, open_item_count: x.open_items.length })), hold: opts.hold ?? null, ...(opts.outdated ? { outdated: true } : {}), ...(opts.standing ? { standing: true } : {}), ...(opts.update ? { update: opts.update } : {}) }) as never
+          // Long instructions are cut like the server's (1500 characters) unless full_instructions asks for them whole
+          return ok({ changed: true, etag: etag(), goals: goals.map((x) => ({ ...x, open_item_count: x.open_items.length, ...(!input.full_instructions && typeof x.instructions === 'string' && x.instructions.length > 1500 && { instructions: `${x.instructions.slice(0, 1499)}…` }) })), hold: opts.hold ?? null, ...(opts.outdated ? { outdated: true } : {}), ...(opts.standing ? { standing: true } : {}), ...(opts.update ? { update: opts.update } : {}) }) as never
         case 'delete_goal': {
           const at = goals.findIndex((x) => x.id === input.goal_id)
           if (at >= 0) goals.splice(at, 1)

@@ -381,13 +381,17 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests or merge conflicts on its pull requests')
+  expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { schedule: unknown; instructions: string; watches: Record<string, { command: string }> }
   expect(input.schedule).toBeNull()
   expect(input.watches['new issues']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not) and (.author_association | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))) | .number"')
   expect(input.watches['new issues from others']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not) and ((.author_association | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\")) | not)) | (.number | tostring) + \\" by \\" + .user.login"')
   expect(input.watches['failed CI on its pull requests']?.command).toBe('gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"issue-fix/\\")) | .databaseId"')
   expect(input.watches['merge conflicts on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"issue-fix/\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"')
+  // Tried under both sh and cmd.exe: only trusted authors' comments and reviews, as "<number> <id>", and no jq $variables
+  expect(input.watches['comments on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"issue-fix/\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select((.authorAssociation | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))) | .id] | .[0] + \\" \\" + .[1:][]"')
+  expect(input.instructions).toContain('pr-comment:<id>')
+  expect(input.instructions).toContain('pulls/<number>/comments')
   expect(input.instructions).toContain('baseRefName')
   expect(input.instructions).toContain('git merge origin/<base>')
   expect(input.instructions).toContain('Never rebase')

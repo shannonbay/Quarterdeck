@@ -17,6 +17,15 @@ beforeEach(() => {
 describe('instruction edits', () => {
   beforeEach(() => { updateGoal(db, 'g1', { instructions: 'Find stale senders. Propose one item per sender. Never send mail.' }) })
 
+  it('the overview cuts long instructions unless asked for them whole', () => {
+    const long = `${'Read each issue. '.repeat(120)}The end.`
+    updateGoal(db, 'g1', { instructions: long })
+    const cut = buildOverview(db, ['g1']).goals[0]!.instructions
+    expect(cut.length).toBeLessThan(long.length)
+    expect(cut.endsWith('…')).toBe(true)
+    expect(buildOverview(db, ['g1'], null, true).goals[0]!.instructions).toBe(long)
+  })
+
   it('replaces each old text, in order, and says how many', () => {
     expect(applyGoalChanges(db, 'g1', { instructions_edits: [
       { old: 'Propose one item per sender.', new: 'Propose one item per sender, with its count.' },

@@ -113,6 +113,23 @@ test('update_goal takes edits to part of the instructions, shows just those, and
   expect(fake.of('update_goal')).toHaveLength(1)
 })
 
+test('goal_detail and update_goal read long instructions whole, so an edit past where the pane cuts them works', async ($, on) => {
+  engine(on, { answer: 'Apply changes' })
+  const long = `${'Read each issue. '.repeat(120)}The first run only sets up the clone.`
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Issue Fixer', instructions: long })])
+  await $.session.start(START)
+  // Expanded in the pane, its detail has the instructions cut
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  const detail = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'issue fixer' } as never)
+  expect(String(detail.result)).toContain('The first run only sets up the clone.')
+  const edits = [{ old: 'The first run only sets up the clone.', new: 'A comment watch starts a run too. The first run only sets up the clone.' }]
+  const changed = await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'issue fixer', instructions_edits: edits } as never)
+  expect(String(changed.result)).toMatch(/^Changed Issue Fixer/)
+  expect(fake.of('update_goal')[0]?.input).toEqual({ goal_id: 'g1', instructions_edits: edits })
+  await ui.unmount()
+})
+
 test('update_goal passes a confirmed category merge to the server', async ($, on) => {
   const asked = engine(on, { answer: 'Apply changes' })
   const fake = fakeQuarterdeck(on, [failed()])

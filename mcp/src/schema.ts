@@ -139,6 +139,7 @@ export const WatchReportSchema = z.object({
 export const GoalsOverviewSchema = z.object({
   etag: z.string().optional().describe('The etag from the last overview; an unchanged overview answers { changed: false }'),
   detail: z.array(z.string()).optional().describe('Goal ids to give in full (runs, memory, open items, instructions, tool rules); the rest are cards. Left out: every goal in full'),
+  full_instructions: z.boolean().optional().describe('Give the instructions uncut (otherwise long ones are cut, as the pane shows them)'),
 })
 
 export const DecideItemSchema = z.object({

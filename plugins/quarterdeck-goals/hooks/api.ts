@@ -101,8 +101,9 @@ async function call<T>($: Engine, name: string, input: Record<string, unknown> =
 export type Hold = { until: string; reason: string }
 
 /** The overview: cards for every goal, full detail for the ids in `detail` (the expanded ones). */
-export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = []): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null }> {
-  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail] })
+/** `fullInstructions`: the detailed goals' instructions uncut (an older server ignores it and cuts them). */
+export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = [], fullInstructions = false): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null }> {
+  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail], ...(fullInstructions && { full_instructions: true }) })
   if (!res.changed) return { changed: false }
   return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null }
 }

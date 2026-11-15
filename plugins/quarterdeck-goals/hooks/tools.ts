@@ -193,8 +193,9 @@ async function resolveGoal($: Engine, query: unknown): Promise<Resolved> {
 }
 
 /** The goal with its full detail, fetched for it alone. */
+/** A goal's full detail, with its instructions uncut: goal_detail shows them, and update_goal checks instructions_edits against them. */
 async function withDetail($: Engine, goal: GoalCard): Promise<GoalCard> {
-  const res = await fetchOverview($, null, [goal.id])
+  const res = await fetchOverview($, null, [goal.id], true)
   const full = res.changed ? res.goals.find((g) => g.id === goal.id) : undefined
   return full ? toCard(full) : goal
 }
@@ -242,8 +243,9 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
   const found = await resolveGoal($, input.goal)
   if ('error' in found) return fail(found.error)
   let { goal } = found
-  // goal_detail and update_goal read the goal's full detail, which the overview gives only on request
-  if (!goal.detail && (name === 'goal_detail' || name === 'update_goal')) goal = await withDetail($, goal)
+  // goal_detail and update_goal read the goal's full detail, which the overview gives only on request,
+  // and always fetch it: an expanded goal's detail has its instructions cut
+  if (name === 'goal_detail' || name === 'update_goal') goal = await withDetail($, goal)
 
   if (name === 'goal_detail') return { text: describe(goal, now), isError: false }
 
