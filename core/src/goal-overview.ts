@@ -9,7 +9,7 @@ import type { Database } from './sqlite.js'
 import { compareTaskIds, deserializeTask, getEvents } from './queries.js'
 import { isProposal, asksPerson } from './gates.js'
 import { getOpenRun, getGoal, listGoals, listMemory, listRuns } from './goals.js'
-import { autonomyFor } from './goal-engine.js'
+import { autonomyFor, isAttemptBlocked } from './goal-engine.js'
 import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
 import { describeWatch, listWatches, watchFailing } from './watches.js'
@@ -91,7 +91,7 @@ export type ItemView = ReturnType<typeof itemView>
  * the goal page shows. The overview reaches the plugin as one tool answer, and
  * Claude Code saves a large answer to a file instead of passing it on.
  */
-function overviewItem(t: Task) {
+function overviewItem(t: Task, blocked: boolean) {
   const v = itemView(t)
   const action = v.action as { category: string; summary: string } | null
   // A question's notes are its context (the options, what the run would do): it can't be answered without them
@@ -99,7 +99,9 @@ function overviewItem(t: Task) {
   // `clipped`: the pane offers to show the full text (get_item) when any of it was cut
   const clipped = v.goal.length > CLIP.title || (v.notes?.length ?? 0) > notesMax || (action?.summary?.length ?? 0) > CLIP.title
   const short = { ...v, goal: clip(v.goal, CLIP.title)!, notes: clip(v.notes, notesMax), result: clip(v.result, CLIP.result), ...(clipped && { clipped: true }) }
-  return action ? { ...short, action: { category: action.category, summary: clip(action.summary, CLIP.title)! } } : short
+  // `blocked`: out of attempts, waiting for the person's answer (as the brief marks it); only when true, so other items stay as they were
+  const marked = blocked ? { ...short, blocked: true as const } : short
+  return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title)! } } : marked
 }
 
 /**
@@ -281,8 +283,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           // What untrusted content it read first: from then on its auto actions needed approval
           untrusted: r.untrusted_source,
         })),
-        needs_you: open.filter((t) => t.review_requested_at).map(overviewItem),
-        open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map(overviewItem),
+        needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
+        open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
         open_item_count: open.filter((t) => !t.review_requested_at).length,
         health: listHealth(db, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),
         memory: listMemory(db, plan.id, { activeOnly: true }).slice(-MEMORY).reverse()

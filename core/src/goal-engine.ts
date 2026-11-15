@@ -5,7 +5,7 @@
 import { validateStatusCheck, validateStatusTone } from './status-check.js'
 import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
-import { isProposal } from './gates.js'
+import { ATTEMPT_REF, isProposal } from './gates.js'
 import {
   countRunsSince, getGoal, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
 } from './goals.js'
@@ -491,7 +491,6 @@ function askPersonUnder(db: Database, planId: string, ref: string, goal: string,
 
 // -- Per-item attempt limits --------------------------------------------------
 
-const ATTEMPT_REF = 'attempt-limit:'
 
 /** The thread of work an item belongs to: its external_ref, or the item itself. */
 function attemptKey(task: Task): string {

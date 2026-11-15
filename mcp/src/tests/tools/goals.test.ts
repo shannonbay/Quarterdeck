@@ -5,7 +5,7 @@ import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted } from '../../db.js'
+import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal } from '../../db.js'
 import { setOpenPlan } from '../../session.js'
 
 const now = new Date().toISOString()
@@ -173,5 +173,49 @@ describe('goal tools', () => {
     const b = await run_goal({ goal_id: id })
     expect(a.run.status).toBe('queued')
     expect(b.run.id).toBe(a.run.id)
+  })
+})
+
+describe('attempt limits through set_status and update_task', () => {
+  /** A goal whose breaker is off, with one item added outside any run. */
+  async function setup() {
+    const id = makeGoal()
+    updateGoal(id, { limits: { max_runs_per_hour: 0, max_idle_runs: 0 } })
+    const { runId } = await startRun(id)
+    const added = (await add_item({ goal: 'PR 31 waiting for review', external_ref: 'github-pr:31' })).item
+    await end_run({ run_id: runId, summary: 'added' })
+    return { id, item: added.id }
+  }
+  /** Runs `fn` inside a fresh run, then ends the run. */
+  async function inRun(id: string, fn: () => Promise<unknown>) {
+    const { runId } = await startRun(id)
+    try { await fn() } finally { await end_run({ run_id: runId, summary: 'checked' }) }
+  }
+
+  it('a notes-only update_task over 5 runs stays unblocked', async () => {
+    const { id, item } = await setup()
+    for (let i = 0; i < 5; i++) await inRun(id, () => update_task({ task_id: item, notes: `Still waiting (check ${i})` }))
+    await inRun(id, () => expect(set_status({ task_id: item, status: 'active' })).resolves.toBeDefined())
+  })
+
+  it('a set_status to a new status counts: the fourth change is refused', async () => {
+    const { id, item } = await setup()
+    const statuses = ['active', 'pending', 'active'] as const
+    for (const status of statuses) await inRun(id, () => set_status({ task_id: item, status }))
+    await inRun(id, () => expect(set_status({ task_id: item, status: 'pending' })).rejects.toThrow(/limit of 3 attempts/))
+  })
+
+  it("a set_status to the status it already has doesn't count", async () => {
+    const { id, item } = await setup()
+    for (let i = 0; i < 5; i++) await inRun(id, () => set_status({ task_id: item, status: 'pending' }))
+    await inRun(id, () => expect(set_status({ task_id: item, status: 'active' })).resolves.toBeDefined())
+  })
+
+  it("a call refused by validation doesn't count", async () => {
+    const { id, item } = await setup()
+    for (let i = 0; i < 5; i++) {
+      await inRun(id, () => expect(set_status({ task_id: item, status: 'abandoned' })).rejects.toThrow(/reason is required/))
+    }
+    await inRun(id, () => expect(set_status({ task_id: item, status: 'active' })).resolves.toBeDefined())
   })
 })

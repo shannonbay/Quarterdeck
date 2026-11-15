@@ -166,6 +166,9 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
       db.prepare('UPDATE goal_runs SET watch_rechecked_at = ? WHERE plan_id = ? AND ended_at IS NOT NULL AND watch_rechecked_at IS NULL').run(now.toISOString(), planId)
       for (const watch of listWatches(db, planId)) {
         if (watch.kind !== 'command' || !watch.baseline_at) continue
+        // Out of budget: the watches not reached yet are never re-checked for this run (it is already
+        // stamped watch_rechecked_at), so they fall back to their ordinary check. A self-caused run
+        // can then be missed (not counted by the breaker), but never wrongly counted
         if (Date.now() - started >= budgetMs) return checked
         await checkCommandWatch(db, watch.id, now, ended.id).catch(() => { /* the watch or its goal went away meanwhile */ })
         rechecked.add(watch.id)

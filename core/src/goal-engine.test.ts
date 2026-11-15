@@ -3,7 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateTask, getTask, getPlan,
   addItem, buildBrief, queueRun, startRun, endRun, failRun, archiveResolved, withinActiveHours, decideTick, nextIntervalRun, recordSkip,
-  approveTask, rejectTask, recordAttempt, countAttempts, isAttemptBlocked, decideItem, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule,
+  approveTask, rejectTask, recordAttempt, countAttempts, isAttemptBlocked, decideItem, checkCompletion, GoalError, listRuns, MEMORY_BRIEF_CHARS, STATUS_NOTE_MAX, cleanStatusNote, statusNote, setSchedule, buildOverview,
 } from './index.js'
 
 let db: Database
@@ -651,6 +651,26 @@ describe('per-item attempt limits', () => {
     expect(isAttemptBlocked(db, 'g1', getTask(db, 'g1', item.id)!)).toBe(false)
     expect(listMemory(db, 'g1').some((m) => m.text.includes('Drop it'))).toBe(true)
     expect(() => recordAttempt(db, 'g1', item.id, r, new Date(Date.now() + 1000))).not.toThrow()
+  })
+
+  it('marks an item out of attempts as blocked in the overview, until the question is answered', () => {
+    const item = addItem(db, 'g1', null, { goal: 'Hard one' }).task
+    const other = addItem(db, 'g1', null, { goal: 'Something else' }).task
+    const overviewItem = (id: string) => {
+      const g = buildOverview(db).goals.find((x) => x.id === 'g1')!
+      return [...g.open_items, ...g.needs_you].find((i) => i.id === id) as Record<string, unknown> | undefined
+    }
+    for (let i = 0; i < 3; i++) { const r = newRun(); recordAttempt(db, 'g1', item.id, r); endRun(db, r, 'tried') }
+    expect(overviewItem(item.id)).not.toHaveProperty('blocked')
+    const r = newRun()
+    expect(() => recordAttempt(db, 'g1', item.id, r)).toThrow(/limit/)
+    endRun(db, r, 'blocked')
+    expect(overviewItem(item.id)).toMatchObject({ blocked: true })
+    // Only the blocked item carries the key, so other items' JSON stays as it was
+    expect(overviewItem(other.id)).not.toHaveProperty('blocked')
+    expect(overviewItem(question()!.id)).not.toHaveProperty('blocked')
+    decideItem(db, 'g1', question()!.id, { decision: 'answer', feedback: 'Keep going' })
+    expect(overviewItem(item.id)).not.toHaveProperty('blocked')
   })
 
   it("doesn't count updates that leave the status alone: a tracking item checked each run stays unblocked", () => {

@@ -17,6 +17,9 @@ import { getLatestVerification, getPlan, getTask, insertVerification, updateTask
 import { insertMemory } from './goals.js'
 import type { PlanRow, Task, Verification } from './types.js'
 
+/** external_ref prefix of the question a run gets when an item reaches its attempt limit. */
+export const ATTEMPT_REF = 'attempt-limit:'
+
 export const DEFAULT_VERIFY_TIMEOUT_S = 300
 export const OUTPUT_TAIL_CHARS = 4096
 
@@ -277,7 +280,7 @@ export function rejectTask(db: Database, planId: string, taskId: string, feedbac
   const note = `Review rejected (${now}): ${feedback}`
   // Rejecting an attempt-limit question answers it (the feedback goes to memory below), so it
   // lifts the block on its item instead of leaving the question unresolved for good
-  const answersAttemptLimit = task.external_ref?.startsWith('attempt-limit:') ?? false
+  const answersAttemptLimit = task.external_ref?.startsWith(ATTEMPT_REF) ?? false
   updateTask(db, planId, taskId, {
     ...(answersAttemptLimit ? { status: 'completed' as const, result: `Your answer: ${feedback.trim()}` } : {}),
     review_requested_at: null,
