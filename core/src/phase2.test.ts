@@ -172,6 +172,35 @@ describe('goal guard', () => {
     expect(listToolCalls(db, 'g1').map((c) => c.decision)).toEqual(['deny', 'allow', 'allow', 'deny']) // newest first
   })
 
+  it('matches command rules against each command in a shell call, ahead of the rule on the tool', () => {
+    const map = { 'Bash(git push*)': 'code.pr', 'Bash(git push --tags*)': 'code.tags', Bash: 'shell', 'PowerShell(gh pr create*)': 'code.pr' }
+    expect(matchToolCategory(map, 'Bash', { command: 'git push origin x' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'Bash', { command: 'git push --tags' })).toBe('code.tags') // the longer rule first
+    expect(matchToolCategory(map, 'Bash', { command: 'cd ../clone && npm test && git push' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'Bash', { command: 'npm test; GIT_TRACE=1 git push' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'Bash', { command: 'echo $(git push)' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'Bash', { command: 'GIT PUSH' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'Bash', { command: 'git status' })).toBe('shell')
+    expect(matchToolCategory(map, 'Bash', { command: 'echo git push' })).toBe('shell')
+    expect(matchToolCategory(map, 'Bash')).toBe('shell')
+    expect(matchToolCategory(map, 'PowerShell', { command: 'gh pr create --fill' })).toBe('code.pr')
+    expect(matchToolCategory(map, 'PowerShell', { command: 'git push' })).toBeNull() // rules name their tool
+    expect(matchToolCategory({ 'Bash(gh issue view*)': 'untrusted' }, 'Bash', { command: 'gh issue view 3' })).toBe('untrusted')
+  })
+
+  it('holds a pushed command until its proposal is approved, and marks a run that reads through a command rule', () => {
+    updateGoal(db, 'g1', { tool_map: { 'Bash(git push*)': 'code.pull_request', 'Bash(gh issue view*)': 'untrusted' }, autonomy: { 'code.pull_request': 'propose' } })
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: 'npm test' })).toEqual({ decision: 'allow', run_id: run.id })
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: 'git push -u origin fix' })).toMatchObject({ decision: 'deny', category: 'code.pull_request' })
+    const item = addItem(db, 'g1', run.id, { goal: 'Fix #3', action: { category: 'code.pull_request', summary: 'open the PR' } }).task
+    approveTask(db, 'g1', item.id)
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: 'git push -u origin fix' }).decision).toBe('allow')
+    expect(getRun(db, run.id)!.untrusted_source).toBeNull()
+    guardToolCallForRun(db, run.id, 'Bash', { command: 'gh issue view 3' })
+    expect(getRun(db, run.id)!.untrusted_source).toBe('Bash')
+  })
+
   it('stops guarding once the run has ended', () => {
     const run = startRun()
     db.prepare("UPDATE goal_runs SET status = 'completed' WHERE id = ?").run(run.id)

@@ -18,8 +18,14 @@
  * `untrusted`) marks the run, and from then on its `auto` categories act as
  * `propose`, so text written to steer the agent can't take an action nobody
  * approved. Reading more stays allowed, and an approved proposal still goes
- * through. The guard sees tool names, not input: `Bash` running curl, or `Read`
- * of a downloaded file, marks nothing unless the goal maps it to `untrusted`.
+ * through. The guard sees tool names, and for a shell tool the command: `Bash`
+ * running curl, or `Read` of a downloaded file, marks nothing unless the goal
+ * maps it to `untrusted` (`Bash(gh issue view*)`).
+ *
+ * Command rules: a tool map can name what a shell tool runs, `Bash(git push*)`,
+ * so a goal that works through git and gh can still need approval to push or
+ * open a pull request. Like the data rule below, it matches names: a script
+ * that pushes gets past it, and a sandbox is what closes that.
  *
  * Quarterdeck's own data: a run may not touch Quarterdeck's folder
  * (`~/.quarterdeck`, or `~/.conductor` from before the rename) or its database,
@@ -58,20 +64,57 @@ export function canonicalToolName(name: string): string {
   return name.startsWith(PLUGIN_QUARTERDECK_TOOL_PREFIX) ? QUARTERDECK_TOOL_PREFIX + name.slice(PLUGIN_QUARTERDECK_TOOL_PREFIX.length) : name
 }
 
+/** A glob (`*` for anything) as a whole-string regular expression. */
+function globRegExp(pattern: string, flags = ''): RegExp {
+  return new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', flags)
+}
+
+/** A rule on what a shell tool runs, as Claude Code writes them: `Bash(git push*)`, `PowerShell(gh pr create*)`. */
+const COMMAND_RULE = /^(\w+)\(([\s\S]+)\)$/
+/** A leading variable assignment (`GIT_SSH=x git push`). */
+const ENV_PREFIX = /^(\w+=("[^"]*"|'[^']*'|\S*)\s+)+/
+
+/**
+ * A shell command's simple commands, each as it starts: split at `&&`, `||`,
+ * `;`, `|`, `&`, new lines, `$(`, `(` and backticks, without leading variable
+ * assignments. Rough on purpose: a rule matching a part that isn't really a
+ * command only refuses a call, which is the safe way to be wrong.
+ */
+export function commandParts(command: string): string[] {
+  return command.split(/&&|\|\||\$\(|[;|&\n`(){}]/)
+    .map((s) => s.trim().replace(ENV_PREFIX, '').trim())
+    .filter(Boolean)
+}
+
 /**
  * Matches a tool name against "exact" or glob ("mcp__gmail__send*") patterns; exact patterns win.
  * Quarterdeck's own tools match under either prefix (see canonicalToolName).
+ *
+ * A command rule (`Bash(git push*)`) matches a shell call when any simple
+ * command in it matches the glob (ignoring case, as PowerShell does), and wins
+ * over a rule on the tool's name. Without `input` no command rule matches.
  */
-export function matchToolCategory(rawMap: Record<string, string>, rawName: string): string | null {
+export function matchToolCategory(rawMap: Record<string, string>, rawName: string, input?: Record<string, unknown>): string | null {
   const toolName = canonicalToolName(rawName)
   const toolMap = Object.fromEntries(Object.entries(rawMap).map(([p, c]) => [canonicalToolName(p), c]))
+  const command = typeof input?.command === 'string' ? input.command : ''
+  if (command) {
+    const parts = commandParts(command)
+    const rules = Object.entries(toolMap)
+      .map(([p, c]) => [COMMAND_RULE.exec(p), c] as const)
+      .filter(([m]) => m && m[1] === toolName)
+      .sort(([a], [b]) => b![2].length - a![2].length) // most specific first
+    for (const [m, category] of rules) {
+      const re = globRegExp(m![2].trim(), 'i')
+      if (parts.some((p) => re.test(p))) return category
+    }
+  }
   if (toolMap[toolName]) return toolMap[toolName]
   const globs = Object.entries(toolMap)
-    .filter(([p]) => p.includes('*'))
+    .filter(([p]) => p.includes('*') && !COMMAND_RULE.test(p))
     .sort(([a], [b]) => b.length - a.length) // most specific first
   for (const [pattern, category] of globs) {
-    const re = new RegExp('^' + pattern.split('*').map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$')
-    if (re.test(toolName)) return category
+    if (globRegExp(pattern).test(toolName)) return category
   }
   return null
 }
@@ -92,8 +135,8 @@ export const BUILTIN_UNTRUSTED: readonly string[] = [
 const BUILTIN_UNTRUSTED_MAP = Object.fromEntries(BUILTIN_UNTRUSTED.map((p) => [p, UNTRUSTED_CATEGORY]))
 
 /** Whether a tool reads untrusted content: the built-in list, or the goal maps it to `untrusted`. */
-export function readsUntrusted(toolMap: Goal['tool_map'], toolName: string): boolean {
-  return matchToolCategory(toolMap, toolName) === UNTRUSTED_CATEGORY || matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null
+export function readsUntrusted(toolMap: Goal['tool_map'], toolName: string, input?: Record<string, unknown>): boolean {
+  return matchToolCategory(toolMap, toolName, input) === UNTRUSTED_CATEGORY || matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null
 }
 
 /** The reserved category a refusal to touch Quarterdeck's own data is recorded under. */
@@ -201,8 +244,8 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, 'deny', reason)
     return { decision: 'deny', category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason }
   }
-  if (readsUntrusted(goal.tool_map, toolName)) markRunUntrusted(db, run.id, toolName)
-  const category = matchToolCategory(goal.tool_map, toolName)
+  if (readsUntrusted(goal.tool_map, toolName, input)) markRunUntrusted(db, run.id, toolName)
+  const category = matchToolCategory(goal.tool_map, toolName, input)
   if (!category) return { decision: 'allow', run_id: run.id }
   if (category === UNTRUSTED_CATEGORY) {
     record(db, run, toolName, category, 'allow', null)

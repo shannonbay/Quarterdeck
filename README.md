@@ -39,6 +39,8 @@ Quarterdeck's own repo is looked after by two goals made from the ready-made *Wo
 
 The run took 2 minutes. The PR says it was opened by a Quarterdeck goal, and the CI goal now watches main for that merge, ready to propose a fix if anything breaks.
 
+An issue anyone can open is an obvious place to hide instructions for an agent, so the Issue Fixer only takes work from the repo's owner, members and collaborators, and it reads only their comments. When anyone else opens an issue, the run sees just the number and the author, and asks you under **Needs you** whether to work on it before reading a word. Pushing and opening a pull request wait for your approval in Quarterdeck's guard, not only in the instructions: the goal's tool rules name `git push` and `gh pr create`, and turn off other writes to GitHub (comments, `gh api`, `gh auth`). These rules match command names, so a script that pushes for it gets past them; running goals in a sandbox is on the roadmap.
+
 Here's another one on video, from a to-do in the pane to the feature working live (80 seconds, with sound and captions). This time the Issue Fixer stopped to ask which of two designs to build before writing any code ([issue #17](https://github.com/shannonbay/Quarterdeck/issues/17), [PR #18](https://github.com/shannonbay/Quarterdeck/pull/18)):
 
 [![Quarterdeck: from a to-do to a working feature (video)](https://img.youtube.com/vi/okKu9MnWZ5Y/maxresdefault.jpg)](https://www.youtube.com/watch?v=okKu9MnWZ5Y)
