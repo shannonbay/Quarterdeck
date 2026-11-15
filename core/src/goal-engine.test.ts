@@ -444,17 +444,19 @@ describe('runaway breaker', () => {
     expect(breakerAsks()).toEqual([expect.objectContaining({ status: 'active', result: null })])
   }))
 
-  it('rejecting the request marks it done and leaves the goal paused', () => {
-    for (let i = 0; i < 5; i++) finishRun()
+  it('rejecting the request marks it done and leaves the goal paused', () => withClock((tick) => {
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick()
     const { task, queuedRun } = decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject', feedback: 'look at it later' })
     expect(task).toMatchObject({ status: 'completed', result: 'Left paused: look at it later', review_requested_at: null })
     expect(queuedRun).toBeNull()
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     // No feedback needed to leave it paused
-    updateGoal(db, 'g1', { status: 'active' })
-    for (let i = 0; i < 5; i++) finishRun()
+    tick(); updateGoal(db, 'g1', { status: 'active' })
+    for (let i = 0; i < 5; i++) { tick(); finishRun() }
+    tick()
     expect(decideItem(db, 'g1', breakerAsks()[0]!.id, { decision: 'reject' }).task).toMatchObject({ status: 'completed', result: 'Left paused' })
-  })
+  }))
 
   it('a pause and resume for some other reason resets the count as well, and asks nothing', () => withClock((tick) => {
     for (let i = 0; i < 4; i++) { tick(); finishRun() }
