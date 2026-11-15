@@ -67,7 +67,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
     model: g.model ?? null,
-    statusNote: g.status_note ? { text: g.status_note.text, stale: g.status_note.stale, untrusted: g.status_note.untrusted ?? null, tone: g.status_note.tone ?? null } : null,
+    statusNote: g.status_note ? { text: g.status_note.text, at: g.status_note.at ?? null, stale: g.status_note.stale, untrusted: g.status_note.untrusted ?? null, tone: g.status_note.tone ?? null } : null,
     instructions: g.instructions ?? '',
     autonomy: g.autonomy ?? {},
     toolMap: g.tool_map ?? {},
