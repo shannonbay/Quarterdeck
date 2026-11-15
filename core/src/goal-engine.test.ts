@@ -355,8 +355,10 @@ describe('scheduler decisions', () => {
 })
 
 describe('runaway breaker', () => {
-  const finishRun = (trigger: 'manual' | 'event' | 'interval' | 'watch' | 'health' = 'event') => {
-    const run = queueRun(db, 'g1', trigger)
+  // 'self-watch': a watch run started by what the goal's own previous run caused
+  const finishRun = (trigger: 'manual' | 'event' | 'interval' | 'watch' | 'self-watch' | 'health' = 'event') => {
+    const run = queueRun(db, 'g1', trigger === 'self-watch' ? 'watch' : trigger)
+    if (trigger === 'self-watch') db.prepare('UPDATE goal_runs SET self_caused = 1 WHERE id = ?').run(run.id)
     startRun(db, run.id, null)
     return endRun(db, run.id, 'nothing to do')
   }
@@ -406,13 +408,13 @@ describe('runaway breaker', () => {
 
   it('counts the hour from the resume too', () => withClock((tick) => {
     updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
-    for (let i = 0; i < 4; i++) { tick(); finishRun('watch') }
+    for (let i = 0; i < 4; i++) { tick(); finishRun('self-watch') }
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     tick()
     updateGoal(db, 'g1', { status: 'active' })
-    for (let i = 0; i < 3; i++) { tick(); finishRun('watch') }
+    for (let i = 0; i < 3; i++) { tick(); finishRun('self-watch') }
     expect(getGoal(db, 'g1')!.status).toBe('active')
-    tick(); finishRun('watch')
+    tick(); finishRun('self-watch')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
   }))
 
@@ -481,11 +483,28 @@ describe('runaway breaker', () => {
 
   it('pauses after more unscheduled runs in an hour than max_runs_per_hour', () => {
     updateGoal(db, 'g1', { limits: { max_runs_per_hour: 3, max_idle_runs: 0 } })
-    finishRun('watch'); finishRun('health'); finishRun('event')
+    finishRun('self-watch'); finishRun('health'); finishRun('event')
     expect(getGoal(db, 'g1')!.status).toBe('active')
-    finishRun('watch')
+    finishRun('self-watch')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     expect(breakerAsks()[0]!.notes).toMatch(/4 unscheduled runs in the last hour \(limit 3\)/)
+  })
+
+  it('leaves watch runs started by others out of both counts: Repo Clean Check stays active', () => withClock((tick) => {
+    // Replay of Repo Clean Check: a report-only goal on a 1-minute watch, about 13 runs an
+    // hour, none resolving an item, none started by what its own previous run did
+    for (let i = 0; i < 13; i++) { tick(); finishRun('watch') }
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    expect(breakerAsks()).toHaveLength(0)
+  }))
+
+  it('counts self-caused watch runs toward the idle rule', () => {
+    for (let i = 0; i < 4; i++) finishRun('self-watch')
+    finishRun('watch') // one started by someone else doesn't count
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+    finishRun('self-watch')
+    expect(getGoal(db, 'g1')!.status).toBe('paused')
+    expect(breakerAsks()[0]!.notes).toMatch(/5 unscheduled runs in a row resolved no item/)
   })
 
   it('leaves scheduled runs out of max_runs_per_hour: a goal on the shortest interval stays active', () => {

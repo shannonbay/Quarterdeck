@@ -168,7 +168,7 @@ export function insertRun(db: Database, planId: string, trigger: TriggerKind, st
   const now = new Date().toISOString()
   const run: GoalRun = {
     id: newId('run'), plan_id: planId, trigger, status, session_id: null, cc_session_id: null, holder: null, agent_id: null, summary: null,
-    skip_reason: skipReason ?? null, items_created: 0, items_resolved: 0, started_at: now,
+    skip_reason: skipReason ?? null, items_created: 0, items_resolved: 0, self_caused: 0, watch_rechecked_at: null, started_at: now,
     ended_at: status === 'skipped' ? now : null,
     input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: null,
     now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null,

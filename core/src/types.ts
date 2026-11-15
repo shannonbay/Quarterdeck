@@ -119,9 +119,9 @@ export interface GoalLimits {
   max_run_minutes: number
   max_items_per_run: number
   max_runs_per_day: number
-  /** Runaway breaker: more unscheduled runs (watch, health, event) than this in an hour pauses the goal and asks the person (0: off). */
+  /** Runaway breaker: more unscheduled runs (health, event, and self-caused watch runs) than this in an hour pauses the goal and asks the person (0: off). */
   max_runs_per_hour: number
-  /** Runaway breaker: this many unscheduled runs in a row that resolve no item pause the goal and ask the person (0: off). */
+  /** Runaway breaker: this many unscheduled runs (as for max_runs_per_hour) in a row that resolve no item pause the goal and ask the person (0: off). */
   max_idle_runs: number
   /** Runs that may work on one item (or one external_ref) before it becomes a Needs-you question (0: off). */
   max_item_attempts: number
@@ -225,6 +225,8 @@ export interface WatchEvent {
   queued_at: string | null
   /** The run whose brief carried it. */
   run_id: string | null
+  /** The run whose end the check that saw it was made for (null: an ordinary check). */
+  seen_during_run: string | null
 }
 
 export interface CronConfig {
@@ -269,6 +271,10 @@ export interface GoalRun {
   skip_reason: string | null
   items_created: number
   items_resolved: number
+  /** A watch run whose events were seen by the re-check made as the goal's previous run ended: only these watch runs count toward the runaway breaker. */
+  self_caused: number
+  /** When the goal's command watches were re-checked after this run ended. */
+  watch_rechecked_at: string | null
   started_at: string
   ended_at: string | null
   /** What the run's agent used, summed over its turns. */

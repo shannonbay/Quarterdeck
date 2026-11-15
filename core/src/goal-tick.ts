@@ -156,8 +156,23 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
   const started = Date.now()
   let checked = 0
   for (const planId of planIds) {
+    // As a run ends, its command watches are checked once more straight away (not waiting for
+    // their interval), and what they see is tagged with that run: the runaway breaker counts a
+    // watch run only when it was started by what the goal's own previous run caused
+    const ended = db.prepare(`SELECT id FROM goal_runs WHERE plan_id = ? AND ended_at IS NOT NULL AND status != 'skipped'
+      AND watch_rechecked_at IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(planId) as { id: string } | undefined
+    const rechecked = new Set<string>()
+    if (ended && !getOpenRun(db, planId)) {
+      db.prepare('UPDATE goal_runs SET watch_rechecked_at = ? WHERE plan_id = ? AND ended_at IS NOT NULL AND watch_rechecked_at IS NULL').run(now.toISOString(), planId)
+      for (const watch of listWatches(db, planId)) {
+        if (watch.kind !== 'command' || !watch.baseline_at) continue
+        await checkCommandWatch(db, watch.id, now, ended.id).catch(() => { /* the watch or its goal went away meanwhile */ })
+        rechecked.add(watch.id)
+        checked++
+      }
+    }
     for (const watch of listWatches(db, planId)) {
-      if (watch.kind !== 'command' || !watchDue(watch, now)) continue
+      if (watch.kind !== 'command' || rechecked.has(watch.id) || !watchDue(watch, now)) continue
       if (Date.now() - started >= budgetMs) return checked
       await checkCommandWatch(db, watch.id, now).catch(() => { /* the watch or its goal went away meanwhile */ })
       checked++

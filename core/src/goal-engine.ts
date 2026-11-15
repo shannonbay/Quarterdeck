@@ -404,8 +404,13 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   return getRun(db, runId)!
 }
 
-/** The run triggers the runaway breaker counts: those that don't come from a schedule or the person. */
-const UNSCHEDULED_TRIGGERS = ['watch', 'health', 'event'] as const
+/**
+ * The runs the runaway breaker counts: health and event runs, and watch runs that are
+ * self-caused (started by what the re-check made as the goal's previous run ended saw).
+ * A schedule can't run away, the person's own runs can't be a loop the goal made, and a
+ * watch that fires on what others do (a new issue, a new email) isn't a loop either.
+ */
+const COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))"
 
 /** Why the runaway breaker should trip after this run, or null. Uses goal_runs only. */
 export function runawayReason(db: Database, planId: string, now: Date = new Date()): string | null {
@@ -414,9 +419,9 @@ export function runawayReason(db: Database, planId: string, now: Date = new Date
   const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits
   // Only runs since the person last resumed the goal count: resuming is their say-so to carry on
   const since = goal.resumed_at ?? ''
-  // Only unscheduled runs count: a schedule can't run away, and the person's own runs
+  // Only unscheduled runs that could be a loop count (see COUNTED_RUNS): a schedule can't run away, and the person's own runs
   // (manual: Run now, or a run queued by their answer or approval) can't be a loop the goal made
-  const unscheduled = `trigger IN (${UNSCHEDULED_TRIGGERS.map((t) => `'${t}'`).join(', ')})`
+  const unscheduled = COUNTED_RUNS
   if (perHour > 0) {
     const hourAgo = new Date(now.getTime() - 3_600_000).toISOString()
     const n = (db.prepare(`SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND ${unscheduled} AND started_at >= ? AND started_at >= ?`)

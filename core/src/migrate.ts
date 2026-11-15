@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 10
+export const SCHEMA_VERSION = 11
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -393,6 +393,10 @@ export function runMigrations(db: Database): void {
   for (const col of ['holder', 'agent_id']) {
     try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
   }
+  // Schema version 11, the runaway breaker's loop signal: a watch run is self-caused when the
+  // events that started it were seen by the re-check made as the goal's previous run ended
+  try { db.exec('ALTER TABLE goal_runs ADD COLUMN self_caused INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE goal_runs ADD COLUMN watch_rechecked_at TEXT') } catch { /* already exists */ }
   db.exec(`
     -- One row per scheduler; only the holder whose lease hasn't expired starts runs
     CREATE TABLE IF NOT EXISTS scheduler_lease (
@@ -444,13 +448,17 @@ export function runMigrations(db: Database): void {
       line       TEXT NOT NULL,
       created_at TEXT NOT NULL,
       queued_at  TEXT,
-      run_id     TEXT
+      run_id     TEXT,
+      -- the run whose end the check that saw it was made for (null: an ordinary check)
+      seen_during_run TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
   `)
   // Added while version 2 was being built: a database that already has the table needs the column
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN asked_at TEXT') } catch { /* already exists */ }
+  // Schema version 11: events seen by the re-check made as a run ended
+  try { db.exec('ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT') } catch { /* already exists */ }
   // Schema version 8: a watch can fire on change
   try { db.exec("ALTER TABLE goal_watches ADD COLUMN fires TEXT NOT NULL DEFAULT 'new' CHECK (fires IN ('new', 'change'))") } catch { /* already exists */ }
   db.exec(`
