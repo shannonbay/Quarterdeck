@@ -48,8 +48,14 @@ async function safeStart($: Engine, openPane: boolean): Promise<void> {
 
 /** A tool call of this plugin, answered as text. */
 async function answerTool($: Engine, name: ToolName, e: object) {
-  const { text, isError } = await runTool($, name, e as Record<string, unknown>)
-  return { result: isError ? `Error: ${text}` : text }
+  // A thrown error says what went wrong (e.g. an answer too large to read); the hook's
+  // .catch would only say the tool failed
+  try {
+    const { text, isError } = await runTool($, name, e as Record<string, unknown>)
+    return { result: isError ? `Error: ${text}` : text }
+  } catch (err) {
+    return { result: `Error: ${err instanceof Error ? err.message : String(err)}` }
+  }
 }
 
 /** The goal and run ids a quarterdeck MCP call carries. */

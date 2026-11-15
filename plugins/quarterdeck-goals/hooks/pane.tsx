@@ -305,7 +305,8 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
  * The status a run set, drawn the same on a goal's one line and on its card, in the pane's
  * own colours: a run gives only the words and a tone (ok green, attention yellow, problem
  * red). Dimmed when stale (it keeps its colour); a yellow ⚠ first when the run that set it
- * had read outside content. `lead` goes before it all (a space after the name on one line).
+ * had read outside content other than watch lines (those the card names in words instead).
+ * `lead` goes before it all (a space after the name on one line).
  */
 function statusNoteText($: Engine, e: E, key: string, note: NonNullable<GoalCard['statusNote']>, text: string, lead = '') {
   const { Text } = parts($, e)
@@ -345,7 +346,7 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
         // Under the name, in full (the one line clips it), with when a run set it
         <Text key={`status-${g.id}`}>
           {statusNoteText($, e, `status-text-${g.id}`, g.statusNote, g.statusNote.text)}
-          <Text dimColor>{g.statusNote.at ? ` · set ${ago(g.statusNote.at, view.now)}` : ''}{g.statusNote.stale ? ' · may be out of date' : ''}</Text>
+          <Text dimColor>{g.statusNote.at || g.statusNote.watchEvents ? ' · set' : ''}{g.statusNote.at ? ` ${ago(g.statusNote.at, view.now)}` : ''}{g.statusNote.watchEvents ? ' after reading watch events' : ''}{g.statusNote.stale ? ' · may be out of date' : ''}</Text>
         </Text>
       )}
       {activityLine($, e, view, g)}

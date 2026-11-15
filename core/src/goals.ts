@@ -192,12 +192,21 @@ export function updateRun(db: Database, runId: string, fields: Partial<Omit<Goal
 }
 
 /**
- * Marks a run as having read untrusted content (the first source is kept).
+ * The source that marks a run handed watch events. It is the weakest mark: a later
+ * read replaces it, and a status set by a run marked only by it shows no ⚠ on the
+ * goal's line (the pane's card says so instead).
+ */
+export const WATCH_EVENTS_SOURCE = 'watch events'
+
+/**
+ * Marks a run as having read untrusted content. The first source is kept, except
+ * watch events, which a later read replaces (keeping when the run was first marked).
  * From then on its `auto` categories need approval (guard.ts, addItem).
  */
 export function markRunUntrusted(db: Database, runId: string, source: string): void {
-  db.prepare('UPDATE goal_runs SET untrusted_at = ?, untrusted_source = ? WHERE id = ? AND untrusted_at IS NULL')
-    .run(new Date().toISOString(), source, runId)
+  db.prepare(`UPDATE goal_runs SET untrusted_at = COALESCE(untrusted_at, ?), untrusted_source = ?
+    WHERE id = ? AND (untrusted_at IS NULL OR (untrusted_source = ? AND ? <> ?))`)
+    .run(new Date().toISOString(), source, runId, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE)
 }
 
 /** Runs newest first. */

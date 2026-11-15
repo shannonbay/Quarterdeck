@@ -8,7 +8,7 @@ import {
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, describeWatch, reportToolWatch,
+  matchLines, describeWatch, reportToolWatch, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE,
 } from './index.js'
 
 let db: Database
@@ -307,6 +307,22 @@ describe('the brief', () => {
     expect(buildBrief(db, 'g1', run.run_id).run!.untrusted).toMatchObject({ source: 'watch events' })
     // A second read of the brief keeps the mark though the events are taken
     expect(buildBrief(db, 'g1', run.run_id).run!.untrusted).toMatchObject({ source: 'watch events' })
+  })
+
+  it('lets a later read replace the watch-events mark, keeping when the run was first marked, and keeps any other first source', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+    recordWatchLines(db, w.id, { lines: [] })
+    recordWatchLines(db, w.id, { lines: ['#12'] })
+    const run = claimRun(db, 'g1', { holder: 'A', queuedRunId: queueForWatchEvents(db, 'g1')!.id })!
+    const { since } = buildBrief(db, 'g1', run.run_id).run!.untrusted!
+    markRunUntrusted(db, run.run_id, 'WebFetch')
+    expect(getRun(db, run.run_id)).toMatchObject({ untrusted_source: 'WebFetch', untrusted_at: since })
+    markRunUntrusted(db, run.run_id, 'mcp__claude_ai_Gmail__get_thread')
+    markRunUntrusted(db, run.run_id, WATCH_EVENTS_SOURCE)
+    expect(getRun(db, run.run_id)!.untrusted_source).toBe('WebFetch')
+    // The status it sets carries the stronger source, so the pane keeps the ⚠
+    endRun(db, run.run_id, 'done', '1 issue triaged')
+    expect(getGoal(db, 'g1')!.status_note_untrusted).toBe('WebFetch')
   })
 })
 

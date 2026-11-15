@@ -291,9 +291,12 @@ test('a goal about something arriving is offered a watch first, its timer next',
 test('toCard carries the goal status a run set, and none from an older server', () => {
   expect(card({}).statusNote).toBeNull()
   const g = { ...goal({}), open_item_count: 0, status_note: { text: '2 PRs awaiting review', at: NOW, stale: true, untrusted: 'mail' } }
-  expect(toCard(g).statusNote).toEqual({ text: '2 PRs awaiting review', at: NOW, stale: true, untrusted: 'mail', tone: null })
+  expect(toCard(g).statusNote).toEqual({ text: '2 PRs awaiting review', at: NOW, stale: true, untrusted: 'mail', watchEvents: false, tone: null })
   const toned = { ...g, status_note: { ...g.status_note, tone: 'attention' as const } }
   expect(toCard(toned).statusNote?.tone).toBe('attention')
+  // A run that read only watch lines earns no ⚠: the card says so in words
+  const watched = { ...g, status_note: { ...g.status_note, at: null, untrusted: 'watch events' } }
+  expect(toCard(watched).statusNote).toMatchObject({ untrusted: null, watchEvents: true })
 })
 
 test('only the two GitHub fixer templates say what their status means, with a github_pr check', () => {
