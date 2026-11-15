@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.26.2, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.27.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -399,7 +399,9 @@ function runMigrations(db) {
     ["status_check_at", "TEXT"],
     ["status_check_failures", "INTEGER NOT NULL DEFAULT 0"],
     // How the goal stands by its status (ok / attention / problem): the pane colours the status by it
-    ["status_tone", "TEXT"]
+    ["status_tone", "TEXT"],
+    // When the goal last went back to active: the runaway breaker counts only runs since then
+    ["resumed_at", "TEXT"]
   ];
   for (const [col, def] of addedGoalColumns) {
     try {
@@ -474,6 +476,15 @@ function runMigrations(db) {
     } catch {
     }
   }
+  try {
+    db.exec("ALTER TABLE goal_runs ADD COLUMN self_caused INTEGER NOT NULL DEFAULT 0");
+  } catch {
+  }
+  try {
+    db.exec("ALTER TABLE goal_runs ADD COLUMN watch_rechecked_at TEXT");
+    db.exec("UPDATE goal_runs SET watch_rechecked_at = ended_at WHERE ended_at IS NOT NULL");
+  } catch {
+  }
   db.exec(`
     -- One row per scheduler; only the holder whose lease hasn't expired starts runs
     CREATE TABLE IF NOT EXISTS scheduler_lease (
@@ -523,13 +534,19 @@ function runMigrations(db) {
       line       TEXT NOT NULL,
       created_at TEXT NOT NULL,
       queued_at  TEXT,
-      run_id     TEXT
+      run_id     TEXT,
+      -- the run whose end the check that saw it was made for (null: an ordinary check)
+      seen_during_run TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
   `);
   try {
     db.exec("ALTER TABLE goal_watches ADD COLUMN asked_at TEXT");
+  } catch {
+  }
+  try {
+    db.exec("ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT");
   } catch {
   }
   try {
@@ -544,6 +561,17 @@ function runMigrations(db) {
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS goal_item_attempts (
+      plan_id      TEXT NOT NULL REFERENCES plans(id),
+      task_id      TEXT NOT NULL,
+      run_id       TEXT NOT NULL,
+      external_ref TEXT,
+      at           TEXT NOT NULL,
+      PRIMARY KEY (plan_id, task_id, run_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_goal_item_attempts_ref ON goal_item_attempts(plan_id, external_ref);
   `);
   db.exec(`
     CREATE TABLE IF NOT EXISTS transcript_messages (
@@ -585,7 +613,7 @@ var init_migrate = __esm({
       "trg_goal_watches_update_revision",
       "trg_goal_watches_delete_revision"
     ];
-    SCHEMA_VERSION = 9;
+    SCHEMA_VERSION = 11;
   }
 });
 
@@ -595,7 +623,7 @@ var init_types = __esm({
   "../core/src/types.ts"() {
     "use strict";
     GATE_FIELDS = ["acceptance_criteria", "verify_command", "verify_timeout_s", "requires_approval"];
-    DEFAULT_GOAL_LIMITS = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48 };
+    DEFAULT_GOAL_LIMITS = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48, max_runs_per_hour: 8, max_idle_runs: 5, max_item_attempts: 3 };
   }
 });
 
@@ -831,7 +859,7 @@ function getLatestVerification(db, planId, taskId, gate) {
   return row ? deserializeVerification(row) : void 0;
 }
 function clearAllData(db) {
-  db.exec("DELETE FROM goal_run_hold; DELETE FROM scheduler_lease; DELETE FROM goal_watch_events; DELETE FROM goal_watches; DELETE FROM goal_tool_calls; DELETE FROM goal_health; DELETE FROM goal_memory; DELETE FROM goal_runs; DELETE FROM goal_triggers; DELETE FROM goals; DELETE FROM verifications; DELETE FROM transcript_messages; DELETE FROM events; DELETE FROM agent_sessions; DELETE FROM tasks; DELETE FROM plans;");
+  db.exec("DELETE FROM goal_item_attempts; DELETE FROM goal_run_hold; DELETE FROM scheduler_lease; DELETE FROM goal_watch_events; DELETE FROM goal_watches; DELETE FROM goal_tool_calls; DELETE FROM goal_health; DELETE FROM goal_memory; DELETE FROM goal_runs; DELETE FROM goal_triggers; DELETE FROM goals; DELETE FROM verifications; DELETE FROM transcript_messages; DELETE FROM events; DELETE FROM agent_sessions; DELETE FROM tasks; DELETE FROM plans;");
 }
 var init_queries = __esm({
   "../core/src/queries.ts"() {
@@ -859,7 +887,8 @@ function deserializeGoal(r) {
     status_check: r.status_check ? JSON.parse(r.status_check) : null,
     status_check_at: r.status_check_at ?? null,
     status_check_failures: r.status_check_failures ?? 0,
-    status_tone: r.status_tone ?? null
+    status_tone: r.status_tone ?? null,
+    resumed_at: r.resumed_at ?? null
   };
 }
 function createGoal(db, plan, goal, interval) {
@@ -912,9 +941,15 @@ function updateGoal(db, planId, fields) {
   if ("health_triggers_run" in fields) serialized.health_triggers_run = fields.health_triggers_run ? 1 : 0;
   if ("one_off" in fields) serialized.one_off = fields.one_off ? 1 : 0;
   if (fields.limits) serialized.limits = JSON.stringify({ ...current.limits, ...fields.limits });
+  const resuming = fields.status === "active" && current.status !== "active";
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (resuming) serialized.resumed_at = now;
   const entries = Object.entries(serialized);
   if (!entries.length) return;
   db.prepare(`UPDATE goals SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE plan_id = ?`).run(...entries.map(([, v]) => v), planId);
+  if (resuming) {
+    db.prepare("UPDATE tasks SET status = 'completed', result = 'Resumed', updated_at = ? WHERE plan_id = ? AND external_ref = ? AND status IN ('pending', 'active')").run(now, planId, RUNAWAY_REF);
+  }
 }
 function deserializeTrigger(r) {
   return { ...r, config: JSON.parse(r.config), enabled: Boolean(r.enabled) };
@@ -956,6 +991,8 @@ function insertRun(db, planId, trigger, status2 = "queued", skipReason) {
     skip_reason: skipReason ?? null,
     items_created: 0,
     items_resolved: 0,
+    self_caused: 0,
+    watch_rechecked_at: null,
     started_at: now,
     ended_at: status2 === "skipped" ? now : null,
     input_tokens: 0,
@@ -985,7 +1022,8 @@ function updateRun(db, runId, fields) {
   db.prepare(`UPDATE goal_runs SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...entries.map(([, v]) => v), runId);
 }
 function markRunUntrusted(db, runId, source) {
-  db.prepare("UPDATE goal_runs SET untrusted_at = ?, untrusted_source = ? WHERE id = ? AND untrusted_at IS NULL").run((/* @__PURE__ */ new Date()).toISOString(), source, runId);
+  db.prepare(`UPDATE goal_runs SET untrusted_at = COALESCE(untrusted_at, ?), untrusted_source = ?
+    WHERE id = ? AND (untrusted_at IS NULL OR (untrusted_source = ? AND ? <> ?))`).run((/* @__PURE__ */ new Date()).toISOString(), source, runId, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE);
 }
 function listRuns(db, planId, limit = 20, opts = {}) {
   const where = opts.includeSkipped === false ? "AND status != 'skipped'" : "";
@@ -1057,7 +1095,7 @@ function deleteGoal(db, planId) {
   })();
   return { name: plan.name };
 }
-var newId, MODEL_ALIASES, GOAL_TABLES;
+var newId, MODEL_ALIASES, RUNAWAY_REF, WATCH_EVENTS_SOURCE, GOAL_TABLES;
 var init_goals = __esm({
   "../core/src/goals.ts"() {
     "use strict";
@@ -1065,7 +1103,10 @@ var init_goals = __esm({
     init_types();
     newId = (prefix) => `${prefix}_${randomUUID2().replace(/-/g, "").slice(0, 12)}`;
     MODEL_ALIASES = ["haiku", "sonnet", "opus"];
+    RUNAWAY_REF = "runaway-breaker";
+    WATCH_EVENTS_SOURCE = "watch events";
     GOAL_TABLES = [
+      "goal_item_attempts",
       "goal_watch_events",
       "goal_watches",
       "goal_tool_calls",
@@ -1256,7 +1297,9 @@ function rejectTask(db, planId, taskId, feedback) {
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const v = insertVerification(db, { plan_id: planId, task_id: taskId, gate: "approval", passed: false, actor: "human", output: feedback });
   const note = `Review rejected (${now}): ${feedback}`;
+  const answersAttemptLimit = task.external_ref?.startsWith(ATTEMPT_REF) ?? false;
   updateTask(db, planId, taskId, {
+    ...answersAttemptLimit ? { status: "completed", result: `Your answer: ${feedback.trim()}` } : {},
     review_requested_at: null,
     approved_by: null,
     approved_at: null,
@@ -1289,12 +1332,13 @@ function describeBlockers(blockers) {
 --- output (last ${OUTPUT_TAIL_CHARS} chars) ---
 ${b.output.trim()}` : b.message).join("\n\n");
 }
-var DEFAULT_VERIFY_TIMEOUT_S, OUTPUT_TAIL_CHARS, GateError;
+var ATTEMPT_REF, DEFAULT_VERIFY_TIMEOUT_S, OUTPUT_TAIL_CHARS, GateError;
 var init_gates = __esm({
   "../core/src/gates.ts"() {
     "use strict";
     init_queries();
     init_goals();
+    ATTEMPT_REF = "attempt-limit:";
     DEFAULT_VERIFY_TIMEOUT_S = 300;
     OUTPUT_TAIL_CHARS = 4096;
     GateError = class extends Error {
@@ -1872,7 +1916,7 @@ function toLines(output) {
   }
   return [...lines];
 }
-function recordWatchLines(db, watchId, result, now = /* @__PURE__ */ new Date()) {
+function recordWatchLines(db, watchId, result, now = /* @__PURE__ */ new Date(), duringRun = null) {
   const watch = getWatch(db, watchId);
   if (!watch) throw new Error(`Watch ${watchId} not found`);
   const at = now.toISOString();
@@ -1895,8 +1939,8 @@ function recordWatchLines(db, watchId, result, now = /* @__PURE__ */ new Date())
     seen = [...result.lines, ...watch.seen.filter((l) => !current.has(l))].slice(0, WATCH_SEEN_MAX);
   }
   db.transaction(() => {
-    const insert = db.prepare("INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at) VALUES (?, ?, ?, ?, ?)");
-    for (const line of fresh) insert.run(newId("wev"), watchId, watch.plan_id, line, at);
+    const insert = db.prepare("INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const line of fresh) insert.run(newId("wev"), watchId, watch.plan_id, line, at, duringRun);
     db.prepare("UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?").run(JSON.stringify(seen), at, at, watchId);
     if (watch.last_error !== null) db.prepare("UPDATE goal_watches SET last_error = NULL WHERE id = ?").run(watchId);
     if (fresh.length) db.prepare("UPDATE goal_watches SET last_fired_at = ? WHERE id = ?").run(at, watchId);
@@ -1904,15 +1948,15 @@ function recordWatchLines(db, watchId, result, now = /* @__PURE__ */ new Date())
   })();
   return { baseline, lines: result.lines.length, fresh };
 }
-async function checkCommandWatch(db, watchId, now = /* @__PURE__ */ new Date()) {
+async function checkCommandWatch(db, watchId, now = /* @__PURE__ */ new Date(), duringRun = null) {
   const watch = getWatch(db, watchId);
   if (!watch) throw new Error(`Watch ${watchId} not found`);
   const plan = getPlan(db, watch.plan_id);
   if (!plan || watch.kind !== "command" || !watch.command) throw new Error(`Watch ${watchId} has no command to run`);
   const r = await runVerifyCommand(watch.command, plan.working_dir, WATCH_TIMEOUT_S, { stdoutOnly: true, tailChars: WATCH_OUTPUT_CHARS });
-  if (r.passed) return recordWatchLines(db, watchId, { lines: toLines(r.output) }, now);
+  if (r.passed) return recordWatchLines(db, watchId, { lines: toLines(r.output) }, now, duringRun);
   const why = r.timed_out ? `Timed out after ${WATCH_TIMEOUT_S} s` : r.exit_code === null ? r.output : `Exit code ${r.exit_code}${r.stderr?.trim() ? `: ${r.stderr.trim()}` : ""}`;
-  return recordWatchLines(db, watchId, { error: why }, now);
+  return recordWatchLines(db, watchId, { error: why }, now, duringRun);
 }
 function matchLines(text, pattern) {
   const re = new RegExp(pattern ?? WATCH_DEFAULT_MATCH, "g");
@@ -1950,7 +1994,13 @@ function markWatchEventsQueued(db, planId, now = /* @__PURE__ */ new Date()) {
   db.prepare("UPDATE goal_watch_events SET queued_at = ? WHERE plan_id = ? AND run_id IS NULL AND queued_at IS NULL").run(now.toISOString(), planId);
 }
 function takeWatchEvents(db, planId, runId) {
-  if (runId) db.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
+  if (runId) {
+    db.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
+    db.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
+      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND e.seen_during_run = (
+        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
+        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1))`).run(runId, runId, planId, runId, runId);
+  }
   const rows = db.prepare(`
     SELECT e.line, COALESCE(w.name, 'a removed watch') AS watch
     FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id
@@ -2131,9 +2181,12 @@ function buildBrief(db, planId, runId) {
   }
   const nowIso = (/* @__PURE__ */ new Date()).toISOString();
   for (const m of memory) updateMemory(db, m.id, { last_used_at: nowIso });
-  const items = db.prepare("SELECT * FROM tasks WHERE plan_id = ? AND archived_at IS NULL AND status IN ('pending', 'active')").all(planId).map(deserializeTask).map(summarizeItem).sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id));
+  const items = db.prepare("SELECT * FROM tasks WHERE plan_id = ? AND archived_at IS NULL AND status IN ('pending', 'active')").all(planId).map(deserializeTask).map((t) => {
+    const item = summarizeItem(t);
+    return isAttemptBlocked(db, planId, t) ? { ...item, blocked: true } : item;
+  }).sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id));
   const watchEvents = takeWatchEvents(db, planId, runId);
-  if (run && watchEvents.length) markRunUntrusted(db, run.id, "watch events");
+  if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE);
   const taintedMemory = memory.find((m) => m.untrusted_source);
   if (run && taintedMemory) markRunUntrusted(db, run.id, `memory ${taintedMemory.id} (written after ${taintedMemory.untrusted_source})`);
   const marked = run ? getRun(db, run.id) : void 0;
@@ -2218,7 +2271,119 @@ function endRun(db, runId, summary, status2, statusCheck, statusTone) {
   }
   archiveResolved(db, run.plan_id);
   finishIfDone(db, run.plan_id);
+  tripBreakerIfRunaway(db, run.plan_id);
   return getRun(db, runId);
+}
+function runawayReason(db, planId, now = /* @__PURE__ */ new Date()) {
+  const goal = getGoal(db, planId);
+  if (!goal) return null;
+  const { max_runs_per_hour: perHour, max_idle_runs: idle } = goal.limits;
+  const since = goal.resumed_at ?? "";
+  const unscheduled = COUNTED_RUNS;
+  if (perHour > 0) {
+    const hourAgo = new Date(now.getTime() - 36e5).toISOString();
+    const n = db.prepare(`SELECT COUNT(*) n FROM goal_runs WHERE plan_id = ? AND status != 'skipped' AND ${unscheduled} AND started_at >= ? AND started_at >= ?`).get(planId, hourAgo, since).n;
+    if (n > perHour) return `${n} unscheduled runs in the last hour (limit ${perHour})`;
+  }
+  if (idle > 0) {
+    const hourAgo = new Date(now.getTime() - 36e5).toISOString();
+    const recent = db.prepare(`SELECT items_resolved, ${unscheduled} AS counted, started_at FROM goal_runs
+      WHERE plan_id = ? AND status IN ('completed', 'failed', 'timed_out') AND trigger != 'manual' AND started_at >= ? ORDER BY started_at DESC, rowid DESC LIMIT ?`).all(planId, since, idle);
+    if (recent.length === idle && recent.every((r) => r.counted === 1 && r.items_resolved === 0 && r.started_at >= hourAgo)) {
+      return `${idle} unscheduled runs in a row resolved no item`;
+    }
+  }
+  return null;
+}
+function tripBreakerIfRunaway(db, planId, now = /* @__PURE__ */ new Date()) {
+  const goal = getGoal(db, planId);
+  if (!goal || goal.status !== "active") return null;
+  const reason = runawayReason(db, planId, now);
+  if (!reason) return null;
+  updateGoal(db, planId, { status: "paused" });
+  askPersonUnder(
+    db,
+    planId,
+    RUNAWAY_REF,
+    "This goal may be looping, so I paused it. Resume it?",
+    `Runaway breaker: ${reason}. Look at its recent runs, then approve this to resume the goal (as pressing Resume does), or reject it to leave the goal paused; you can change its instructions or limits first.`,
+    now,
+    "request"
+  );
+  return reason;
+}
+function askPersonUnder(db, planId, ref, goal, notes, now, kind = "question") {
+  const asked = db.prepare("SELECT id FROM tasks WHERE plan_id = ? AND external_ref = ?").get(planId, ref);
+  const state = JSON.stringify(kind === "question" ? { asks_person: true } : {});
+  const at = now.toISOString();
+  if (!asked) {
+    if (kind === "question") {
+      addItem(db, planId, null, { goal, notes, external_ref: ref, ask_person: true });
+      return;
+    }
+    const id = nextChildId(db, planId, null);
+    insertTask(db, {
+      id,
+      plan_id: planId,
+      goal,
+      result: null,
+      abandon_reason: null,
+      depends_on: null,
+      notes,
+      run_id: null,
+      external_ref: ref,
+      created_by: "agent",
+      created_at: at,
+      updated_at: at,
+      status: "active",
+      state: {},
+      requires_approval: true,
+      review_requested_at: at
+    });
+    return;
+  }
+  db.prepare(`UPDATE tasks SET goal = ?, notes = ?, state = ?, result = NULL, status = 'active', requires_approval = 1, review_requested_at = ?,
+    approved_by = NULL, approved_at = NULL, archived_at = NULL, updated_at = ? WHERE plan_id = ? AND id = ?`).run(goal, notes, state, at, at, planId, asked.id);
+}
+function attemptKey(task) {
+  return task.external_ref ? `ref:${task.external_ref}` : `item:${task.id}`;
+}
+function attemptQuestion(db, planId, key) {
+  const row = db.prepare("SELECT * FROM tasks WHERE plan_id = ? AND external_ref = ?").get(planId, ATTEMPT_REF + key);
+  return row ? deserializeTask(row) : void 0;
+}
+function countAttempts(db, planId, task) {
+  const q = attemptQuestion(db, planId, attemptKey(task));
+  const since = q && (q.status === "completed" || q.status === "abandoned") ? q.updated_at : "";
+  const row = task.external_ref ? db.prepare("SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND (external_ref = ? OR task_id = ?) AND at > ?").get(planId, task.external_ref, task.id, since) : db.prepare("SELECT COUNT(DISTINCT run_id) n FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND at > ?").get(planId, task.id, since);
+  return row.n;
+}
+function isAttemptBlocked(db, planId, task) {
+  const q = attemptQuestion(db, planId, attemptKey(task));
+  return Boolean(q && q.status !== "completed" && q.status !== "abandoned");
+}
+function recordAttempt(db, planId, taskId, runId, now = /* @__PURE__ */ new Date(), count = true) {
+  const goal = getGoal(db, planId);
+  const task = getTask(db, planId, taskId);
+  if (!goal || !task) return;
+  if (task.external_ref?.startsWith(ATTEMPT_REF) || task.external_ref === RUNAWAY_REF) return;
+  const key = attemptKey(task);
+  const asked = attemptQuestion(db, planId, key);
+  if (isAttemptBlocked(db, planId, task)) {
+    throw new GoalError(`Item ${taskId} is blocked: it reached its attempt limit and waits for the person's answer (item ${asked.id}). Leave it alone this run.`);
+  }
+  if (!count) return;
+  const limit = goal.limits.max_item_attempts;
+  const already = db.prepare("SELECT 1 FROM goal_item_attempts WHERE plan_id = ? AND task_id = ? AND run_id = ?").get(planId, taskId, runId);
+  if (already) return;
+  if (limit > 0 && countAttempts(db, planId, task) >= limit) {
+    const lastNote = (task.notes || task.result || "none").slice(0, 500);
+    const goalText = `Tried "${task.goal}" ${limit} times without finishing. Keep going, change approach, or drop it?`;
+    const notes = `Item ${task.id}${task.external_ref ? ` (${task.external_ref})` : ""} has had ${limit} runs work on it. Its last note: ${lastNote}. Until you answer, runs are refused work on it; your answer lands in memory for the next attempt.`;
+    askPersonUnder(db, planId, ATTEMPT_REF + key, goalText, notes, now);
+    throw new GoalError(`Item ${taskId} reached its limit of ${limit} attempts, so the person was asked whether to keep going. Leave it alone this run.`);
+  }
+  db.prepare("INSERT INTO goal_item_attempts (plan_id, task_id, run_id, external_ref, at) VALUES (?, ?, ?, ?, ?)").run(planId, taskId, runId, task.external_ref ?? null, now.toISOString());
 }
 function countOpenItems(db, planId) {
   return db.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND archived_at IS NULL AND status IN ('pending', 'active')").get(planId).n;
@@ -2234,6 +2399,7 @@ function failRun(db, runId, status2, reason) {
   if (!run || run.status !== "running" && run.status !== "queued") return;
   updateRun(db, runId, { status: status2, ended_at: (/* @__PURE__ */ new Date()).toISOString(), summary: run.summary ?? reason });
   releaseWatchEvents(db, runId);
+  tripBreakerIfRunaway(db, run.plan_id);
 }
 function archiveResolved(db, planId, now = /* @__PURE__ */ new Date()) {
   const goal = getGoal(db, planId);
@@ -2280,7 +2446,7 @@ function recordSkip(db, planId, trigger, reason, now = /* @__PURE__ */ new Date(
   const recent = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND status = 'skipped' AND skip_reason = ? AND started_at >= ?").get(planId, reason, hourAgo);
   return recent ? null : insertRun(db, planId, trigger, "skipped", reason);
 }
-var GoalError, MEMORY_BRIEF_CHARS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, STATUS_NOTE_MAX;
+var GoalError, MEMORY_BRIEF_CHARS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, STATUS_NOTE_MAX, COUNTED_RUNS;
 var init_goal_engine = __esm({
   "../core/src/goal-engine.ts"() {
     "use strict";
@@ -2297,6 +2463,7 @@ var init_goal_engine = __esm({
     ANSWER_PREFIX = "Your answer: ";
     QUESTION_NOTES_CHARS = 2e3;
     STATUS_NOTE_MAX = 40;
+    COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))";
   }
 });
 
@@ -2584,8 +2751,22 @@ async function checkWatches(db, planIds, now = /* @__PURE__ */ new Date(), budge
   const started = Date.now();
   let checked = 0;
   for (const planId of planIds) {
+    const ended = db.prepare(`SELECT id FROM goal_runs WHERE plan_id = ? AND ended_at IS NOT NULL AND status != 'skipped'
+      AND watch_rechecked_at IS NULL ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(planId);
+    const rechecked = /* @__PURE__ */ new Set();
+    if (ended && !getOpenRun(db, planId)) {
+      db.prepare("UPDATE goal_runs SET watch_rechecked_at = ? WHERE plan_id = ? AND ended_at IS NOT NULL AND watch_rechecked_at IS NULL").run(now.toISOString(), planId);
+      for (const watch of listWatches(db, planId)) {
+        if (watch.kind !== "command" || !watch.baseline_at) continue;
+        if (Date.now() - started >= budgetMs) return checked;
+        await checkCommandWatch(db, watch.id, now, ended.id).catch(() => {
+        });
+        rechecked.add(watch.id);
+        checked++;
+      }
+    }
     for (const watch of listWatches(db, planId)) {
-      if (watch.kind !== "command" || !watchDue(watch, now)) continue;
+      if (watch.kind !== "command" || rechecked.has(watch.id) || !watchDue(watch, now)) continue;
       if (Date.now() - started >= budgetMs) return checked;
       await checkCommandWatch(db, watch.id, now).catch(() => {
       });
@@ -2667,6 +2848,18 @@ function decideItem(db, planId, taskId, input) {
     const context = task.notes?.trim() ? ` (the question said: ${clipText2(task.notes.trim().replace(/\s+/g, " "), ANSWER_CONTEXT_CHARS)})` : "";
     insertMemory(db, { plan_id: planId, kind: "fact", text: `You answered "${task.goal}": ${answer}${context}`, source: "human", source_ref: taskId });
     if (active()) queuedRun = queueRun(db, planId);
+  } else if (task.external_ref === RUNAWAY_REF) {
+    if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`);
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const resume = input.decision === "approve";
+    const feedback = (input.feedback ?? "").trim();
+    updateTask(db, planId, taskId, {
+      status: "completed",
+      review_requested_at: null,
+      updated_at: now,
+      ...resume ? { approved_by: "human", approved_at: now, result: "Resumed" } : { result: `Left paused${feedback ? `: ${feedback}` : ""}` }
+    });
+    if (resume && getGoal(db, planId)?.status === "paused") updateGoal(db, planId, { status: "active" });
   } else if (input.decision === "approve") {
     approveTask(db, planId, taskId);
     if ((isProposal(task) || asksPerson(task)) && active()) queuedRun = queueRun(db, planId);
@@ -2737,13 +2930,14 @@ function itemView(t) {
     updated_at: t.updated_at
   };
 }
-function overviewItem(t) {
+function overviewItem(t, blocked) {
   const v = itemView(t);
   const action = v.action;
   const notesMax = v.asks_person && v.awaiting_review ? CLIP.context : CLIP.notes;
   const clipped = v.goal.length > CLIP.title || (v.notes?.length ?? 0) > notesMax || (action?.summary?.length ?? 0) > CLIP.title;
   const short = { ...v, goal: clip(v.goal, CLIP.title), notes: clip(v.notes, notesMax), result: clip(v.result, CLIP.result), ...clipped && { clipped: true } };
-  return action ? { ...short, action: { category: action.category, summary: clip(action.summary, CLIP.title) } } : short;
+  const marked = blocked ? { ...short, blocked: true } : short;
+  return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title) } } : marked;
 }
 function getAutonomySuggestions(db, planId) {
   const goal = getGoal(db, planId);
@@ -2824,7 +3018,7 @@ function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (summary) return { state: "idle", text: `Last run: ${summary}`, at: null };
   return { state: "idle", text: "Waiting for its first run", at: null };
 }
-function buildOverview(db, detail = "all", standingSession = null) {
+function buildOverview(db, detail = "all", standingSession = null, fullInstructions = false) {
   const all = listGoals(db);
   const done = all.filter(({ goal }) => goal.status === "retired" && goal.one_off).sort((a, b) => (b.goal.last_run_at ?? "").localeCompare(a.goal.last_run_at ?? "")).slice(0, DONE);
   const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(({ plan, goal }) => {
@@ -2841,7 +3035,7 @@ function buildOverview(db, detail = "all", standingSession = null) {
       one_off: goal.one_off,
       model: goal.model,
       status_note: statusNote(goal, runs),
-      instructions: clip(goal.instructions, CLIP.instructions),
+      instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions),
       autonomy: goal.autonomy,
       tool_map: goal.tool_map,
       next_run_at: goal.next_run_at,
@@ -2871,8 +3065,8 @@ function buildOverview(db, detail = "all", standingSession = null) {
         // What untrusted content it read first: from then on its auto actions needed approval
         untrusted: r.untrusted_source
       })),
-      needs_you: open.filter((t) => t.review_requested_at).map(overviewItem),
-      open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map(overviewItem),
+      needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
+      open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
       open_item_count: open.filter((t) => !t.review_requested_at).length,
       health: listHealth(db, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),
       memory: listMemory(db, plan.id, { activeOnly: true }).slice(-MEMORY).reverse().map((m) => ({ id: m.id, kind: m.kind, text: clip(m.text, CLIP.memory), source: m.source, pinned: m.pinned, created_at: m.created_at, untrusted: m.untrusted_source })),
@@ -2920,8 +3114,8 @@ function buildOverview(db, detail = "all", standingSession = null) {
   const standing = standingSession !== null && leaseHolder(db) === standingSession;
   return { goals, hold: getRunHold(db), ...schemaOutdated(db) ? { outdated: true } : {}, ...standing ? { standing: true } : {} };
 }
-function overviewWithEtag(db, detail = "all", standingSession = null) {
-  const body = JSON.stringify(buildOverview(db, detail, standingSession));
+function overviewWithEtag(db, detail = "all", standingSession = null, fullInstructions = false) {
+  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions));
   return { body, etag: `"${createHash2("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
 var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
@@ -2971,8 +3165,13 @@ function toList(db, plan) {
   const heading = headingOf(tasks);
   const shown = heading ? tasks.filter((t) => t.id !== heading) : tasks;
   const base = heading ? 2 : 1;
-  const items = shown.map((t) => ({ id: t.id, text: t.goal, status: t.status, depth: t.id.split(".").length - base, notes: t.notes }));
-  const done = items.filter((i) => i.status === "completed" || i.status === "abandoned").length;
+  const items = shown.map((t) => {
+    const depth = t.id.split(".").length - base;
+    if (!isDone(t.status)) return { id: t.id, text: t.goal, status: t.status, depth, notes: t.notes };
+    const text = t.goal.length > DONE_TEXT_CHARS ? `${t.goal.slice(0, DONE_TEXT_CHARS - 1).trimEnd()}\u2026` : t.goal;
+    return { id: t.id, text, status: t.status, depth, notes: null };
+  });
+  const done = items.filter((i) => isDone(i.status)).length;
   return { id: plan.id, name: plan.name, items, open: items.length - done, done };
 }
 function todoLists(db, workingDir) {
@@ -3027,7 +3226,7 @@ function setTodo(db, listId, itemId, change) {
   const t = getTask(db, listId, itemId);
   return { id: t.id, text: t.goal, status: t.status, depth: 0, notes: t.notes };
 }
-var DEFAULT_LIST, samePath, norm;
+var DEFAULT_LIST, samePath, norm, DONE_TEXT_CHARS, isDone;
 var init_todos = __esm({
   "../core/src/todos.ts"() {
     "use strict";
@@ -3035,6 +3234,8 @@ var init_todos = __esm({
     DEFAULT_LIST = "To do";
     samePath = (a, b) => norm(a) === norm(b);
     norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    DONE_TEXT_CHARS = 200;
+    isDone = (status2) => status2 === "completed" || status2 === "abandoned";
   }
 });
 
@@ -3043,12 +3244,14 @@ var src_exports = {};
 __export(src_exports, {
   ANSWER_CONTEXT_CHARS: () => ANSWER_CONTEXT_CHARS,
   ANSWER_PREFIX: () => ANSWER_PREFIX,
+  ATTEMPT_REF: () => ATTEMPT_REF,
   BUILTIN_UNTRUSTED: () => BUILTIN_UNTRUSTED,
   DEFAULT_GOAL_LIMITS: () => DEFAULT_GOAL_LIMITS,
   DEFAULT_HOLD_MS: () => DEFAULT_HOLD_MS,
   DEFAULT_LIST: () => DEFAULT_LIST,
   DEFAULT_MAX_CONCURRENT: () => DEFAULT_MAX_CONCURRENT,
   DEFAULT_VERIFY_TIMEOUT_S: () => DEFAULT_VERIFY_TIMEOUT_S,
+  DONE_TEXT_CHARS: () => DONE_TEXT_CHARS,
   Database: () => Database,
   GATE_FIELDS: () => GATE_FIELDS,
   GateError: () => GateError,
@@ -3063,6 +3266,7 @@ __export(src_exports, {
   QUARTERDECK_DATA_CATEGORY: () => QUARTERDECK_DATA_CATEGORY,
   QUARTERDECK_TOOL_PREFIX: () => QUARTERDECK_TOOL_PREFIX,
   REVISION_TRIGGERS: () => REVISION_TRIGGERS,
+  RUNAWAY_REF: () => RUNAWAY_REF,
   SCHEMA_VERSION: () => SCHEMA_VERSION,
   STALE_GRACE_MS: () => STALE_GRACE_MS,
   STATUS_CHECK_BUDGET_MS: () => STATUS_CHECK_BUDGET_MS,
@@ -3077,6 +3281,7 @@ __export(src_exports, {
   WATCH_BUDGET_MS: () => WATCH_BUDGET_MS,
   WATCH_DEFAULT_MATCH: () => WATCH_DEFAULT_MATCH,
   WATCH_DEFAULT_MINUTES: () => WATCH_DEFAULT_MINUTES,
+  WATCH_EVENTS_SOURCE: () => WATCH_EVENTS_SOURCE,
   WATCH_FAILING_AFTER: () => WATCH_FAILING_AFTER,
   WATCH_LINE_CHARS: () => WATCH_LINE_CHARS,
   WATCH_MAX_LINES: () => WATCH_MAX_LINES,
@@ -3111,6 +3316,7 @@ __export(src_exports, {
   commandParts: () => commandParts,
   compareTaskIds: () => compareTaskIds,
   countAllTasks: () => countAllTasks,
+  countAttempts: () => countAttempts,
   countOpenItems: () => countOpenItems,
   countRunsSince: () => countRunsSince,
   countUnqueuedWatchEvents: () => countUnqueuedWatchEvents,
@@ -3169,6 +3375,7 @@ __export(src_exports, {
   insertRun: () => insertRun,
   insertTask: () => insertTask,
   insertVerification: () => insertVerification,
+  isAttemptBlocked: () => isAttemptBlocked,
   isProposal: () => isProposal,
   isUsageLimit: () => isUsageLimit,
   itemView: () => itemView,
@@ -3202,6 +3409,7 @@ __export(src_exports, {
   queueForWatchEvents: () => queueForWatchEvents,
   queueRun: () => queueRun,
   readsUntrusted: () => readsUntrusted,
+  recordAttempt: () => recordAttempt,
   recordSkip: () => recordSkip,
   recordWatchLines: () => recordWatchLines,
   rejectTask: () => rejectTask,
@@ -3217,6 +3425,7 @@ __export(src_exports, {
   runHealthCheck: () => runHealthCheck,
   runMigrations: () => runMigrations,
   runVerifyCommand: () => runVerifyCommand,
+  runawayReason: () => runawayReason,
   schedulerPass: () => schedulerPass,
   schemaOutdated: () => schemaOutdated,
   setIntervalTrigger: () => setIntervalTrigger,
@@ -3236,6 +3445,7 @@ __export(src_exports, {
   todoLists: () => todoLists,
   touchPlan: () => touchPlan,
   touchesQuarterdeckData: () => touchesQuarterdeckData,
+  tripBreakerIfRunaway: () => tripBreakerIfRunaway,
   updateGoal: () => updateGoal,
   updateMemory: () => updateMemory,
   updatePlan: () => updatePlan,
