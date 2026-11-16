@@ -895,12 +895,12 @@ function sameModel(setting: string, used: string): boolean {
   return s === u || (!s.includes('-') && u.includes(s)) || u.startsWith(s)
 }
 
-/** The pane's model picker: four choices, or a full id typed under Other. A dismissed question changes nothing. */
+/** The pane's model picker: four choices, or "session" typed under Other (a typed id is kept, and runs as its family: spawnModel). A dismissed question changes nothing. */
 async function chooseModel($: Engine, g: GoalCard): Promise<void> {
   let answer: string | null = null
   try {
     answer = await $.ui.ask(
-      `Which model should "${g.name}" run on? Now: ${goalModelLabel(g.model)}. Smaller models cost less and suit routine work; pick a larger one if its runs miss things. Or type a full model id under Other.`,
+      `Which model should "${g.name}" run on? Now: ${goalModelLabel(g.model)}. Smaller models cost less and suit routine work; pick a larger one if its runs miss things. Or type session under Other for the model of whichever session starts each run.`,
       MODEL_CHOICES.map((c) => c.label),
     )
   } catch {

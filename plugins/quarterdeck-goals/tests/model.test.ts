@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import { TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -236,8 +236,18 @@ test('modelName reads a model id as the person would say it', async () => {
   expect(modelName('some-other-model')).toBe('some-other-model')
 })
 
+test("a run's agent starts on a family alias, since spawn takes no full id", async () => {
+  expect(spawnModel('claude-fable-5-2')).toBe('fable')
+  expect(spawnModel('claude-haiku-4-5-20251001')).toBe('haiku')
+  expect(spawnModel('Opus')).toBe('opus')
+  expect(spawnModel('some-other-model')).toBeUndefined()
+  expect(spawnModel(null)).toBeUndefined()
+})
+
 test('readModelAnswer: a choice, a typed id, or nothing for a dismissed question', async () => {
   expect(readModelAnswer('Opus')).toEqual({ model: 'opus' })
+  expect(readModelAnswer('Fable')).toEqual({ model: 'fable' })
+  expect(readModelAnswer('session')).toEqual({ model: null })
   expect(readModelAnswer("Session's model")).toEqual({ model: null })
   expect(readModelAnswer(' claude-sonnet-5-5 ')).toEqual({ model: 'claude-sonnet-5-5' })
   expect(readModelAnswer('Cancel')).toBeNull()

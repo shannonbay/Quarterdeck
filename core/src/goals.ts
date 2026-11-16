@@ -66,7 +66,7 @@ export function createGoal(db: Database, plan: NewPlan, goal: Omit<NewGoal, 'pla
 }
 
 /** The aliases a goal's model may be, besides a full id. */
-export const MODEL_ALIASES = ['haiku', 'sonnet', 'opus'] as const
+export const MODEL_ALIASES = ['haiku', 'sonnet', 'opus', 'fable'] as const
 
 /**
  * A model as stored: an alias in lower case, a full id as given, or null for
@@ -78,7 +78,7 @@ export function normalizeModel(model: string | null | undefined): string | null 
   if (!m || /^(inherit|default|session)$/i.test(m)) return null
   if ((MODEL_ALIASES as readonly string[]).includes(m.toLowerCase())) return m.toLowerCase()
   if (m.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9._:@/\[\]-]*$/.test(m)) {
-    throw new Error(`"${m}" isn't a model: use haiku, sonnet, opus, a full model id, or null for the session's model.`)
+    throw new Error(`"${m}" isn't a model: use haiku, sonnet, opus, fable, a full model id, or null for the session's model.`)
   }
   return m
 }

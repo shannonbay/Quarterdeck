@@ -705,17 +705,31 @@ export function modelName(model: string): string {
   return m[2] ? `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : family
 }
 
+/**
+ * The model to start a run's agent with: spawn takes only the family aliases
+ * (haiku, sonnet, opus, fable), so a full id runs as its family's alias
+ * (claude-fable-5-2 → fable; seen Nov 2026, a full id failed every run). An id
+ * of no family runs on the session's model (undefined) rather than failing.
+ */
+export function spawnModel(model: string | null | undefined): string | undefined {
+  const m = /(haiku|sonnet|opus|fable)/i.exec(model ?? '')
+  return m ? m[1].toLowerCase() : undefined
+}
+
 /** A goal's model setting as the person reads it. */
 export function goalModelLabel(model: string | null): string {
   return model ? modelName(model) : "the session's model"
 }
 
-/** The pane's model choices, in the order asked; "Session's model" is null. At most 4 ($.ui.ask's limit). */
+/**
+ * The pane's model choices, in the order asked. At most 4 ($.ui.ask's limit), so
+ * the session's model (null) is typed under Other: session, default or inherit.
+ */
 export const MODEL_CHOICES: { label: string; model: string | null }[] = [
-  { label: "Session's model", model: null },
   { label: 'Haiku', model: 'haiku' },
   { label: 'Sonnet', model: 'sonnet' },
   { label: 'Opus', model: 'opus' },
+  { label: 'Fable', model: 'fable' },
 ]
 
 /**
@@ -739,7 +753,7 @@ export function readModelAnswer(answer: string | null): { model: string | null }
   if (!a || /^cancel$/i.test(a)) return null
   const choice = MODEL_CHOICES.find((c) => c.label.toLowerCase() === a.toLowerCase())
   if (choice) return { model: choice.model }
-  if (/^(inherit|default|session)$/i.test(a)) return { model: null }
+  if (/^(inherit|default|session|session's model)$/i.test(a)) return { model: null }
   return { model: a }
 }
 

@@ -28,10 +28,12 @@ test("a goal's model goes to its run's agent; without one the agent takes the se
   fakeQuarterdeck(on, [
     goal({ id: 'g1', name: 'Inbox', model: 'haiku', open_run: { id: 'r1', status: 'queued' } }),
     goal({ id: 'g2', name: 'Feeds', open_run: { id: 'r2', status: 'queued' } }),
+    goal({ id: 'g3', name: 'Reviews', model: 'claude-fable-5-2', open_run: { id: 'r3', status: 'queued' } }),
   ])
   await $.session.start(START)
   await clock.settle()
   expect(spawned.find((s) => s.prompt === 'Run Inbox')?.model).toBe('haiku')
+  expect(spawned.find((s) => s.prompt === 'Run Reviews')?.model).toBe('fable') // spawn takes no full id
   expect(spawned.find((s) => s.prompt === 'Run Feeds')).not.toHaveProperty('model')
 })
 

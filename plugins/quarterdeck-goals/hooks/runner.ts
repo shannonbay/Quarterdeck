@@ -12,7 +12,7 @@ import type { EngineInterface } from 'claude-code'
 import type { RunEntry } from '../types'
 import { attachAgent, cancelRunRecord, failRun, releaseLease, reportWatch, resultText, tick, type ClaimedRun, type ToolWatch } from './api'
 import { addRun, getNotice, getRuns, getSnapshot, removeRun, setGuardMissing, setNotice, setPlanMode } from './state'
-import { planModeBlocked } from './model'
+import { planModeBlocked, spawnModel } from './model'
 import { serverToolNames } from './names'
 
 type Engine = EngineInterface
@@ -179,7 +179,7 @@ async function start($: Engine, run: ClaimedRun): Promise<void> {
   let why = 'no agent was started'
   const description = `Goal: ${run.name} (${run.run_id})`
   try {
-    const r = await $.agent.spawn({ subagentType: RUNNER_AGENT, prompt: run.prompt, description, cwd: run.working_dir, ...(run.model ? { model: run.model } : {}) })
+    const r = await $.agent.spawn({ subagentType: RUNNER_AGENT, prompt: run.prompt, description, cwd: run.working_dir, ...(spawnModel(run.model) ? { model: spawnModel(run.model) } : {}) })
     agentId = r.agentId
     if ('deny' in r && typeof r.deny === 'string') why = r.deny
     // An answer without the id (a host that doesn't report it): find the agent by its description
