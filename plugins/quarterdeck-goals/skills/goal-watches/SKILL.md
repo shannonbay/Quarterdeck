@@ -102,11 +102,11 @@ watches: { "working tree": { command: "git status --porcelain", fires: "change",
   default: { status: "clean", tone: "ok" } } } }
 ```
 
-- At each check the first rule whose `match` (a regular expression) matches any line wins; with none, `default`. The status is set from the first check on.
+- At each check the first rule with `run: true` whose `match` (a regular expression) matches any line wins, so a line that should start a run is never hidden by an earlier rule; then the first rule that matches any line; with none, `default`. The status is set from the first check on.
 - The status text is only ever the rule's, never the command's output, at most 40 characters. Tones are `ok`, `attention` and `problem`.
-- No run starts unless the winning rule (or the default) says `run: true`; then its lines are events, as usual.
+- No run starts unless the winning rule (or the default) says `run: true`; then its new lines are events, as usual. A line that only rules without `run` match is never an event and isn't marked seen, so it can still start a run if you later add a run rule that matches it.
 - The status is written only when it changes. It replaces a run's status and any status check attached to it; a later run's `end_run` status replaces it in turn. The pane says "set by watch <name>".
-- Changing a watch's rules starts it over, like changing its command.
+- Editing a watch's rules keeps what it has seen. Adding rules to a watch, or removing them all, starts it over, like changing its command.
 
 ## Tool watches: what only a connector reaches
 
