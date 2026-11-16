@@ -391,11 +391,11 @@ test('the CI fixer takes a typed branch, and refuses one that is no branch name'
 })
 
 test('the issue fixer watches open issues and its own pull requests\' CI and conflicts, and works in a clone of its own', async ($, on) => {
-  const { asked } = engine(on, { answers: ['More…', 'Work on new GitHub issues', 'Start on every new issue'] })
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Start on every new issue'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(asked[2]).toContain('Should it wait until an issue is labelled refined?')
+  expect(asked[3]).toContain('Should it wait until an issue is labelled refined?')
   expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { schedule: unknown; instructions: string; watches: Record<string, { command: string }> }
   expect(input.schedule).toBeNull()
@@ -421,15 +421,15 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
 })
 
 test('the issue fixer offers to wait for refined first; waiting, one watch on the label replaces the two by author', async ($, on) => {
-  const { choices } = engine(on, { answers: ['More…', 'Work on new GitHub issues', 'Wait for refined'] })
+  const { choices } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(choices[2]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
+  expect(choices[3]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
   expect(made.text).toContain('a run starts when its watch sees refined issues, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { instructions: string; watches: Record<string, { command: string }> }
   expect(Object.keys(input.watches)).toEqual(['refined issues', 'failed CI on its pull requests', 'merge conflicts on its pull requests', 'comments on its pull requests'])
-  expect(input.watches['refined issues']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&labels=refined&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not)) | .number"')
+  expect(input.watches['refined issues']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&labels=refined&sort=updated&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not)) | .number"')
   expect(input.instructions).toMatch(/^A watch starts a run when an open issue is labelled refined/)
   expect(input.instructions).toContain('Build from the refinement')
   expect(input.instructions).toContain('the refinement wins')
@@ -439,7 +439,7 @@ test('the issue fixer offers to wait for refined first; waiting, one watch on th
 })
 
 test('the issue fixer refuses an answer typed under Other that is neither choice', async ($, on) => {
-  engine(on, { answers: ['More…', 'Work on new GitHub issues', 'sometimes'] })
+  engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'sometimes'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))

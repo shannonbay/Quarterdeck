@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { refineRules } from '../../plugins/quarterdeck-goals/hooks/templates'
 import { tmpdir } from 'os'
 import type { Database } from './sqlite.js'
 import {
@@ -198,16 +199,12 @@ describe('goal guard', () => {
   })
 
   it("holds the issue refiner's comments and labels until approved, reads labels, and refuses every other GitHub write (refineRules in the goals plugin)", () => {
-    // The rules refineRules() gives, for Bash (PowerShell gets the same)
-    const tool_map = {
-      'Bash(gh label*)': 'github.write', 'Bash(gh issue comment*)': 'github.issue', 'Bash(gh issue edit*)': 'github.issue', 'Bash(gh issue close*)': 'github.write',
-      'Bash(gh api*)': 'github.write', 'Bash(git push*)': 'github.write', 'Bash(gh pr create*)': 'github.write',
-      'Bash(gh label create*)': 'github.issue', 'Bash(gh label list*)': 'untrusted', 'Bash(gh issue view*)': 'untrusted',
-    }
-    updateGoal(db, 'g1', { tool_map, autonomy: { 'github.issue': 'propose', 'github.write': 'off' } })
+    // The template's real map, so a change to refineRules() shows here
+    updateGoal(db, 'g1', { tool_map: refineRules(), autonomy: { 'github.issue': 'propose', 'github.write': 'off' } })
     const run = insertRun(db, 'g1', 'watch', 'running')
     const decide = (command: string) => guardToolCallForRun(db, run.id, 'Bash', { command })
-    expect(decide('gh label list --json name')).toMatchObject({ decision: 'allow', category: 'untrusted' }) // longer than gh label*
+    expect(decide('gh label list --limit 1000 --json name')).toEqual({ decision: 'allow', run_id: run.id }) // unmapped: allowed, marks nothing
+    for (const c of ['gh label edit refined --color 000000', 'gh label clone o/r']) expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.write' })
     expect(decide('gh issue view 45 --json title,body')).toMatchObject({ decision: 'allow', category: 'untrusted' })
     for (const c of ['gh issue comment 45 --body-file C:/tmp/r.md', 'gh issue edit 45 --add-label refined', 'gh label create refined --color 0e8a16']) {
       expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.issue', reason: expect.stringMatching(/needs approval/) })

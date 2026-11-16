@@ -457,6 +457,10 @@ test("the issue refiner watches new issues not yet refined, split by author, and
   expect(replies).toContain(`contains(\\"${GOAL_SIGN}\\")`)
   expect(replies).toMatch(/\.n \+ \\" \\" \+ \.c\.id"$/)
   expect(replies).not.toContain('$') // sh would expand a jq variable inside the double quotes
+  expect(replies).toContain('select(.last != null and') // a hand-labelled issue the goal never asked about doesn't fire
+  expect(replies).toContain('map(select(startswith(\\"\\u003e\\") | not))') // a quote reply of the sign line is still the reporter's
+  // cmd.exe reads the text inside each \"…\" jq string as unquoted (every \" toggles its quoting), so < > & | there would be redirects or a new command
+  for (const s of replies.match(/\\"(.*?)\\"/g)!) expect(s).not.toMatch(/[<>&|]/)
   for (const c of [trusted, others, replies]) expect(c).not.toMatch(/\| \.title|\| \.body"/) // only numbers, ids and logins reach a run
 })
 
@@ -467,8 +471,9 @@ test('the issue refiner may only comment on and label issues, once approved, and
   const mode = (rule: string) => t.autonomy[t.tool_map[rule]] ?? null
   for (const tool of ['Bash', 'PowerShell']) {
     for (const w of ['gh issue comment*', 'gh issue edit*', 'gh label create*']) expect(mode(`${tool}(${w})`)).toBe('propose')
-    for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr comment*', 'gh issue close*', 'gh issue create*', 'gh api*', 'gh auth*', 'gh label*']) expect(mode(`${tool}(${w})`)).toBe('off')
-    for (const r of ['gh issue view*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBe('untrusted')
+    for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr comment*', 'gh issue close*', 'gh issue create*', 'gh api*', 'gh auth*', 'gh label delete*', 'gh label edit*', 'gh label clone*']) expect(mode(`${tool}(${w})`)).toBe('off')
+    expect(t.tool_map[`${tool}(gh issue view*)`]).toBe('untrusted')
+    for (const r of ['gh label*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBeUndefined() // gh label list stays unmapped
   }
   expect(t.tool_map.Bash).toBeUndefined()
   // How these decide real commands (gh label list over gh label*, and so on) is in core's guard tests
@@ -492,4 +497,14 @@ test('the issue refiner settles every decision with the person before it propose
   expect(ISSUE_REFINE).toContain(`"${REFINE_REPLY_WATCH}"`)
   expect(ISSUE_REFINE).toContain('--remove-label needs-clarification')
   expect(ISSUE_REFINE).toContain('external_ref github-labels')
+  expect(ISSUE_REFINE).toContain('gh label list --limit 1000') // 30 without it
+  // The skip covers the new-issue watches only: a reply always comes on a needs-clarification issue
+  expect(ISSUE_REFINE).toContain(`Under "${REFINE_WATCH}" and "${REFINE_OTHERS_WATCH}", skip issues labelled`)
+  expect(ISSUE_REFINE).toContain(`Posted by a [${GOAL_SIGN} (<this goal's name>)." on a line of its own`)
+})
+
+test('the issue fixer waiting for refined knows what to do once I say yes to an issue with no refinement', () => {
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('external_ref github-issue-ask:<number>')
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('When decisions_since_last_run shows I answered yes to one of those questions or marked it done, build that issue from its title and body')
+  expect(ISSUE_FIX_WORK).toContain('build what the issue asks (its refinement, when there is one) and no more')
 })
