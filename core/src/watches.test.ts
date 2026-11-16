@@ -523,11 +523,44 @@ describe('status rules', () => {
     expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'clean', status_check: null, status_source: 'watch:tree' })
   })
 
-  it('a change of rules starts the watch over', () => {
+  it('editing rules keeps what was seen; adding or removing them starts the watch over', () => {
     const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
     recordWatchLines(db, w.id, { lines: ['1'] })
-    expect(setWatch(db, 'g1', 'tree', { command: 'echo', status: { default: { status: 'fine' } } })).toMatchObject({ seen: [], baseline_at: null, status_rules: { rules: [], default: { status: 'fine' } } })
-    expect(setWatch(db, 'g1', 'tree', { command: 'echo' }).status_rules).toBeNull()
+    const edited = setWatch(db, 'g1', 'tree', { command: 'echo', status: { default: { status: 'fine' } } })
+    expect(edited).toMatchObject({ seen: ['1'], status_rules: { rules: [], default: { status: 'fine' } } })
+    expect(edited.baseline_at).not.toBeNull()
+    expect(setWatch(db, 'g1', 'tree', { command: 'echo' })).toMatchObject({ seen: [], baseline_at: null, status_rules: null })
+    recordWatchLines(db, w.id, { lines: ['1'] })
+    expect(setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })).toMatchObject({ seen: [], baseline_at: null })
+  })
+
+  it('a run rule wins over an earlier rule that matches too', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', fires: 'change', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const check = recordWatchLines(db, w.id, { lines: ['M a.ts', '!! tsc failed'] })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'build broken', status_tone: 'problem' })
+    expect(check.fresh).toContain('!! tsc failed')
+  })
+
+  it('lines only a quiet rule covers stay unseen, so a later run rule can fire on them', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: ['other'] })
+    const quiet = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
+    expect(quiet.fresh).toEqual([])
+    expect(getWatch(db, w.id)!.seen).toEqual(['other', 'new'])
+    // A run rule over the held line, and an unrelated line, now fire
+    setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: '^M ', status: 'dirty', run: true }] } })
+    const fired = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
+    expect(fired.fresh).toEqual(['M a.ts'])
+    expect(getWatch(db, w.id)!.seen).toEqual(['other', 'M a.ts', 'new'])
+  })
+
+  it('a run fired by a run rule leaves out the lines a quiet rule holds', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const check = recordWatchLines(db, w.id, { lines: ['M a.ts', '!! tsc failed', 'x'] })
+    expect(check.fresh).toEqual(['!! tsc failed', 'x'])
+    expect(getWatch(db, w.id)!.seen).toEqual(['!! tsc failed', 'x'])
   })
 
   it("a watch's status stays fresh after a run, and goes stale when its watch fails, loses its rules or is removed", () => {
