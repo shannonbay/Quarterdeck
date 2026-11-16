@@ -309,6 +309,12 @@ describe('watches', () => {
     await expect(update_goal({ goal_id: id, watches: { x: { command: 'echo 1', every_minutes: 0 } } })).rejects.toThrow()
   })
 
+  it('update_goal says when a watch sets the status, and what it is now', async () => {
+    const { id } = await create_goal({ name: 'Tree', objective: 'Watch the tree', working_dir: tmpdir() })
+    const r = await update_goal({ goal_id: id, watches: { tree: { command: PRINT('M a.ts'), fires: 'change', status: { rules: [{ match: '^M ', status: 'uncommitted', tone: 'attention' }], default: { status: 'clean' } } } } })
+    expect(r.watches).toEqual([{ name: 'tree', result: `works: 1 line now; it sets the goal's status (now "uncommitted") at each check` }])
+  })
+
   it('create_goal takes watches too, and the brief and the overview carry them', async () => {
     const r = await create_goal({ name: 'Issues', objective: 'Triage new issues', working_dir: tmpdir(), watches: { 'new issues': { command: PRINT('7') } } })
     expect(r.watches).toEqual([{ name: 'new issues', result: 'works: 1 item there now; a run starts when a new one appears' }])
