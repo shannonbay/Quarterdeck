@@ -10,7 +10,7 @@ import {
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
-  ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND,
+  ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -563,6 +563,7 @@ test('the issue triage goal may only add labels, once approved; adding needs-ref
   for (const tool of ['Bash', 'PowerShell']) {
     for (const w of ['gh issue edit*', 'gh label create*', SCHEDULE_COMMAND]) expect(mode(`${tool}(${w})`)).toBe('propose')
     expect(t.tool_map[`${tool}(${SCHEDULE_COMMAND})`]).toBe('github.schedule')
+    expect(t.tool_map[`${tool}(${SCHEDULE_WITH_FLAGS})`]).toBe('github.label') // any other flag needs a proposal
     for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr comment*', 'gh issue comment*', 'gh issue close*', 'gh issue reopen*', 'gh issue create*', 'gh issue delete*', 'gh issue transfer*', 'gh api*', 'gh auth*', 'gh repo*', 'gh label delete*', 'gh label edit*', 'gh label clone*']) expect(mode(`${tool}(${w})`)).toBe('off')
     for (const r of ['gh issue view*', 'gh issue list*']) expect(t.tool_map[`${tool}(${r})`]).toBe('untrusted')
     for (const r of ['gh label*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBeUndefined() // gh label list stays unmapped

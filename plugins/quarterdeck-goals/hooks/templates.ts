@@ -162,6 +162,13 @@ export const NEEDS_REFINEMENT_LABEL = 'needs-refinement'
 export const SCHEDULE_COMMAND = `gh issue edit * --add-label ${NEEDS_REFINEMENT_LABEL}`
 
 /**
+ * The same command with any other flag before the label (`--body x`, `-R o/r`):
+ * a `*` matches anything, so this longer rule, checked first, sends those back
+ * to `github.label`. Issue numbers have no `-`, and every flag does.
+ */
+export const SCHEDULE_WITH_FLAGS = `gh issue edit *-* --add-label ${NEEDS_REFINEMENT_LABEL}`
+
+/**
  * The issue triage goal's command rules: adding labels to an issue and
  * creating a label are `github.label` (propose); adding needs-refinement alone
  * is `github.schedule`, which the person's answer to its question approves.
@@ -182,6 +189,7 @@ export function triageRules(): Record<string, string> {
     'gh issue edit*': 'github.label',
     'gh label create*': 'github.label',
     [SCHEDULE_COMMAND]: 'github.schedule',
+    [SCHEDULE_WITH_FLAGS]: 'github.label',
     'gh issue view*': 'untrusted',
     'gh issue list*': 'untrusted',
   })

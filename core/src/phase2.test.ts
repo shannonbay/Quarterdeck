@@ -246,7 +246,13 @@ describe('goal guard', () => {
     decideItem(db, 'g1', ask.id, { decision: 'answer', feedback: '49' })
     expect(decide('gh issue edit 49 --add-label needs-refinement').decision).toBe('allow')
     expect(decide('gh issue edit 49 --add-label needs-refinement,bug').decision).toBe('deny') // any other label is github.label
-    expect(decide('gh issue edit 49 --add-label needs-refinement --body x')).toMatchObject({ decision: 'deny', category: 'github.label' })
+    expect(decide('gh issue edit 49 51 --add-label needs-refinement').decision).toBe('allow')
+    // Any other flag, before the label or after it, is github.label: the answer approves that label alone
+    for (const c of ['gh issue edit 49 --add-label needs-refinement --body x', 'gh issue edit 49 --body x --add-label needs-refinement', 'gh issue edit 49 --title "x" --add-label needs-refinement',
+      'gh issue edit 49 --remove-label bug --add-label needs-refinement', 'gh issue edit 49 -b x --add-label needs-refinement', 'gh issue edit 49 -R other/repo --add-label needs-refinement',
+      'gh issue edit 49 --add-label wontfix --add-label needs-refinement', 'gh issue edit 49 --add-assignee someone --add-label needs-refinement']) {
+      expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.label' })
+    }
   })
 
   it('holds a pushed command until its proposal is approved, and marks a run that reads through a command rule', () => {
