@@ -1,0 +1,51 @@
+---
+paths:
+  - "core/src/goal*.ts"
+  - "core/src/todos.ts"
+  - "core/src/schedule.ts"
+  - "mcp/src/tools/goal*.ts"
+  - "mcp/src/tools/todos.ts"
+  - "plugins/quarterdeck-goals/**"
+  - "web/lib/goal-views.ts"
+  - "web/components/**"
+  - "web/app/api/goals/**"
+  - "specs/persistent-goals.md"
+---
+
+# Persistent goals: the engine
+
+Spec: `specs/persistent-goals.md` (phases 1, 2 and 2.5 built). A goal is a plan with `kind = 'goal'` plus a `goals` row; its work items are ordinary root-level tasks with `run_id`, `external_ref` (unique per goal) and `archived_at`. Storage in `core/src/goals.ts`, behaviour in `core/src/goal-engine.ts` (`addItem`, `buildBrief`, run lifecycle, `archiveResolved`, `decideTick`). Goals are hidden from plan lists.
+
+## Autonomy and items
+
+- Autonomy per action category: `off` refused by `addItem`, `propose` → item with `requires_approval` and `review_requested_at` set at creation, `auto` → recorded as completed. Unlisted categories default to `propose`. (`auto` never means Claude Code lets the call through; see the guard rule.)
+- Questions for the person: `add_item` with `ask_person: true` (`state.asks_person`) waits under Needs you like a proposal and alerts. `decide_item` `answer` (with the text in `feedback`) completes it, saves the answer as memory and queues a run; `approve` marks a request done (also queues a run). The pane shows Answer… and Done; Claude answers with the plugin's `answer_item`.
+- Approving a proposal (`state.action`) does **not** complete it — it stays active with `approved_at` set, and the next run carries it out (`next_task` returns `execute`). The web approve route queues a run. Rejecting on a goal adds a `feedback` memory.
+
+## Runs
+
+The scheduler pass is `schedulerPass` in `core/src/goal-tick.ts`. It takes a lease so one session schedules, expires stale runs, runs due health checks and watches, and claims due runs atomically (`goal_runs.holder`). The quarterdeck-goals plugin calls it through the MCP tool `goals_tick` every 30 s (`plugins/quarterdeck-goals/hooks/runner.ts`) and starts each claimed run in a background subagent (`quarterdeck-goals:goal-runner`, description `Goal: <name> (<run id>)`). The agent calls `get_goal_brief(goal_id, run_id)`, works, and calls `end_run`. A run that ends without `end_run` is marked failed; one past `max_run_minutes` is stopped and timed out. The runner starts nothing unless the guard's `status` tool is present.
+
+**Usage limit**: the guard plugin reports a run agent's final message when it looks like a stop (`report_run_end`). `reportRunEnd` skips a run that hit the usage limit and sets `goal_run_hold` until the reset it names (or 30 min); `schedulerPass` claims nothing while held, and the overview carries `hold` for the pane. Any other error fails the run with its message. A turn that dies on an API error has an empty `answer` (Claude Code's limit message isn't the model's), so the guard words one from `$.session.usage().rateLimits` when a window is at 100% (`limitMessage`); before that, limit stops showed as "stopped on an error: no message" (Nov 2026).
+
+**What a run is doing**: the guard plugin reports each run tool call that isn't Quarterdeck's own (`run_progress`, plugin-only, both person-only lists): `tool` as it starts, `waiting` from its `classic.PermissionRequest` hook (Claude Code is about to ask the person), `settled` once the call returns. `reportRunProgress` keeps it in `goal_runs` (`now_tool`, `waiting_tool` and their times); `describeActivity` shows "Waiting for your permission: <call>" (`activity.waiting`, yellow in the pane, named in the status line) or the newer of "Using <call>" and the latest event. The label is `toolLabel` in the guard, never more than the first line of a command, path, address or query. Its input field is `label`, not `tool`: `callServer` spreads the input into `$.tool.call({ tool, ...input })`, so a `tool` key would replace the tool's name.
+
+## Model
+
+`goals.model` (`normalizeModel` in `core/src/goals.ts`): the model a goal's runs use, either an alias (`haiku`/`sonnet`/`opus`) or a full id. null means the model of whichever session claims the run. `ClaimedRun.model` goes to `$.agent.spawn`'s `model` (the registered `goal-runner` agent sets none). New goals get a model by what they do: `/goal-new <objective>` takes it from the same Haiku call that suggests the schedule (`suggestSchedule`: haiku to check and report, sonnet to triage and propose, opus to write for a reader or judge what's hard to undo; smaller for hourly goals), each template sets its own (`Template.model`), and `NEW_GOAL_MODEL` (sonnet) stands in when Haiku names none. No question is asked; the creation message names the model and why (`newGoalModelText`). The pane's expanded goal has "Model: … · Change…" (`$.ui.ask`, the 4 `MODEL_CHOICES`, or an id typed under Other) and notes when the last run's reported model (`goal_runs.model`, from the guard's usage report) differs; `CLAUDE_CODE_SUBAGENT_MODEL` outranks it. `spawn` takes no effort, so effort can't be set per goal.
+
+## Creating goals
+
+Claude creates goals with the plugin tool `new_goal` (`createNewGoal`, shared with `/goal-new <objective>`): the schedule question is the person's yes, so dismissing it creates nothing (`pickSchedule` `cancelable`), and it sets only what `/goal-new` does (everything stays `propose`); the server's `create_goal`, which takes autonomy, tool maps and watches, stays person-only. `/goal-new` and the pane's Set schedule suggest a schedule (Haiku via `$.model.complete`, keyword rules as fallback, `plugins/quarterdeck-goals/hooks/schedule.ts`). A goal's instructions are copied from its template at creation, so existing goals need `update_goal` to pick up template changes.
+
+**One-off goals** (`goals.one_off`): `endRun` retires one whose run leaves nothing open (`finishIfDone`), so "done" is `status 'retired'` with `one_off`. The overview still lists the newest 10 done one-offs; `run_goal` (Run again) revives one (`reviveIfDone`); rejecting a one-off's proposal queues a run to revise it.
+
+## Discuss and change (`core/src/goal-changes.ts`)
+
+The pane's Discuss (on a goal whose last run failed, and per goal / per run when expanded) sends the goal or run into the conversation (`discussPrompt`, with the run's agent id for its transcript). Expanded, "Discuss this goal…" / "Discuss this run…" open a question box first (`discussing` state, like a to-do's Ask…); the question replaces the stock one, and an empty box sends the stock one.
+
+`update_goal` (MCP, person-only; the plugin tool confirms every change with `$.ui.ask` via `describeGoalChanges`) changes name, objective, instructions, autonomy, tool rules, memory and status. `instructions_edits` (`[{old, new}]`, like the Edit tool) changes part of the instructions: each `old` must be there exactly once (`applyInstructionEdits` in core, `editInstructions` in `hooks/model.ts` checks before asking), and the person sees only those replacements. Prefer it to resending the whole text. The overview cuts instructions to 1500 characters for the pane, so the plugin's `goal_detail` and `update_goal` fetch the goal with `goals_overview` `full_instructions: true` (`withDetail`), else an edit past the cut fails its check (seen Nov 2026 on the Issue Fixer's 5.5k-character instructions).
+
+## To-do lists (`core/src/todos.ts`, MCP `todo_list` / `todo_add` / `todo_set`, plugin `hooks/todos.ts`)
+
+The person's lists, shown in the Goals pane. A list is an active non-goal plan in the project's directory (paths compared case- and slash-insensitively); a plan with one root over children shows the children. `/todo` and `add_todo` add to the plan named "To do", made on first use. `edit_todo` and the pane's Edit reword one (`todo_set` with `text`). Ask / Plan / Start send the to-do into the conversation with `$.prompt.submit` (Ask… opens a question box in the pane, `askingAbout` state; the question, or an opinion when left empty, goes with the to-do and changes nothing; Plan first runs the built-in `/plan` through `$.command.run` when `$.command.list()` has it, else the prompt asks Claude to enter plan mode); Plan and Start mark it active; to-dos never run in the background. Pressing a to-do's text expands it; ☐ ticks it. No hooks: Claude reads the list only when asked.

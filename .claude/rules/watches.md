@@ -1,0 +1,30 @@
+---
+paths:
+  - "core/src/watches.ts"
+  - "core/src/status-check.ts"
+  - "core/src/goal-tick.ts"
+  - "core/src/goal-overview.ts"
+  - "plugins/quarterdeck-goals/hooks/runner.ts"
+  - "plugins/quarterdeck-goals/hooks/templates.ts"
+  - "plugins/quarterdeck-goals/hooks/model.ts"
+  - "plugins/quarterdeck-goals/skills/goal-watches/**"
+  - "web/components/GoalView.tsx"
+---
+
+# Watches, status checks and status tones
+
+## Watches (`core/src/watches.ts`; skill `plugins/quarterdeck-goals/skills/goal-watches`)
+
+A run starts when something happens. A watch is a shell command, run in the goal's directory every `every_minutes`, that prints one line per current item; lines not in its `seen` list become `goal_watch_events`. `schedulerPass` runs due watches after health checks (`checkWatches`, at most `WATCH_BUDGET_MS` a pass) and `queueForWatchEvents` queues one run with trigger `watch`; the brief's `watch_events` lists the new lines (`takeWatchEvents` stamps them with the run). The first check is only the baseline, and a failed check changes nothing; `failRun` gives a run's events back (`releaseWatchEvents`). Each event queues at most one run (`queued_at`), which is what stops a skipped run being re-queued every pass. Only the person sets one, through `update_goal` / `create_goal` `watches`, and `describeGoalChanges` shows the whole command; the MCP handler then checks it once (`firstChecks`) and answers how it went. `runVerifyCommand` takes `{ stdoutOnly, tailChars }` for this. A watch with `status` rules (`WatchStatusRules`, column `status_rules`, schema 12; `validateStatusRules` / `matchStatusRules`) sets the goal's status and tone from each check's lines in `recordWatchLines`, with no run unless the winning rule has `run: true`: it writes only on a change, clears any `status_check`, and marks `goals.status_source` `watch:<name>` (`run` from `end_run`, `check` from a status check); the overview's `status_note.source` lets the pane say "set by watch <name>" and keeps such a status from going stale when a run ends. The text comes only from the rule, never the output. The update trigger on `goal_watches` names its columns so a routine check doesn't bump `plans.revision`, and the overview leaves out `last_checked_at` for the same reason.
+
+## Tool watches (`kind = 'tool'`)
+
+For what only a connector reaches (Gmail): the server can't call a connector, so `schedulerPass` with `toolWatches` (the plugin's `goals_tick` passes `tool_watches: true`) hands the due ones back in `tool_watches` (`takeDueToolWatches` sets `asked_at`; unanswered, they go out again after `WATCH_REPORT_GRACE_MS`). `checkToolWatch` in `hooks/runner.ts` calls the tool with `$.tool.call` (so the person's permission deny rules still apply; 30 s limit) and answers with the MCP tool `watch_report`, where `matchLines` reads the lines (`match`, or every `"id"` in a JSON answer) and `queueForWatchEvents` queues the run, which the runner claims with a second pass at once. `setWatch` refuses anything but `mcp__` tools, Quarterdeck's own tools, and a tool the goal's `tool_map` puts in a category that isn't `auto`. Spiked Nov 2026: from a plugin timer both `$.tool.call` and `$.mcp.call('claude.ai Gmail', …)` reach the Gmail connector with no prompt and no model turn; not yet tried in the standing session. `watch_report` is plugin-only (both person-only lists).
+
+## Status checks (`core/src/status-check.ts`)
+
+`end_run` can attach a `status_check` (`github_pr`/`github_issue`, repo, number, `holds_while`, `otherwise`) to the status it sets; core validates it and stores it on `goals.status_check`. `schedulerPass` calls `checkStatuses` after watches: at most one check per goal every 5 minutes (times kept in memory), `gh ... view --json state` through `execFile` with an argument array. A holding state writes nothing, so `plans.revision` stays put; an `otherwise` state sets that status and clears the check; anything else, or 3 failures in a row (`status_check_failures`), shows the status stale.
+
+## Status tones
+
+`end_run` can give `status_tone` (`ok` / `attention` / `problem`, `STATUS_TONES` in `core/src/status-check.ts`) with a status; it is stored on `goals.status_tone`, ignored without a status and cleared along with it. A `status_check`'s `otherwise` entry is plain text (the tone stays) or `{status, tone}`. `goals_overview` gives `status_note.tone`; the pane colours the bracketed status green / yellow / red (`toneColor` in `hooks/pane.tsx`; still dimmed when stale) and the web goal page shows it as a badge in the same colours. Runs pick a tone, never a colour, so the meaning is the same for every goal. The fixer templates (`STATUS` in `hooks/templates.ts`) say which tone fits; a closed PR is `attention`, not `problem`, since closing one is often the person's own decision.
