@@ -395,8 +395,8 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
     const note = cleanStatusNote(status)
     updateGoal(db, run.plan_id, note
       ? { status_note: note, status_note_at: now, status_note_untrusted: run.untrusted_source ?? null,
-          status_check: check, status_check_at: check ? now : null, status_check_failures: 0, status_tone: tone }
-      : { status_note: null, status_note_at: null, status_note_untrusted: null, status_check: null, status_check_at: null, status_check_failures: 0, status_tone: null })
+          status_check: check, status_check_at: check ? now : null, status_check_failures: 0, status_tone: tone, status_source: 'run' }
+      : { status_note: null, status_note_at: null, status_note_untrusted: null, status_check: null, status_check_at: null, status_check_failures: 0, status_tone: null, status_source: null })
   }
   archiveResolved(db, run.plan_id)
   finishIfDone(db, run.plan_id)

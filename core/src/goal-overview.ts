@@ -13,7 +13,7 @@ import { autonomyFor, isAttemptBlocked } from './goal-engine.js'
 import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
 import { describeWatch, listWatches, watchFailing } from './watches.js'
-import type { Event, Goal, GoalRun, Task } from './types.js'
+import type { Event, Goal, GoalRun, Task, Watch } from './types.js'
 import { getRunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { leaseHolder } from './goal-tick.js'
@@ -42,13 +42,17 @@ function clip(text: string | null, max: number): string | null {
  * shows, dimmed, since it is the last word a run gave. `untrusted` is what the
  * run that set it had read, so the pane can mark it.
  */
-export function statusNote(goal: Goal, runs: GoalRun[]): { text: string; at: string | null; stale: boolean; untrusted: string | null; tone: Goal['status_tone'] } | null {
+export function statusNote(goal: Goal, runs: GoalRun[], watches: Pick<Watch, 'name' | 'fail_count' | 'status_rules'>[] = []): { text: string; at: string | null; stale: boolean; untrusted: string | null; tone: Goal['status_tone']; source: string | null } | null {
   if (!goal.status_note) return null
   const last = runs.find((r) => r.status !== 'queued' && r.status !== 'running' && r.status !== 'skipped')
-  const stale = (goal.status_check_failures ?? 0) >= STATUS_CHECK_MAX_FAILURES
+  // A watch's status is as fresh as its last check: a run that ends after it doesn't make it stale,
+  // but the watch failing, losing its status rules or being removed does
+  const byWatch = goal.status_source?.startsWith('watch:') ?? false
+  const setter = byWatch ? watches.find((w) => `watch:${w.name}` === goal.status_source) : undefined
+  const stale = byWatch ? !setter || !setter.status_rules || watchFailing(setter) : (goal.status_check_failures ?? 0) >= STATUS_CHECK_MAX_FAILURES
     || (!!last && (last.status === 'failed' || last.status === 'timed_out'
     || (!!last.ended_at && !!goal.status_note_at && last.ended_at > goal.status_note_at)))
-  return { text: goal.status_note, at: goal.status_note_at, stale, untrusted: goal.status_note_untrusted, tone: goal.status_tone ?? null }
+  return { text: goal.status_note, at: goal.status_note_at, stale, untrusted: goal.status_note_untrusted, tone: goal.status_tone ?? null, source: goal.status_source ?? null }
 }
 
 /** Done one-off goals listed, newest first. */
@@ -263,7 +267,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         status: goal.status,
         one_off: goal.one_off,
         model: goal.model,
-        status_note: statusNote(goal, runs),
+        status_note: statusNote(goal, runs, watches),
         instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions)!,
         autonomy: goal.autonomy,
         tool_map: goal.tool_map,

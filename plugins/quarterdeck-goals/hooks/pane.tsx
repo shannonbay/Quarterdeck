@@ -346,7 +346,7 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
         // Under the name, in full (the one line clips it), with when a run set it
         <Text key={`status-${g.id}`}>
           {statusNoteText($, e, `status-text-${g.id}`, g.statusNote, g.statusNote.text)}
-          <Text dimColor>{g.statusNote.at || g.statusNote.watchEvents ? ' · set' : ''}{g.statusNote.at ? ` ${ago(g.statusNote.at, view.now)}` : ''}{g.statusNote.watchEvents ? ' after reading watch events' : ''}{g.statusNote.stale ? ' · may be out of date' : ''}</Text>
+          <Text dimColor>{g.statusNote.at || g.statusNote.watchEvents || g.statusNote.byWatch ? ' · set' : ''}{g.statusNote.at ? ` ${ago(g.statusNote.at, view.now)}` : ''}{g.statusNote.watchEvents ? ' after reading watch events' : ''}{g.statusNote.byWatch ? ` by watch ${g.statusNote.byWatch}` : ''}{g.statusNote.stale ? ' · may be out of date' : ''}</Text>
         </Text>
       )}
       {activityLine($, e, view, g)}

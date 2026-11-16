@@ -166,6 +166,8 @@ export interface Goal {
   status_check_failures: number
   /** How the goal stands by its status: ok (green), attention (yellow), problem (red); null: no tone. */
   status_tone: import('./status-check.js').StatusTone | null
+  /** What set the status: 'run', 'check' or 'watch:<name>'; null for older statuses. */
+  status_source: string | null
   /** When the goal last went back to active (set by updateGoal); the runaway breaker counts only runs since then. */
   resumed_at: string | null
 }
@@ -193,6 +195,8 @@ export interface Watch {
   every_minutes: number
   /** 'new': a line never seen before is an event. 'change': when the output differs from the last check, its lines that weren't in that check are events. */
   fires: WatchFires
+  /** Rules that set the goal's status from the check's lines; null: the watch sets no status. */
+  status_rules: WatchStatusRules | null
   /** Lines seen so far, newest check first ('change': the last check's lines only). */
   seen: string[]
   /** When the first check that worked recorded what was there; null before it. */
@@ -209,11 +213,25 @@ export interface Watch {
 
 export type WatchFires = 'new' | 'change'
 
+/** What a watch sets the goal's status to: the status text comes only from here, never from the output. */
+export interface WatchStatusOutcome {
+  status: string
+  tone?: import('./status-check.js').StatusTone
+  /** true: the lines also start a run (as events). Left out: the watch only sets the status. */
+  run?: boolean
+}
+
+/** The first rule whose `match` (a regular expression) matches any line wins; else `default`. */
+export interface WatchStatusRules {
+  rules: (WatchStatusOutcome & { match: string })[]
+  default?: WatchStatusOutcome
+}
+
 /** What the person sets on a watch. */
 export type WatchSpec =
-  | { command: string; every_minutes?: number; fires?: WatchFires }
+  | { command: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
   /** A tool the plugin calls (a connector's search): `match` turns its answer into lines. */
-  | { tool: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: WatchFires }
+  | { tool: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
 
 export interface WatchEvent {
   id: string

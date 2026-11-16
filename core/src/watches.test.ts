@@ -8,8 +8,9 @@ import {
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, describeWatch, reportToolWatch, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE,
+  matchLines, describeWatch, reportToolWatch, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
+import { statusNote } from './goal-overview.js'
 
 let db: Database
 let dir: string
@@ -469,5 +470,95 @@ describe('the overview and deleting', () => {
     deleteGoal(db, 'g1')
     expect(getWatch(db, w.id)).toBeUndefined()
     expect(db.prepare('SELECT COUNT(*) n FROM goal_watch_events').get()).toEqual({ n: 0 })
+  })
+})
+
+describe('status rules', () => {
+  const rules = {
+    rules: [{ match: '^M ', status: 'uncommitted changes', tone: 'attention' as const }, { match: '^!! ', status: 'build broken', tone: 'problem' as const, run: true }],
+    default: { status: 'clean', tone: 'ok' as const },
+  }
+
+  it('refuses rules it cannot use', () => {
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: '(', status: 'x' }] } })).toThrow(/regular expression/)
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: 'a', status: '' }] } })).toThrow(/need a status/)
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: 'a', status: 'x'.repeat(41) }] } })).toThrow(/longer than 40/)
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: 'a', status: 'x', tone: 'red' as never }] } })).toThrow(/tone/)
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [] } })).toThrow(/neither/)
+    expect(() => setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: Array.from({ length: 11 }, () => ({ match: 'a', status: 'x' })) } })).toThrow(/more than 10/)
+  })
+
+  it('sets the status from the baseline on, without events or a run', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', fires: 'change', status: rules })
+    expect(w.status_rules).toEqual(rules)
+    expect(recordWatchLines(db, w.id, { lines: [] }).status).toMatchObject({ status: 'clean' })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'clean', status_tone: 'ok', status_source: 'watch:tree' })
+    const check = recordWatchLines(db, w.id, { lines: ['M core/a.ts', '?? b'] })
+    expect(check.fresh).toEqual([])
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'uncommitted changes', status_tone: 'attention', status_note_untrusted: null })
+    expect(listWatchEvents(db, 'g1')).toEqual([])
+  })
+
+  it('writes nothing when the status is already right', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', fires: 'change', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const revision = (db.prepare('SELECT revision FROM plans WHERE id = ?').get('g1') as { revision: number }).revision
+    expect(recordWatchLines(db, w.id, { lines: ['x'] }).status).toBeUndefined()
+    expect((db.prepare('SELECT revision FROM plans WHERE id = ?').get('g1') as { revision: number }).revision).toBe(revision)
+  })
+
+  it('starts a run only when the matching rule says run', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', fires: 'change', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const check = recordWatchLines(db, w.id, { lines: ['!! tsc failed'] })
+    expect(check.fresh).toEqual(['!! tsc failed'])
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'build broken', status_tone: 'problem' })
+    expect(listWatchEvents(db, 'g1').map((e) => e.line)).toEqual(['!! tsc failed'])
+  })
+
+  it("replaces a run's status and its status check", () => {
+    updateGoal(db, 'g1', { status_note: 'PR #3 awaiting review', status_source: 'run', status_check: { kind: 'github_pr', repo: 'a/b', number: 3, holds_while: ['OPEN'], otherwise: {} } as never })
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'clean', status_check: null, status_source: 'watch:tree' })
+  })
+
+  it('a change of rules starts the watch over', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: ['1'] })
+    expect(setWatch(db, 'g1', 'tree', { command: 'echo', status: { default: { status: 'fine' } } })).toMatchObject({ seen: [], baseline_at: null, status_rules: { rules: [], default: { status: 'fine' } } })
+    expect(setWatch(db, 'g1', 'tree', { command: 'echo' }).status_rules).toBeNull()
+  })
+
+  it("a watch's status stays fresh after a run, and goes stale when its watch fails, loses its rules or is removed", () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const note = () => statusNote(getGoal(db, 'g1')!, listRuns(db, 'g1', 5), listWatches(db, 'g1'))!
+    expect(note()).toMatchObject({ text: 'clean', stale: false, source: 'watch:tree' })
+    const run = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, run.id, 'Nothing to do.')
+    expect(note().stale).toBe(false)
+    for (let i = 0; i < WATCH_FAILING_AFTER; i++) recordWatchLines(db, w.id, { error: 'down' })
+    expect(note().stale).toBe(true)
+    recordWatchLines(db, w.id, { lines: [] })
+    expect(note().stale).toBe(false)
+    setWatch(db, 'g1', 'tree', { command: 'echo' })
+    expect(note().stale).toBe(true)
+    setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    expect(note().stale).toBe(false)
+    removeWatch(db, 'g1', 'tree')
+    expect(note().stale).toBe(true)
+    expect(buildOverview(db).goals.find((g) => g.id === 'g1')!.status_note).toMatchObject({ text: 'clean', stale: true })
+  })
+
+  it("a run's status replaces a watch's, and a run without one clears it", () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: [] })
+    const first = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, first.id, 'Checked.', 'all good')
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'all good', status_source: 'run' })
+    const second = startRun(db, queueRun(db, 'g1').id, null)
+    endRun(db, second.id, 'Checked.', '')
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: null, status_source: null })
   })
 })

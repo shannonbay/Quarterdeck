@@ -167,6 +167,7 @@ export async function evaluateStatusCheck(db: Database, planId: string, runFile:
       status_check: null,
       status_check_at: null,
       status_check_failures: 0,
+      status_source: 'check',
     })
     return { outcome: 'changed', value, text }
   }

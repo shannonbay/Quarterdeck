@@ -150,6 +150,14 @@ export const TOOLS = [
               input: { type: 'object', description: "The tool's arguments. Ask for ids only, and few results" },
               match: { type: 'string', description: 'A regular expression over the tool\'s answer; each match (its first group) is one item. Left out: every "id" in a JSON answer' },
               every_minutes: { type: 'number', description: 'How often to check (default 5, at least 1)' },
+              status: {
+                type: ['object', 'null'],
+                description: "Sets the goal's status (and tone) from each check's lines, with no run: for a goal that only reports a state. The first rule matching a line wins, else default. A run starts only when that one says run: true. Best with fires: 'change'",
+                properties: {
+                  rules: { type: 'array', items: { type: 'object', properties: { match: { type: 'string' }, status: { type: 'string' }, tone: { type: 'string', enum: ['ok', 'attention', 'problem'] }, run: { type: 'boolean' } }, required: ['match', 'status'] } },
+                  default: { type: 'object', properties: { status: { type: 'string' }, tone: { type: 'string', enum: ['ok', 'attention', 'problem'] }, run: { type: 'boolean' } }, required: ['status'] },
+                },
+              },
               fires: { type: 'string', enum: ['new', 'change'], description: "'new' (default): a line never seen before starts a run. 'change': for a state (git status, a health URL): a run starts when the output differs from the last check" },
             },
           },

@@ -91,7 +91,7 @@ describe('evaluateStatusCheck', () => {
     updateRun(db, run.id, { untrusted_at: now, untrusted_source: 'watch events' })
     endRun(db, run.id, 'done', 'PR #12 awaiting review', check)
     expect(await evaluateStatusCheck(db, 'g1', answer('MERGED'))).toMatchObject({ outcome: 'changed', text: 'PR #12 merged' })
-    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'PR #12 merged', status_note_untrusted: 'watch events', status_check: null })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'PR #12 merged', status_note_untrusted: 'watch events', status_check: null, status_source: 'check' })
     const note = buildOverview(db).goals.find((g) => g.id === 'g1')!.status_note
     expect(note).toMatchObject({ text: 'PR #12 merged', stale: false })
   })

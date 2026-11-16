@@ -205,6 +205,15 @@ const WatchSchema = z.object({
   input: z.record(z.unknown()).optional().describe("The tool's arguments"),
   match: z.string().optional().describe('A regular expression over the tool\'s answer; each match (its first group) is one line. Left out: every "id" in a JSON answer'),
   every_minutes: z.number().int().min(1).optional().describe('How often to check (default 5)'),
+  status: z.object({
+    rules: z.array(z.object({
+      match: z.string().min(1).describe('A regular expression tested against each line'),
+      status: z.string().min(1).max(40).describe('The status text this rule sets (never taken from the output)'),
+      tone: z.enum(['ok', 'attention', 'problem']).optional(),
+      run: z.boolean().optional().describe('true: the lines also start a run'),
+    })).max(10).optional().describe('The first rule matching any line wins'),
+    default: z.object({ status: z.string().min(1).max(40), tone: z.enum(['ok', 'attention', 'problem']).optional(), run: z.boolean().optional() }).optional().describe('When no rule matches'),
+  }).nullable().optional().describe("Sets the goal's status (and tone) from each check's lines with no agent run: for a goal that only reports a state. A run starts only when the matching rule says run: true. Best with fires: 'change'"),
   fires: z.enum(['new', 'change']).optional().describe("'new' (default): a line never seen before starts a run. 'change': for a state (a working tree, a health URL): a run starts when the output differs from the last check, with the lines that weren't in it ((none) when it became empty)"),
 }).refine((v) => (v.command === undefined) !== (v.tool === undefined), { message: 'A watch has a command or a tool, one of them.' })
 

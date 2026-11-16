@@ -92,6 +92,22 @@ node -e "fetch(process.argv[1]).then(r=>console.log(r.status)).catch(()=>console
 watches: { "working tree": { command: "git describe --always --dirty", fires: "change" } }
 ```
 
+## A watch that sets the status, with no run
+
+When a goal only reports a state (is the tree clean, is the service up), a run that reads the check and calls `end_run` costs a model turn for every change. Give the watch `status` rules instead and it sets the goal's status and tone itself:
+
+```
+watches: { "working tree": { command: "git status --porcelain", fires: "change", status: {
+  rules: [{ match: "^ ?M ", status: "uncommitted changes", tone: "attention" }],
+  default: { status: "clean", tone: "ok" } } } }
+```
+
+- At each check the first rule whose `match` (a regular expression) matches any line wins; with none, `default`. The status is set from the first check on.
+- The status text is only ever the rule's, never the command's output, at most 40 characters. Tones are `ok`, `attention` and `problem`.
+- No run starts unless the winning rule (or the default) says `run: true`; then its lines are events, as usual.
+- The status is written only when it changes. It replaces a run's status and any status check attached to it; a later run's `end_run` status replaces it in turn. The pane says "set by watch <name>".
+- Changing a watch's rules starts it over, like changing its command.
+
 ## Tool watches: what only a connector reaches
 
 Mail, calendars and cloud files have no command to run: only a Claude Code session can reach their connectors. For those a watch names a **tool** instead of a command. The session that runs goals calls it every few minutes, with no model turn and nobody asked, and Quarterdeck reads the items out of its answer.
