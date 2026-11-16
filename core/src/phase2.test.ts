@@ -197,6 +197,31 @@ describe('goal guard', () => {
     expect(matchToolCategory(map, 'Bash', { command: 'gh pr review 3 --approve' })).toBe('github.write')
   })
 
+  it("holds the issue refiner's comments and labels until approved, reads labels, and refuses every other GitHub write (refineRules in the goals plugin)", () => {
+    // The rules refineRules() gives, for Bash (PowerShell gets the same)
+    const tool_map = {
+      'Bash(gh label*)': 'github.write', 'Bash(gh issue comment*)': 'github.issue', 'Bash(gh issue edit*)': 'github.issue', 'Bash(gh issue close*)': 'github.write',
+      'Bash(gh api*)': 'github.write', 'Bash(git push*)': 'github.write', 'Bash(gh pr create*)': 'github.write',
+      'Bash(gh label create*)': 'github.issue', 'Bash(gh label list*)': 'untrusted', 'Bash(gh issue view*)': 'untrusted',
+    }
+    updateGoal(db, 'g1', { tool_map, autonomy: { 'github.issue': 'propose', 'github.write': 'off' } })
+    const run = insertRun(db, 'g1', 'watch', 'running')
+    const decide = (command: string) => guardToolCallForRun(db, run.id, 'Bash', { command })
+    expect(decide('gh label list --json name')).toMatchObject({ decision: 'allow', category: 'untrusted' }) // longer than gh label*
+    expect(decide('gh issue view 45 --json title,body')).toMatchObject({ decision: 'allow', category: 'untrusted' })
+    for (const c of ['gh issue comment 45 --body-file C:/tmp/r.md', 'gh issue edit 45 --add-label refined', 'gh label create refined --color 0e8a16']) {
+      expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.issue', reason: expect.stringMatching(/needs approval/) })
+    }
+    for (const c of ['gh label delete refined --yes', 'gh issue close 45', 'cd ../x-issue-refine && git push origin HEAD', 'gh pr create --fill', 'gh api repos/o/r/issues/45 -X PATCH']) {
+      expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.write', reason: expect.stringMatching(/off/) })
+    }
+    const item = addItem(db, 'g1', run.id, { goal: 'Refine #45', action: { category: 'github.issue', summary: 'post the refinement and label it refined' } }).task
+    approveTask(db, 'g1', item.id)
+    expect(decide('gh issue comment 45 --body-file C:/tmp/r.md').decision).toBe('allow')
+    expect(decide('gh issue edit 45 --add-label refined').decision).toBe('allow') // the same approved action
+    expect(decide('gh issue close 45').decision).toBe('deny') // an approval never opens an off category
+  })
+
   it('holds a pushed command until its proposal is approved, and marks a run that reads through a command rule', () => {
     updateGoal(db, 'g1', { tool_map: { 'Bash(git push*)': 'code.pull_request', 'Bash(gh issue view*)': 'untrusted' }, autonomy: { 'code.pull_request': 'propose' } })
     const run = insertRun(db, 'g1', 'manual', 'running')

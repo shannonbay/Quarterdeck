@@ -26,7 +26,7 @@ The idea behind it: persistent intent may matter more than persistent memory.
 
 *A friend's goal selling his old audio gear stops to ask for condition notes and his floor price instead of guessing.*
 
-Start with `/goal-new`: pick a ready-made goal (unsubscribe from mailing lists, a weekly job scan with your CV, tidy Downloads, inbox triage, keep your GitHub profile current, fix failing CI, work on new GitHub issues, review pull requests) or type your own. Schedules can be plain words: "30d", "weekdays at 9", "the first of every month".
+Start with `/goal-new`: pick a ready-made goal (unsubscribe from mailing lists, a weekly job scan with your CV, tidy Downloads, inbox triage, keep your GitHub profile current, fix failing CI, refine new GitHub issues, work on new GitHub issues, review pull requests) or type your own. Schedules can be plain words: "30d", "weekdays at 9", "the first of every month".
 
 ## Example: from issue to merged PR
 
@@ -40,6 +40,8 @@ Quarterdeck's own repo is looked after by two goals made from the ready-made *Wo
 The run took 2 minutes. The PR says it was opened by a Quarterdeck goal, and the CI goal now watches main for that merge, ready to propose a fix if anything breaks.
 
 An issue anyone can open is an obvious place to hide instructions for an agent, so the Issue Fixer only takes work from the repo's owner, members and collaborators, and it reads only their comments. When anyone else opens an issue, the run sees just the number and the author, and asks you under **Needs you** whether to work on it before reading a word. Pushing and opening a pull request wait for your approval in Quarterdeck's guard, not only in the instructions: the goal's tool rules name `git push` and `gh pr create`, and turn off other writes to GitHub (comments, `gh api`, `gh auth`). These rules match command names, so a script that pushes for it gets past them; running goals in a sandbox is on the roadmap.
+
+A new issue often lacks the context to build it well, so a new Issue Fixer asks whether to wait for a `refined` label, and waits by default. The *Refine new issues* goal (the Issue Refiner) reads each new issue and the code it touches, asks you about every decision it can't settle from the code, and then proposes a spec: what is asked, the files involved, an approach and acceptance criteria. Once you approve, it posts the spec as a comment and adds `refined`, which starts the fixer. When only the reporter can answer something, it posts their questions instead and adds `needs-clarification`, and their reply starts it again. Only someone with triage rights can label an issue, so nobody else can label their own issue to get it built. To switch an Issue Fixer you made earlier, ask Claude to replace its "new issues" and "new issues from others" watches with one on issues labelled `refined`, and to update its instructions from the template.
 
 Here's another one on video, from a to-do in the pane to the feature working live (80 seconds, with sound and captions). This time the Issue Fixer stopped to ask which of two designs to build before writing any code ([issue #17](https://github.com/shannonbay/Quarterdeck/issues/17), [PR #18](https://github.com/shannonbay/Quarterdeck/pull/18)):
 
