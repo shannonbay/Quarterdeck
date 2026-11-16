@@ -348,6 +348,20 @@ test('/goal-new offers three templates and More…, which holds the rest', async
   expect(input.autonomy).toEqual({ 'profile.readme_edit': 'propose' })
 })
 
+test('/goal-new pages on through More… to the last templates, each question holding at most 4 choices', async ($, on) => {
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'Review pull requests'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked).toHaveLength(3)
+  expect(asked[2]).toContain('More ready-made goals')
+  expect(made.text).toContain('Created the goal "PR Reviewer"')
+  const input = fake.of('create_goal')[0]?.input as { autonomy: Record<string, string>; watches: Record<string, unknown>; schedule: unknown }
+  expect(input.autonomy).toEqual({ 'github.review': 'propose', 'github.write': 'off' })
+  expect(Object.keys(input.watches)).toEqual(['pull requests', 'pull requests from others'])
+  expect(input.schedule).toBeNull()
+})
+
 test('the CI fixer has a watch on the chosen branch and no schedule, and runs once at once', async ($, on) => {
   const { asked } = engine(on, { answers: ['More…', 'Fix failing CI', 'main'] })
   const fake = fakeQuarterdeck(on, [])

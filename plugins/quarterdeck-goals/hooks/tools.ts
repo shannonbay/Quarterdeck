@@ -364,11 +364,17 @@ export async function goalCommand($: Engine, command: 'goal-run' | 'goal-pause' 
 async function newFromTemplate($: Engine): Promise<string> {
   let picked: string
   try {
-    // A question holds 4 choices: the first few templates, then More… for the rest
-    const first = TEMPLATES.slice(0, FIRST_CHOICES).map((t) => t.label)
-    const rest = TEMPLATES.slice(FIRST_CHOICES).map((t) => t.label)
-    picked = await $.ui.ask("What should I look after? Pick a ready-made goal, or type your own under Other (e.g. keep my inbox under 20 unread).", rest.length ? [...first, MORE] : first)
-    if (picked === MORE) picked = await $.ui.ask('More ready-made goals: pick one, or type your own under Other.', rest.length > 1 ? rest : [...rest, 'Cancel'])
+    // A question holds 4 choices: a few templates, then More… for the next page
+    const labels = TEMPLATES.map((t) => t.label)
+    let start = 0
+    do {
+      const left = labels.slice(start)
+      const page = left.length > 4 ? [...left.slice(0, FIRST_CHOICES), MORE] : left.length > 1 ? left : [...left, 'Cancel']
+      picked = await $.ui.ask(start === 0
+        ? "What should I look after? Pick a ready-made goal, or type your own under Other (e.g. keep my inbox under 20 unread)."
+        : 'More ready-made goals: pick one, or type your own under Other.', page)
+      start += FIRST_CHOICES
+    } while (picked === MORE)
   } catch {
     return 'No goal created.'
   }

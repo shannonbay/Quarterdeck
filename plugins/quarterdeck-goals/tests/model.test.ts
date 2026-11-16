@@ -5,7 +5,7 @@ import { phoneText } from '../hooks/alerts'
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
   statusText, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
-import { TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH } from '../hooks/templates'
+import { TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
 const card = (over: Parameters<typeof goal>[0]) => toCard({ ...goal(over), open_item_count: over.open_items?.length ?? 0 })
@@ -342,6 +342,48 @@ test('the GitHub fixers need approval to push or open a pull request, by command
     }
     expect(t.tool_map.Bash).toBeUndefined() // Bash itself stays unmapped
   }
+})
+
+test("the PR reviewer watches non-draft pull requests by head sha, and asks before reading anyone else's", () => {
+  const watches = TEMPLATES.find((t) => t.name === 'PR Reviewer')!.watches!('')
+  const trusted = watches[PR_REVIEW_WATCH].command
+  const others = watches[PR_REVIEW_OTHERS_WATCH].command
+  expect(trusted).toContain('pulls?state=open')
+  expect(trusted).toContain('(.draft | not) and (.author_association | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))')
+  expect(trusted).toMatch(/\.head\.sha"$/)
+  expect(others).toContain('IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\")) | not)')
+  expect(others).toMatch(/\.head\.sha \+ \\" by \\" \+ \.user\.login"$/)
+  for (const c of [trusted, others]) expect(c).not.toMatch(/\.title|\.body/) // only numbers, shas and logins reach a run
+  expect(PR_REVIEW).toContain(`"${PR_REVIEW_WATCH}"`)
+  expect(PR_REVIEW).toContain(`"${PR_REVIEW_OTHERS_WATCH}"`)
+  expect(PR_REVIEW).toContain("Don't read or check out those")
+})
+
+test('the PR reviewer may only post a COMMENT review, once approved, from its own clone', () => {
+  const t = TEMPLATES.find((x) => x.name === 'PR Reviewer')!
+  const mode = (rule: string) => t.autonomy[t.tool_map[rule]] ?? null
+  for (const tool of ['Bash', 'PowerShell']) {
+    expect(mode(`${tool}(gh api repos/*/pulls/*/reviews*)`)).toBe('propose')
+    for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr review*', 'gh pr comment*', 'gh api*', 'gh auth*']) expect(mode(`${tool}(${w})`)).toBe('off')
+    for (const r of ['gh pr view*', 'gh pr diff*', 'gh pr checkout*']) expect(t.tool_map[`${tool}(${r})`]).toBe('untrusted')
+  }
+  expect(t.tool_map.Bash).toBeUndefined()
+  expect(t.schedule).toBeNull()
+  expect(PR_REVIEW).toContain('event: "COMMENT"')
+  expect(PR_REVIEW).toContain('Never approve or request changes')
+  expect(PR_REVIEW).toContain('-pr-review on the end')
+  expect(PR_REVIEW).toContain('gh pr checkout <number> --detach')
+  expect(PR_REVIEW).toContain("Reviewed by a [Quarterdeck](https://github.com/shannonbay/Quarterdeck) goal (<this goal's name>).")
+  expect(PR_REVIEW).not.toContain('For each fix') // the fixers' clone sentence
+  // Tests beyond the project's own: one for each suspected bug, and a live try, never against real data
+  expect(PR_REVIEW).toContain('write a test that would show it')
+  expect(PR_REVIEW).toContain('try the change live')
+  expect(PR_REVIEW).toContain('never my real data')
+  expect(PR_REVIEW).toContain('git clean -fd')
+  // It and the Issue Fixer act on each other's work, which the runaway breaker doesn't count: re-reviews post only real problems, and rounds are capped
+  expect(PR_REVIEW).toContain('A re-review posts only real problems')
+  expect(PR_REVIEW).toContain('When a re-review finds no real problem, post nothing')
+  expect(PR_REVIEW).toContain('Once 3 are posted on one, ask me')
 })
 
 test('the issue fixer skips help-wanted issues and signs its pull requests', () => {

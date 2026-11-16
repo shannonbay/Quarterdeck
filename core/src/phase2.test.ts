@@ -188,6 +188,15 @@ describe('goal guard', () => {
     expect(matchToolCategory({ 'Bash(gh issue view*)': 'untrusted' }, 'Bash', { command: 'gh issue view 3' })).toBe('untrusted')
   })
 
+  it("lets the PR reviewer's reviews endpoint past gh api* only with the repo written out (reviewRules in the goals plugin)", () => {
+    const map = { 'Bash(gh api*)': 'github.write', 'Bash(gh pr review*)': 'github.write', 'Bash(gh api repos/*/pulls/*/reviews*)': 'github.review' }
+    expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/octo/app/pulls/3/reviews --method POST --input C:/tmp/r.json' })).toBe('github.review')
+    // commandParts splits at { and }, leaving "gh api repos/", which only gh api* matches
+    expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/{owner}/{repo}/pulls/3/reviews --method POST --input r.json' })).toBe('github.write')
+    expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/octo/app/pulls/3/merge -X PUT' })).toBe('github.write')
+    expect(matchToolCategory(map, 'Bash', { command: 'gh pr review 3 --approve' })).toBe('github.write')
+  })
+
   it('holds a pushed command until its proposal is approved, and marks a run that reads through a command rule', () => {
     updateGoal(db, 'g1', { tool_map: { 'Bash(git push*)': 'code.pull_request', 'Bash(gh issue view*)': 'untrusted' }, autonomy: { 'code.pull_request': 'propose' } })
     const run = insertRun(db, 'g1', 'manual', 'running')
