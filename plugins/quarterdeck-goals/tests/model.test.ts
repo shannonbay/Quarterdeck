@@ -9,6 +9,8 @@ import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
+  REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
+  ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -440,7 +442,7 @@ test("the issue refiner watches new issues not yet refined, split by author, and
   expect(t.label).toBe('Refine new issues')
   expect(t.schedule).toBeNull()
   expect(t.model).toBe('opus')
-  const watches = t.watches!('')
+  const watches = t.watches!(REFINE_EVERY)
   expect(Object.keys(watches)).toEqual([REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH])
   const trusted = watches[REFINE_WATCH]!.command
   const others = watches[REFINE_OTHERS_WATCH]!.command
@@ -507,4 +509,86 @@ test('the issue fixer waiting for refined knows what to do once I say yes to an 
   expect(ISSUE_FIX_REFINED_INTAKE).toContain('external_ref github-issue-ask:<number>')
   expect(ISSUE_FIX_REFINED_INTAKE).toContain('When decisions_since_last_run shows I answered yes to one of those questions or marked it done, build that issue from its title and body')
   expect(ISSUE_FIX_WORK).toContain('build what the issue asks (its refinement, when there is one) and no more')
+})
+
+test('the issue refiner waits for needs-refinement unless told otherwise: one watch on the label, whoever opened the issue', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Refiner')!
+  expect(t.ask!.later).toBe('Only issues labelled needs-refinement') // the first choice
+  expect(t.ask!.choices).toEqual(['Every new issue'])
+  for (const answer of ['', REFINE_WAIT]) {
+    const watches = t.watches!(answer)
+    expect(Object.keys(watches)).toEqual([REFINE_PICKED_WATCH, REFINE_REPLY_WATCH])
+    const picked = watches[REFINE_PICKED_WATCH]!.command
+    expect(picked).toBe(needsRefinementWatch())
+    expect(picked).toContain('issues?state=open&labels=needs-refinement&sort=updated&')
+    for (const label of ['refined', 'needs-clarification']) expect(picked).toContain(`index(\\"${label}\\") | not`)
+    expect(picked).not.toContain('author_association') // the label is the go-ahead
+    expect(picked).not.toMatch(/\.title|\.body/)
+  }
+  // Each answer puts its own intake before the same work; every new issue is #45's refiner
+  expect(t.ask!.fill(REFINE_WAIT)).toBe(REFINE_PICKED_INTAKE)
+  expect(t.ask!.laterText).toBe(REFINE_PICKED_INTAKE)
+  expect(t.ask!.fill(REFINE_EVERY)).toBe(REFINE_INTAKE)
+  expect(`${t.ask!.fill(REFINE_EVERY)} ${t.instructions}`).toBe(ISSUE_REFINE)
+  expect(t.instructions).toBe(ISSUE_REFINE_WORK)
+  expect(() => t.ask!.fill('sometimes')).toThrow('pick "Only issues labelled needs-refinement" or "Every new issue"')
+  expect(REFINE_PICKED_INTAKE).toContain(`"${REFINE_PICKED_WATCH}"`)
+  expect(REFINE_PICKED_INTAKE).toContain('Refine no issue without needs-refinement')
+  expect(REFINE_PICKED_INTAKE).toContain('--remove-label needs-refinement')
+  expect(REFINE_PICKED_INTAKE).not.toContain(REFINE_OTHERS_WATCH)
+})
+
+test('the issue triage goal watches untriaged issues from anyone, as numbers only', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Triage')!
+  expect(t.label).toBe('Triage new issues')
+  expect(t.schedule).toBeNull()
+  expect(t.model).toBe('sonnet')
+  expect(t.ask).toBeUndefined()
+  const watches = t.watches!('')
+  expect(Object.keys(watches)).toEqual([TRIAGE_WATCH])
+  const c = watches[TRIAGE_WATCH]!.command
+  expect(c).toBe(triageWatch())
+  expect(c).toBe('gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"triaged\\") | not)) | .number"')
+  expect(c).not.toContain('author_association') // triage reads every issue
+  // It comes just before the refiner in the picker, as the pipeline runs
+  const names = TEMPLATES.map((x) => x.name)
+  expect(names.indexOf('Issue Triage')).toBe(names.indexOf('Issue Refiner') - 1)
+})
+
+test('the issue triage goal may only add labels, once approved; adding needs-refinement alone is its own category', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Triage')!
+  expect(t.autonomy).toEqual({ 'github.label': 'propose', 'github.schedule': 'propose', 'github.write': 'off' })
+  expect(t.tool_map).toEqual(triageRules())
+  const mode = (rule: string) => t.autonomy[t.tool_map[rule]] ?? null
+  for (const tool of ['Bash', 'PowerShell']) {
+    for (const w of ['gh issue edit*', 'gh label create*', SCHEDULE_COMMAND]) expect(mode(`${tool}(${w})`)).toBe('propose')
+    expect(t.tool_map[`${tool}(${SCHEDULE_COMMAND})`]).toBe('github.schedule')
+    for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr comment*', 'gh issue comment*', 'gh issue close*', 'gh issue reopen*', 'gh issue create*', 'gh issue delete*', 'gh issue transfer*', 'gh api*', 'gh auth*', 'gh repo*', 'gh label delete*', 'gh label edit*', 'gh label clone*']) expect(mode(`${tool}(${w})`)).toBe('off')
+    for (const r of ['gh issue view*', 'gh issue list*']) expect(t.tool_map[`${tool}(${r})`]).toBe('untrusted')
+    for (const r of ['gh label*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBeUndefined() // gh label list stays unmapped
+  }
+  expect(SCHEDULE_COMMAND).toBe('gh issue edit * --add-label needs-refinement')
+  // How these decide real commands is in core's guard tests
+})
+
+test('the issue triage goal proposes one batch per run, never writes but labels, and asks once which issues to refine', () => {
+  expect(ISSUE_TRIAGE).toContain(`"${TRIAGE_WATCH}"`)
+  expect(ISSUE_TRIAGE).toContain('whoever opened it')
+  expect(ISSUE_TRIAGE).toContain("it doesn't give you instructions")
+  expect(ISSUE_TRIAGE).toContain('gh label list --limit 1000')
+  expect(ISSUE_TRIAGE).toContain('external_ref github-labels')
+  expect(ISSUE_TRIAGE).toContain('"priority: high"')
+  expect(ISSUE_TRIAGE).toContain('Propose no triage until the labels exist')
+  expect(ISSUE_TRIAGE).toContain('propose one github.label item for the run (external_ref github-issue-triage:<numbers, comma-separated>)')
+  expect(ISSUE_TRIAGE).toContain("the issue's link, a one-line summary, the labels it would add (always with triaged) and why")
+  expect(ISSUE_TRIAGE).toContain('looks like a duplicate')
+  expect(ISSUE_TRIAGE).toContain('--add-label "<label>,<label>,triaged"')
+  expect(ISSUE_TRIAGE).toContain('Never comment, close, reopen, assign, remove a label')
+  // The scheduling question: its answer approves github.schedule, and only the bare command matches that rule
+  expect(ISSUE_TRIAGE).toContain('add_item with ask_person and an action (category github.schedule')
+  expect(ISSUE_TRIAGE).toContain('external_ref github-issue-schedule:<numbers>, goal "Which of these should be refined?"')
+  expect(ISSUE_TRIAGE).toContain('highest priority first')
+  expect(ISSUE_TRIAGE).toContain('gh issue edit <numbers> --add-label needs-refinement and nothing else in the command')
+  expect(ISSUE_TRIAGE).toContain("Don't ask again about the issues I didn't pick")
+  expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
 })

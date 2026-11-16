@@ -163,6 +163,29 @@ describe('decideItem', () => {
     expect(() => decideItem(db, 'g1', p.id, { decision: 'answer', feedback: 'yes' })).toThrow(/isn't a question/)
   })
 
+  it('a question that carries an action: the answer approves that action until the run completes it', () => {
+    updateGoal(db, 'g1', { tool_map: { 'Bash(gh issue edit * --add-label needs-refinement)': 'github.schedule' }, autonomy: { 'github.schedule': 'propose', 'email.delete': 'off' } })
+    const asking = insertRun(db, 'g1', 'watch', 'running')
+    const added = addItem(db, 'g1', asking.id, { goal: 'Which of these should be refined?', ask_person: true, action: { category: 'github.schedule', summary: 'Label the issues you pick needs-refinement' } })
+    expect(added.mode).toBe('propose')
+    expect(added.task).toMatchObject({ status: 'active', review_requested_at: expect.any(String), state: { asks_person: true, action: { category: 'github.schedule' } } })
+    expect(buildOverview(db).goals[0]!.needs_you[0]).toMatchObject({ id: added.task.id, asks_person: true })
+    const label = (run: string) => guardToolCallForRun(db, run, 'Bash', { command: 'gh issue edit 12 --add-label needs-refinement' }).decision
+    expect(label(asking.id)).toBe('deny')
+    const { task, queuedRun } = decideItem(db, 'g1', added.task.id, { decision: 'answer', feedback: '12' })
+    expect(task).toMatchObject({ status: 'active', approved_at: expect.any(String), result: 'Your answer: 12' })
+    updateRun(db, asking.id, { status: 'completed', ended_at: new Date().toISOString() })
+    const next = claimRun(db, 'g1', { holder: 'A', queuedRunId: queuedRun!.id })!
+    const brief = buildBrief(db, 'g1', next.run_id)
+    expect(brief.decisions_since_last_run).toEqual([expect.objectContaining({ item: added.task.id, answer: '12', action: expect.objectContaining({ category: 'github.schedule' }) })])
+    expect(brief.open_items.find((i) => i.id === added.task.id)).toMatchObject({ approved_to_execute: true })
+    expect(label(next.run_id)).toBe('allow')
+    updateTask(db, 'g1', added.task.id, { status: 'completed' })
+    expect(label(next.run_id)).toBe('deny')
+    // An off category is refused, question or not
+    expect(() => addItem(db, 'g1', null, { goal: 'Delete these?', ask_person: true, action: { category: 'email.delete', summary: 'x' } })).toThrow(/off/)
+  })
+
   it('an answer or approval during a run queues a run after it, not the run already going', async () => {
     const asking = claimRun(db, 'g1', { holder: 'A' })!
     const q = addItem(db, 'g1', asking.run_id, { goal: 'Build Part 1 first?', ask_person: true }).task

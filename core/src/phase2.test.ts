@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { refineRules } from '../../plugins/quarterdeck-goals/hooks/templates'
+import { refineRules, triageRules } from '../../plugins/quarterdeck-goals/hooks/templates'
 import { tmpdir } from 'os'
 import type { Database } from './sqlite.js'
 import {
-  openDatabase, createGoal, updateGoal, getGoal, insertRun, addItem, approveTask, updateTask, getTask,
+  openDatabase, createGoal, updateGoal, getGoal, insertRun, addItem, approveTask, updateTask, getTask, decideItem,
   parseCron, cronNext, getSchedule, setSchedule, nextScheduledRun, decideTick,
   enableEventTrigger, disableEventTrigger, verifyEventSecret,
   runHealthCheck, listHealth, healthDue, parseHealthValue, buildBrief,
@@ -217,6 +217,36 @@ describe('goal guard', () => {
     expect(decide('gh issue comment 45 --body-file C:/tmp/r.md').decision).toBe('allow')
     expect(decide('gh issue edit 45 --add-label refined').decision).toBe('allow') // the same approved action
     expect(decide('gh issue close 45').decision).toBe('deny') // an approval never opens an off category
+  })
+
+  it("holds the triage goal's labels until approved, lets an answered question add needs-refinement only, and refuses every other GitHub write (triageRules in the goals plugin)", () => {
+    updateGoal(db, 'g1', { tool_map: triageRules(), autonomy: { 'github.label': 'propose', 'github.schedule': 'propose', 'github.write': 'off' } })
+    const run = insertRun(db, 'g1', 'watch', 'running')
+    const decide = (command: string) => guardToolCallForRun(db, run.id, 'Bash', { command })
+    expect(decide('gh label list --limit 1000 --json name,description')).toEqual({ decision: 'allow', run_id: run.id }) // unmapped: allowed, marks nothing
+    for (const c of ['gh issue view 49 --json number,title,body,labels,author,url', 'gh issue list --state open --limit 500 --json number,title']) {
+      expect(decide(c)).toMatchObject({ decision: 'allow', category: 'untrusted' })
+    }
+    for (const c of ['gh issue edit 49 --add-label "bug,priority: high,triaged"', 'gh label create triaged --color 0e8a16']) {
+      expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.label', reason: expect.stringMatching(/needs approval/) })
+    }
+    expect(decide('gh issue edit 49 51 --add-label needs-refinement')).toMatchObject({ decision: 'deny', category: 'github.schedule' })
+    for (const c of ['gh issue comment 49 --body hi', 'gh issue close 49', 'gh issue reopen 49', 'gh label delete bug --yes', 'git push origin HEAD', 'gh pr create --fill', 'gh api repos/o/r/issues/49 -X PATCH']) {
+      expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.write', reason: expect.stringMatching(/off/) })
+    }
+    // Approving the batch opens labelling, but not the needs-refinement pick
+    const batch = addItem(db, 'g1', run.id, { goal: 'Triage #49, #51', external_ref: 'github-issue-triage:49,51', action: { category: 'github.label', summary: 'label #49 and #51' } }).task
+    approveTask(db, 'g1', batch.id)
+    expect(decide('gh issue edit 49 --add-label "bug,priority: high,triaged"').decision).toBe('allow')
+    expect(decide('gh issue edit 49 51 --add-label needs-refinement').decision).toBe('deny')
+    expect(decide('gh issue comment 49 --body hi').decision).toBe('deny') // an approval never opens an off category
+    updateTask(db, 'g1', batch.id, { status: 'completed' })
+    // Answering "Which of these should be refined?" opens needs-refinement alone
+    const ask = addItem(db, 'g1', run.id, { goal: 'Which of these should be refined?', external_ref: 'github-issue-schedule:49,51', ask_person: true, action: { category: 'github.schedule', summary: 'Label the issues I pick needs-refinement' } }).task
+    decideItem(db, 'g1', ask.id, { decision: 'answer', feedback: '49' })
+    expect(decide('gh issue edit 49 --add-label needs-refinement').decision).toBe('allow')
+    expect(decide('gh issue edit 49 --add-label needs-refinement,bug').decision).toBe('deny') // any other label is github.label
+    expect(decide('gh issue edit 49 --add-label needs-refinement --body x')).toMatchObject({ decision: 'deny', category: 'github.label' })
   })
 
   it('holds a pushed command until its proposal is approved, and marks a run that reads through a command rule', () => {

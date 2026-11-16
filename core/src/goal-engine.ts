@@ -48,7 +48,10 @@ export interface AddItemInput {
   /**
    * Something only the person can give or do (a choice, information, connecting
    * a service, allowing a site): the item waits under Needs you, like a proposal,
-   * until they answer it or mark it done.
+   * until they answer it or mark it done. With an `action`, the answer (or Done)
+   * also approves that action, as approving a proposal does: the item stays
+   * active and the guard lets its category through until the run completes it.
+   * An `off` category is still refused.
    */
   ask_person?: boolean
 }
@@ -155,13 +158,15 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   if (mode === 'off') {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`)
   }
-  const state = { action: { ...input.action, params: input.action.params ?? {} } }
-  if (mode === 'propose') {
+  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...(input.ask_person && { asks_person: true }) }
+  // A question that carries an action waits for the person whatever the category's mode:
+  // their answer (or Done) approves that action, like approving a proposal (decideItem)
+  if (mode === 'propose' || input.ask_person) {
     insertTask(db, { ...base, status: 'active', state, requires_approval: true, review_requested_at: now })
   } else {
     insertTask(db, { ...base, status: 'completed', state, result: input.result ?? `Done automatically: ${input.action.summary}` })
   }
-  return { task: getTask(db, planId, id)!, existing: false, mode, ...(untrusted !== undefined && { untrusted }), ...(similar.length > 0 && { similar_categories: similar }) }
+  return { task: getTask(db, planId, id)!, existing: false, mode: input.ask_person ? 'propose' : mode, ...(untrusted !== undefined && { untrusted }), ...(similar.length > 0 && { similar_categories: similar }) }
 }
 
 // ── Brief ─────────────────────────────────────────────────────────────────────

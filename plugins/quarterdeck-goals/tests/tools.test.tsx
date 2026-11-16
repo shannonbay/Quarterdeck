@@ -447,8 +447,50 @@ test('the issue fixer refuses an answer typed under Other that is neither choice
   expect(fake.of('create_goal')).toHaveLength(0)
 })
 
-test('the issue refiner watches new issues by author and reporters\' replies, proposes its comments, and runs at once', async ($, on) => {
-  engine(on, { answers: ['More…', 'More…', 'Refine new issues'] })
+test('the issue refiner offers to wait for needs-refinement first; waiting, one watch on the label replaces the two by author', async ($, on) => {
+  const { asked, choices } = engine(on, { answers: ['More…', 'More…', 'Refine new issues', 'Only issues labelled needs-refinement'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked[3]).toContain('Which issues should it refine?')
+  expect(choices[3]?.slice(0, 3)).toEqual(['Only issues labelled needs-refinement', 'Every new issue', 'Cancel'])
+  expect(made.text).toContain('a run starts when its watch sees issues labelled needs-refinement or replies on issues labelled needs-clarification')
+  const input = fake.of('create_goal')[0]?.input as { instructions: string; watches: Record<string, { command: string }> }
+  expect(Object.keys(input.watches)).toEqual(['issues labelled needs-refinement', 'replies on issues labelled needs-clarification'])
+  expect(input.instructions).toMatch(/^A watch starts a run when an open issue is labelled needs-refinement/)
+  expect(input.instructions).not.toContain('issues to refine from others')
+  expect(input.instructions).toContain('external_ref github-issue-refine:<number>') // the same refiner after it
+})
+
+test('the issue refiner refuses an answer typed under Other that is neither choice', async ($, on) => {
+  engine(on, { answers: ['More…', 'More…', 'Refine new issues', 'sometimes'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toBe('No goal created: pick "Only issues labelled needs-refinement" or "Every new issue".')
+  expect(fake.of('create_goal')).toHaveLength(0)
+})
+
+test('the issue triage goal watches untriaged issues, proposes labels, and runs at once', async ($, on) => {
+  const { choices } = engine(on, { answers: ['More…', 'More…', 'Triage new issues'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(choices[2]).toEqual(['Triage new issues', 'Refine new issues', 'Work on new GitHub issues', 'Review pull requests'])
+  expect(made.text).toContain('Created the goal "Issue Triage"')
+  expect(made.text).toContain('a run starts when its watch sees issues to triage')
+  expect(made.text).toContain('Its runs use Sonnet')
+  const input = fake.of('create_goal')[0]?.input as { schedule: unknown; model: string; autonomy: Record<string, string>; instructions: string; watches: Record<string, { command: string }> }
+  expect(input.schedule).toBeNull()
+  expect(input.model).toBe('sonnet')
+  expect(input.autonomy).toEqual({ 'github.label': 'propose', 'github.schedule': 'propose', 'github.write': 'off' })
+  expect(Object.keys(input.watches)).toEqual(['issues to triage'])
+  expect(input.instructions).toMatch(/^A watch starts a run when an issue is opened/)
+  expect(fake.of('run_goal')).toHaveLength(1)
+})
+
+test('the issue refiner taking every new issue watches new issues by author and reporters\' replies, proposes its comments, and runs at once', async ($, on) => {
+  engine(on, { answers: ['More…', 'More…', 'Refine new issues', 'Every new issue'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))

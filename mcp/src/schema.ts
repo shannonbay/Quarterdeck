@@ -82,7 +82,7 @@ export const AddItemSchema = z.object({
     'An action this item is about. "propose" categories create an item that waits for human approval; "auto" categories record an action you already took; "off" categories are refused.'),
   status: z.enum(['pending', 'active']).optional().describe('For items without an action (default pending)'),
   ask_person: z.boolean().optional().describe(
-    'true: this item asks the person for something only they can give or do (a choice, details, connecting a service, allowing a site). It waits under Needs you and alerts them; their answer arrives as memory. Keep goal to the short question and put what they need to answer it (the options, what you would do and why) in notes: the Goals pane shows notes under the question.'),
+    'true: this item asks the person for something only they can give or do (a choice, details, connecting a service, allowing a site). It waits under Needs you and alerts them; their answer arrives as memory. Keep goal to the short question and put what they need to answer it (the options, what you would do and why) in notes: the Goals pane shows notes under the question. With an action too, their answer (or Done) also approves that action, as approving a proposal does: it shows approved_to_execute, so carry it out as the answer says (doing nothing if the answer asks for nothing), then complete the item.'),
   result: z.string().optional().describe('For auto actions: what you did'),
   notes: z.string().optional(),
 })
