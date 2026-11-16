@@ -392,7 +392,7 @@ async function newFromTemplate($: Engine): Promise<string> {
   let answer = ''
   if (template.ask) {
     try {
-      answer = await $.ui.ask(template.ask.question, [template.ask.later, 'Cancel'])
+      answer = await $.ui.ask(template.ask.question, [template.ask.later, ...(template.ask.choices ?? []), 'Cancel'])
     } catch {
       return 'No goal created.'
     }

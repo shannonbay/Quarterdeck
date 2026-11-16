@@ -281,6 +281,8 @@ export function engine(on: On, opts: { answer?: string; answers?: string[]; guar
   const notifications: string[] = []
   const statuses: (string | undefined)[] = []
   const asked: string[] = []
+  // The choices each question offered, in the same order as `asked`
+  const choices: string[][] = []
   const clock = mock.clock(on, { now: NOW })
   mock.store(on)
   on('command.register', (_, e) => ({ value: { command: e.name } }))
@@ -313,6 +315,7 @@ export function engine(on: On, opts: { answer?: string; answers?: string[]; guar
   on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
     const question = e.questions[0]!.question
     asked.push(question)
+    choices.push(e.questions[0]!.options.map((o: { label: string }) => o.label))
     // `answers` are given in order, one per question; otherwise `answer` to every one
     const answer = opts.answers ? (opts.answers[asked.length - 1] ?? 'Cancel') : (opts.answer ?? 'Cancel')
     return { result: { questions: e.questions, answers: { [question]: answer } } }
@@ -362,7 +365,7 @@ export function engine(on: On, opts: { answer?: string; answers?: string[]; guar
     return { result: { message: `stopped ${id}` } } as never
   })
   return {
-    toasts, notifications, pushes, statuses, asked, clock, agents, spawned, stopped, prompts, box,
+    toasts, notifications, pushes, statuses, asked, choices, clock, agents, spawned, stopped, prompts, box,
     /** Loads or unloads the guard plugin (its status tool). */
     setGuarded: (on: boolean) => {
       tools = on ? [GUARD] : []

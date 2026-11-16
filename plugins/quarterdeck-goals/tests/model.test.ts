@@ -5,7 +5,11 @@ import { phoneText } from '../hooks/alerts'
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
   statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
-import { TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH } from '../hooks/templates'
+import {
+  TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
+  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
+  ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
+} from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
 const card = (over: Parameters<typeof goal>[0]) => toCard({ ...goal(over), open_item_count: over.open_items?.length ?? 0 })
@@ -326,7 +330,7 @@ test('only the two GitHub fixer templates say what their status means, with a gi
 })
 
 test("the issue fixer works on collaborators' issues and asks before reading anyone else's", () => {
-  const watches = TEMPLATES.find((t) => t.name === 'Issue Fixer')!.watches!('')
+  const watches = TEMPLATES.find((t) => t.name === 'Issue Fixer')!.watches!(ISSUE_FIX_EVERY)
   const trusted = watches['new issues'].command
   const others = watches[ISSUE_FIX_OTHERS_WATCH].command
   expect(trusted).toContain('(.author_association | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\")))')
@@ -400,7 +404,107 @@ test('the PR reviewer may only post a COMMENT review, once approved, from its ow
 
 test('the issue fixer skips help-wanted issues and signs its pull requests', () => {
   const issueFixer = TEMPLATES.find((t) => t.name === 'Issue Fixer')!
-  for (const w of Object.values(issueFixer.watches!('')).slice(0, 2)) expect(w.command).toContain('index(\\"help wanted\\") | not')
+  for (const w of Object.values(issueFixer.watches!(ISSUE_FIX_EVERY)).slice(0, 2)) expect(w.command).toContain('index(\\"help wanted\\") | not')
+  expect(issueFixer.watches!(ISSUE_FIX_WAIT)[ISSUE_FIX_REFINED_WATCH]!.command).toContain('index(\\"help wanted\\") | not')
   expect(ISSUE_FIX).toContain('Skip issues labelled help wanted')
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('Skip issues labelled help wanted')
   expect(ISSUE_FIX).toContain("Opened by a [Quarterdeck](https://github.com/shannonbay/Quarterdeck) goal (<this goal's name>).")
+})
+
+test('the issue fixer waits for refined unless told otherwise: one watch on the label, whoever opened the issue', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Fixer')!
+  expect(t.ask!.later).toBe('Wait for refined') // the first choice
+  expect(t.ask!.choices).toEqual(['Start on every new issue'])
+  for (const answer of ['', ISSUE_FIX_WAIT]) {
+    const watches = t.watches!(answer)
+    expect(Object.keys(watches)).toEqual([ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH])
+    const refined = watches[ISSUE_FIX_REFINED_WATCH]!.command
+    expect(refined).toContain('issues?state=open&labels=refined&')
+    expect(refined).not.toContain('author_association') // the label is the trust signal
+    expect(refined).not.toMatch(/\.title|\.body/)
+  }
+  expect(Object.keys(t.watches!(ISSUE_FIX_EVERY))).toEqual(['new issues', ISSUE_FIX_OTHERS_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH])
+  // Each answer puts its own intake before the same work; not waiting is today's fixer
+  expect(t.ask!.fill(ISSUE_FIX_WAIT)).toBe(ISSUE_FIX_REFINED_INTAKE)
+  expect(t.ask!.laterText).toBe(ISSUE_FIX_REFINED_INTAKE)
+  expect(`${t.ask!.fill(ISSUE_FIX_EVERY)} ${t.instructions}`).toBe(ISSUE_FIX)
+  expect(t.instructions).toBe(ISSUE_FIX_WORK)
+  expect(() => t.ask!.fill('sometimes')).toThrow('pick "Wait for refined" or "Start on every new issue"')
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain(`"${ISSUE_FIX_REFINED_WATCH}"`)
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('the refinement wins')
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR"))')
+})
+
+test("the issue refiner watches new issues not yet refined, split by author, and its reporters' replies", () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Refiner')!
+  expect(t.label).toBe('Refine new issues')
+  expect(t.schedule).toBeNull()
+  expect(t.model).toBe('opus')
+  const watches = t.watches!('')
+  expect(Object.keys(watches)).toEqual([REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH])
+  const trusted = watches[REFINE_WATCH]!.command
+  const others = watches[REFINE_OTHERS_WATCH]!.command
+  for (const c of [trusted, others]) {
+    for (const label of ['refined', 'needs-clarification', 'help wanted']) expect(c).toContain(`index(\\"${label}\\") | not`)
+  }
+  expect(trusted).toMatch(/IN\(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"\)\)\) \| \.number"$/)
+  expect(others).toContain('IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\")) | not)')
+  expect(others).toMatch(/\.user\.login"$/)
+  // Tried under both sh and cmd.exe: the issue author's comments after the goal's own last one, as "<number> <id>"
+  const replies = watches[REFINE_REPLY_WATCH]!.command
+  expect(replies).toBe(clarifyReplyWatch())
+  expect(replies).toContain('--label needs-clarification')
+  expect(replies).toContain(`contains(\\"${GOAL_SIGN}\\")`)
+  expect(replies).toMatch(/\.n \+ \\" \\" \+ \.c\.id"$/)
+  expect(replies).not.toContain('$') // sh would expand a jq variable inside the double quotes
+  expect(replies).toContain('select(.last != null and') // a hand-labelled issue the goal never asked about doesn't fire
+  expect(replies).toContain('map(select(startswith(\\"\\u003e\\") | not))') // a quote reply of the sign line is still the reporter's
+  // cmd.exe reads the text inside each \"…\" jq string as unquoted (every \" toggles its quoting), so < > & | there would be redirects or a new command
+  for (const s of replies.match(/\\"(.*?)\\"/g)!) expect(s).not.toMatch(/[<>&|]/)
+  for (const c of [trusted, others, replies]) expect(c).not.toMatch(/\| \.title|\| \.body"/) // only numbers, ids and logins reach a run
+})
+
+test('the issue refiner may only comment on and label issues, once approved, and never push or edit an issue', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Refiner')!
+  expect(t.autonomy).toEqual({ 'github.issue': 'propose', 'github.write': 'off' })
+  expect(t.tool_map).toEqual(refineRules())
+  const mode = (rule: string) => t.autonomy[t.tool_map[rule]] ?? null
+  for (const tool of ['Bash', 'PowerShell']) {
+    for (const w of ['gh issue comment*', 'gh issue edit*', 'gh label create*']) expect(mode(`${tool}(${w})`)).toBe('propose')
+    for (const w of ['git push*', 'git -C * push*', 'gh pr create*', 'gh pr merge*', 'gh pr comment*', 'gh issue close*', 'gh issue create*', 'gh api*', 'gh auth*', 'gh label delete*', 'gh label edit*', 'gh label clone*']) expect(mode(`${tool}(${w})`)).toBe('off')
+    expect(t.tool_map[`${tool}(gh issue view*)`]).toBe('untrusted')
+    for (const r of ['gh label*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBeUndefined() // gh label list stays unmapped
+  }
+  expect(t.tool_map.Bash).toBeUndefined()
+  // How these decide real commands (gh label list over gh label*, and so on) is in core's guard tests
+  expect(ISSUE_REFINE).toContain('Never change an issue\'s title, body')
+  expect(ISSUE_REFINE).toContain('never change, commit or push files')
+  expect(ISSUE_REFINE).toContain('-issue-refine on the end')
+  expect(ISSUE_REFINE).toContain(GOAL_SIGN)
+})
+
+test('the issue refiner settles every decision with the person before it proposes, linking the issue', () => {
+  expect(ISSUE_REFINE).toContain('Resolve every open question before proposing')
+  expect(ISSUE_REFINE).toContain('one add_item with ask_person per question (external_ref github-issue-question:<number>:<n>)')
+  expect(ISSUE_REFINE).toContain('the issue\'s number and link')
+  expect(ISSUE_REFINE).toContain('the one you recommend')
+  expect(ISSUE_REFINE).toContain('Propose nothing for that issue in that run')
+  expect(ISSUE_REFINE).toContain('external_ref github-issue-refine:<number>) with the issue\'s link')
+  expect(ISSUE_REFINE).toContain('no open questions section')
+  expect(ISSUE_REFINE).toContain('only for facts I can\'t supply')
+  expect(ISSUE_REFINE).toContain(`"${REFINE_OTHERS_WATCH}"`)
+  expect(ISSUE_REFINE).toContain("Don't read those issues, not even the title")
+  expect(ISSUE_REFINE).toContain(`"${REFINE_REPLY_WATCH}"`)
+  expect(ISSUE_REFINE).toContain('--remove-label needs-clarification')
+  expect(ISSUE_REFINE).toContain('external_ref github-labels')
+  expect(ISSUE_REFINE).toContain('gh label list --limit 1000') // 30 without it
+  // The skip covers the new-issue watches only: a reply always comes on a needs-clarification issue
+  expect(ISSUE_REFINE).toContain(`Under "${REFINE_WATCH}" and "${REFINE_OTHERS_WATCH}", skip issues labelled`)
+  expect(ISSUE_REFINE).toContain(`Posted by a [${GOAL_SIGN} (<this goal's name>)." on a line of its own`)
+})
+
+test('the issue fixer waiting for refined knows what to do once I say yes to an issue with no refinement', () => {
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('external_ref github-issue-ask:<number>')
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('When decisions_since_last_run shows I answered yes to one of those questions or marked it done, build that issue from its title and body')
+  expect(ISSUE_FIX_WORK).toContain('build what the issue asks (its refinement, when there is one) and no more')
 })
