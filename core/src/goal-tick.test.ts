@@ -163,6 +163,21 @@ describe('decideItem', () => {
     expect(() => decideItem(db, 'g1', p.id, { decision: 'answer', feedback: 'yes' })).toThrow(/isn't a question/)
   })
 
+  it('an answer or approval during a run queues a run after it, not the run already going', async () => {
+    const asking = claimRun(db, 'g1', { holder: 'A' })!
+    const q = addItem(db, 'g1', asking.run_id, { goal: 'Build Part 1 first?', ask_person: true }).task
+    const p = addItem(db, 'g1', asking.run_id, { goal: 'Push it', action: { category: 'code.pull_request', summary: 'Push' } }).task
+    const answered = decideItem(db, 'g1', q.id, { decision: 'answer', feedback: 'a' }).queuedRun!
+    expect(answered).toMatchObject({ status: 'queued', trigger: 'manual' })
+    expect(answered.id).not.toBe(asking.run_id)
+    // A second decision rides on the same queued run
+    expect(decideItem(db, 'g1', p.id, { decision: 'approve' }).queuedRun!.id).toBe(answered.id)
+    // It waits while the asking run goes on, then starts
+    expect((await schedulerPass(db, { holder: 'A' })).claimed).toEqual([])
+    updateRun(db, asking.run_id, { status: 'completed', ended_at: new Date().toISOString() })
+    expect((await schedulerPass(db, { holder: 'A' })).claimed.map((c) => c.run_id)).toEqual([answered.id])
+  })
+
   it('approving a proposal keeps it active and queues a run', () => {
     addItem(db, 'g1', null, { goal: 'Reply to Bob', action: { category: 'email.send', summary: 'Send reply' } })
     const r = decideItem(db, 'g1', '1', { decision: 'approve' })

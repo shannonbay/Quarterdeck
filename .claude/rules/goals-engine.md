@@ -19,7 +19,7 @@ Spec: `specs/persistent-goals.md` (phases 1, 2 and 2.5 built). A goal is a plan 
 ## Autonomy and items
 
 - Autonomy per action category: `off` refused by `addItem`, `propose` → item with `requires_approval` and `review_requested_at` set at creation, `auto` → recorded as completed. Unlisted categories default to `propose`. (`auto` never means Claude Code lets the call through; see the guard rule.)
-- Questions for the person: `add_item` with `ask_person: true` (`state.asks_person`) waits under Needs you like a proposal and alerts. `decide_item` `answer` (with the text in `feedback`) completes it, saves the answer as memory and queues a run; `approve` marks a request done (also queues a run). The pane shows Answer… and Done; Claude answers with the plugin's `answer_item`.
+- Questions for the person: `add_item` with `ask_person: true` (`state.asks_person`) waits under Needs you like a proposal and alerts. `decide_item` `answer` (with the text in `feedback`) completes it, saves the answer as memory and queues a run; `approve` marks a request done (also queues a run). These runs (`queueRunAfterDecision`) never join a run already going, which has read its brief and can end without seeing the decision (Nov 2026: an answer two minutes before the asking run ended was lost); they wait behind it, while Run now, watches and webhooks still coalesce into the open run (`queueRun`). The pane shows Answer… and Done; Claude answers with the plugin's `answer_item`.
 - Approving a proposal (`state.action`) does **not** complete it — it stays active with `approved_at` set, and the next run carries it out (`next_task` returns `execute`). The web approve route queues a run. Rejecting on a goal adds a `feedback` memory.
 
 ## Runs

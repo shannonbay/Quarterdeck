@@ -11,7 +11,7 @@ import type { Database } from './sqlite.js'
 import { getTask, updateTask } from './queries.js'
 import { approveTask, isProposal, rejectTask, asksPerson } from './gates.js'
 import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory, RUNAWAY_REF } from './goals.js'
-import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, recordSkip, GoalError, ANSWER_PREFIX } from './goal-engine.js'
+import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, queueRunAfterDecision, recordSkip, GoalError, ANSWER_PREFIX } from './goal-engine.js'
 import { healthDue, runHealthCheck } from './health.js'
 import { checkCommandWatch, countUnqueuedWatchEvents, listWatches, markWatchEventsQueued, takeDueToolWatches, watchDue, type ToolWatchCall } from './watches.js'
 import type { GoalRun, Task } from './types.js'
@@ -323,7 +323,7 @@ export function decideItem(
     // With the question's context (its options, often): an answer like "c" means nothing without it
     const context = task.notes?.trim() ? ` (the question said: ${clipText(task.notes.trim().replace(/\s+/g, ' '), ANSWER_CONTEXT_CHARS)})` : ''
     insertMemory(db, { plan_id: planId, kind: 'fact', text: `You answered "${task.goal}": ${answer}${context}`, source: 'human', source_ref: taskId })
-    if (active()) queuedRun = queueRun(db, planId)
+    if (active()) queuedRun = queueRunAfterDecision(db, planId)
   } else if (task.external_ref === RUNAWAY_REF) {
     // The runaway breaker's "Resume it?" is a request: Approve resumes the goal, as pressing
     // Resume does (no run queued: it carries on from its schedule and watches); Reject marks
@@ -340,7 +340,7 @@ export function decideItem(
   } else if (input.decision === 'approve') {
     approveTask(db, planId, taskId)
     // An approved proposal is carried out by a run; a done request lets the run carry on
-    if ((isProposal(task) || asksPerson(task)) && active()) queuedRun = queueRun(db, planId)
+    if ((isProposal(task) || asksPerson(task)) && active()) queuedRun = queueRunAfterDecision(db, planId)
   } else {
     rejectTask(db, planId, taskId, input.feedback ?? '')
     // A one-off has no schedule to bring the next run: queue one to revise or drop the proposal

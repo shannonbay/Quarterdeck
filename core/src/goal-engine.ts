@@ -337,6 +337,21 @@ export function queueRun(db: Database, planId: string, trigger: TriggerKind = 'm
   return getOpenRun(db, planId) ?? insertRun(db, planId, trigger, 'queued')
 }
 
+/**
+ * Queues a run to act on the person's answer or approval. Unlike queueRun it
+ * doesn't join a run that's already going: that run has read its brief (often
+ * it's the very run that asked) and can end without seeing the decision (seen
+ * Nov 2026: an answer two minutes before the asking run ended was never acted
+ * on). The new run waits in the queue until the running one ends.
+ */
+export function queueRunAfterDecision(db: Database, planId: string): GoalRun {
+  const goal = mustGetGoal(db, planId)
+  if (goal.status !== 'active') throw new GoalError(`Goal is ${goal.status}; resume it before running.`)
+  const queued = db.prepare("SELECT * FROM goal_runs WHERE plan_id = ? AND status = 'queued' ORDER BY started_at LIMIT 1")
+    .get(planId) as GoalRun | undefined
+  return queued ?? insertRun(db, planId, 'manual', 'queued')
+}
+
 export function startRun(db: Database, runId: string, sessionId: string | null): GoalRun {
   const run = getRun(db, runId)
   if (!run) throw new GoalError(`Run ${runId} not found.`)
@@ -464,7 +479,7 @@ export function tripBreakerIfRunaway(db: Database, planId: string, now: Date = n
 }
 
 /**
- * Puts a question (Answer… / Done) or a request (Approve / Reject) of the server's own under
+ * Puts a question (Answerâ€¦ / Done) or a request (Approve / Reject) of the server's own under
  * Needs you, under a fixed ref: a new item the first time, and the same item reopened after
  * that (addItem would only return the answered one).
  */
