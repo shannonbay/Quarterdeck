@@ -286,7 +286,9 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
   const run = runId ? getRun(db, runId) : undefined
   if (runId && (!run || run.plan_id !== planId)) throw new GoalError(`Run ${runId} not found for this goal.`)
 
-  const previous = listRuns(db, planId, 10, { includeSkipped: false }).find((r) => r.id !== runId && r.status !== 'queued' && r.status !== 'running')
+  // The goal's own runs only: a memory curation run reads no decisions, so the ones made before it are still news
+  const previous = listRuns(db, planId, 10, { includeSkipped: false })
+    .find((r) => r.id !== runId && r.status !== 'queued' && r.status !== 'running' && r.trigger !== 'curate')
   const since = previous?.started_at ?? '1970-01-01T00:00:00.000Z'
 
   // Human decisions since the last run: approvals, rejections, overrides
@@ -355,7 +357,10 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
   // And so is the summary of a run that read outside content itself: a summary can carry injected text
   // to the next run as well as memory can. A mark only inherited from a summary doesn't pass on, so the
   // mark ends once the run that read outside content leaves recent_runs (RECENT_RUNS clean runs later)
-  const recentRuns = listRuns(db, planId, 10, { includeSkipped: false }).filter((r) => r.id !== runId && r.summary).slice(0, RECENT_RUNS)
+  // Curation runs' summaries are about memory housekeeping, not the goal's work; and a curation run reads every
+  // memory, so its mark would otherwise pass to the next runs as if they had read untrusted memory themselves
+  const recentRuns = listRuns(db, planId, 10, { includeSkipped: false })
+    .filter((r) => r.id !== runId && r.summary && r.trigger !== 'curate').slice(0, RECENT_RUNS)
   const taintedRun = recentRuns.find(readOutsideContent)
   if (run && taintedRun) markRunUntrusted(db, run.id, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`)
   const marked = run ? getRun(db, run.id) : undefined

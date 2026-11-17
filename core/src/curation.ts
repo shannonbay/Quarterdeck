@@ -280,7 +280,8 @@ export function checkCuration(db: Database, planId: string, changes: CurationCha
       default:
         throw new GoalError(`${what}: type must be merge, rewrite, retire, unpin or add.`)
     }
-    for (const id of touched(c)) {
+    // A merge may list an id twice (cleanChange drops the copy): only another change taking the same memory clashes
+    for (const id of new Set(touched(c))) {
       if (used.has(id)) throw new GoalError(`${what}: memory ${id} is already changed by another change in this proposal.`)
       used.add(id)
     }
