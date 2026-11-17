@@ -760,6 +760,24 @@ export const PR_REVIEW = [
 export const FIRST_CHOICES = 3
 export const MORE = 'More…'
 
+/**
+ * /goal-new's first choice: all the GitHub goals as one pipeline, with the
+ * label handoff on. Not a template itself (the template tests iterate TEMPLATES).
+ */
+export const REPO_LABEL = 'Maintain my repo (all GitHub goals)'
+export const REPO_CI = 'CI Watch And Fix'
+/**
+ * The goals it creates, in pipeline order, each with the answer it is created
+ * with ('' for no question; null for the CI fixer, whose branch is asked once).
+ */
+export const REPO_GOALS: { name: string; answer: string | null }[] = [
+  { name: 'Issue Triage', answer: '' },
+  { name: 'Issue Refiner', answer: REFINE_WAIT },
+  { name: 'Issue Fixer', answer: ISSUE_FIX_WAIT },
+  { name: 'PR Reviewer', answer: '' },
+  { name: REPO_CI, answer: null },
+]
+
 /** The GitHub profile template's standing instructions, after where the repo is. */
 export const GITHUB_PROFILE = [
   'Each run, check my recent public activity with gh (my repos sorted by last push, and my public events) since the last run.',

@@ -7,14 +7,14 @@ import type { EngineInterface } from 'claude-code'
 
 import type { GoalCard } from '../types'
 import { addTodo, answerItem, approve, createGoal, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
-import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, toCard } from './model'
+import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
 import { describeTodo, describeTodos, findTodo } from './todos'
 import { act, actFailure, refresh, refreshTodos } from './sync'
 import { phoneHint, readLastAlert, readLastPoll, readTrace } from './alerts'
-import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, MORE, TEMPLATES } from './templates'
+import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, MORE, NEEDS_REFINEMENT_LABEL, REFINED_LABEL, REPO_CI, REPO_GOALS, REPO_LABEL, TEMPLATES, type Template } from './templates'
 
 type Engine = EngineInterface
 
@@ -377,7 +377,7 @@ async function newFromTemplate($: Engine): Promise<string> {
   let picked: string
   try {
     // A question holds 4 choices: a few templates, then More… for the next page
-    const labels = TEMPLATES.map((t) => t.label)
+    const labels = [REPO_LABEL, ...TEMPLATES.map((t) => t.label)]
     let start = 0
     do {
       const left = labels.slice(start)
@@ -390,6 +390,7 @@ async function newFromTemplate($: Engine): Promise<string> {
   } catch {
     return 'No goal created.'
   }
+  if (picked === REPO_LABEL) return newRepoGoals($)
   const template = TEMPLATES.find((t) => t.label === picked)
   if (!template) return picked.trim() && !/^cancel$/i.test(picked.trim()) ? newGoal($, picked) : 'No goal created.'
   let instructions = template.instructions
@@ -401,13 +402,11 @@ async function newFromTemplate($: Engine): Promise<string> {
       return 'No goal created.'
     }
     if (answer === 'Cancel' || !answer.trim()) return 'No goal created.'
-    let first: string
     try {
-      first = answer === template.ask.later ? template.ask.laterText : template.ask.fill(answer.trim())
+      instructions = templateInstructions(template, answer)
     } catch (err) {
       return `No goal created: ${err instanceof Error ? err.message : String(err)}.`
     }
-    instructions = [first, template.instructions].filter(Boolean).join(' ')
   }
   if (template.cv) {
     let answer = CV_SKIP
@@ -422,23 +421,100 @@ async function newFromTemplate($: Engine): Promise<string> {
   const cwd = await $.session.root()
   let created
   try {
-    const watches = template.watches?.(answer)
-    created = await createGoal($, {
-      name: template.name, objective: template.objective, working_dir: cwd, schedule: template.schedule, model: template.model,
-      instructions, autonomy: template.autonomy, tool_map: template.tool_map, ...(watches && { watches }),
-    })
-    // With no schedule nothing is due: the first run (setting up, catching up) starts now
-    if (!template.schedule) await runNow($, created.id)
+    created = await createFromTemplate($, template, answer, instructions, cwd)
   } catch (err) {
     return `Couldn't create the goal: ${err instanceof Error ? err.message : String(err)}`
   }
   await kick($)
   await refresh($)
-  const checks = (created.watches ?? []).map((w) => ` Watch "${w.name}": ${w.result}.`).join('')
+  const checks = watchChecks(created)
   const when = template.schedule
     ? `running ${scheduleLabel(template.schedule)}`
     : `with no schedule: a run starts when its watch sees ${orList((created.watches ?? []).map((w) => w.name)) || 'something new'}`
   return `Created the goal "${template.name}" in ${cwd}, ${when}; the first run starts within a minute.${checks}${newGoalModelText(template.model, template.modelReason)} It needs ${template.needs}. It asks before it acts: approve or reject its proposals under Needs you. Change anything by discussing the goal.${await phoneHint($)}`
+}
+
+/** A template's instructions with its question's answer before them ('' when it has none). Throws when the answer can't be used. */
+function templateInstructions(template: Template, answer: string): string {
+  if (!template.ask) return template.instructions
+  const first = answer === template.ask.later ? template.ask.laterText : template.ask.fill(answer.trim())
+  return [first, template.instructions].filter(Boolean).join(' ')
+}
+
+/** Creates a goal from a template and its answer, and starts its first run when it has no schedule. */
+async function createFromTemplate($: Engine, template: Template, answer: string, instructions: string, cwd: string) {
+  const watches = template.watches?.(answer)
+  const created = await createGoal($, {
+    name: template.name, objective: template.objective, working_dir: cwd, schedule: template.schedule, model: template.model,
+    instructions, autonomy: template.autonomy, tool_map: template.tool_map, ...(watches && { watches }),
+  })
+  // With no schedule nothing is due: the first run (setting up, catching up) starts now
+  if (!template.schedule) await runNow($, created.id)
+  return created
+}
+
+/** How each new watch's first check went, as sentences. */
+function watchChecks(created: { watches?: { name: string; result: string }[] }): string {
+  return (created.watches ?? []).map((w) => ` Watch "${w.name}": ${w.result}.`).join('')
+}
+
+/**
+ * /goal-new's "Maintain my repo": creates the GitHub goals as one pipeline
+ * (triage, refine, fix, review, CI), asking only the CI fixer's branch, and
+ * skips any already in this folder.
+ */
+async function newRepoGoals($: Engine): Promise<string> {
+  const ci = TEMPLATES.find((t) => t.name === REPO_CI)!
+  let branch: string
+  try {
+    branch = await $.ui.ask(ci.ask!.question, [ci.ask!.later, ...(ci.ask!.choices ?? []), 'Cancel'])
+  } catch {
+    return 'No goal created.'
+  }
+  if (branch === 'Cancel' || !branch.trim()) return 'No goal created.'
+  const cwd = await $.session.root()
+  // A goal already here: same name, same folder, not abandoned
+  let existing: OverviewGoal[] = []
+  try {
+    const overview = await fetchOverview($, null)
+    if (overview.changed) existing = overview.goals
+  } catch {
+    // no overview: create them all
+  }
+  const here = (name: string) => existing.some((g) => g.name === name && g.working_dir === cwd && g.status !== 'abandoned')
+  const made: string[] = []
+  const skipped: string[] = []
+  const failed: string[] = []
+  const needs = new Set<string>()
+  for (const { name, answer: given } of REPO_GOALS) {
+    const template = TEMPLATES.find((t) => t.name === name)!
+    if (here(name)) {
+      skipped.push(name)
+      continue
+    }
+    const answer = given ?? branch
+    try {
+      const created = await createFromTemplate($, template, answer, templateInstructions(template, answer), cwd)
+      made.push(`${name} (${template.model}).${watchChecks(created)}`)
+      needs.add(template.needs)
+    } catch (err) {
+      failed.push(`${name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  if (made.length) {
+    await kick($)
+    await refresh($)
+  }
+  const lines = [made.length ? `Created in ${cwd}, each with its first run starting within a minute:` : `Created no goals in ${cwd}.`]
+  lines.push(...made.map((m) => `- ${m}`))
+  if (skipped.length) lines.push(`Skipped as already here: ${skipped.join(', ')}.`)
+  if (failed.length) lines.push(`Couldn't create: ${failed.join('; ')}.`)
+  if (made.length) {
+    lines.push(`They need ${[...needs].join('; ')}.`)
+    lines.push(`How they hand off: Issue Triage labels the issues worth refining ${NEEDS_REFINEMENT_LABEL}; Issue Refiner writes a spec and labels it ${REFINED_LABEL} once you approve it; Issue Fixer builds those and proposes a pull request; PR Reviewer reviews pull requests and CI Watch And Fix keeps ${branch.trim()} green.`)
+    lines.push(`They ask before they act: approve or reject their proposals under Needs you. Change anything by discussing a goal.${await phoneHint($)}`)
+  }
+  return lines.join('\n')
 }
 
 /** "a", "a or b", "a, b or c". */

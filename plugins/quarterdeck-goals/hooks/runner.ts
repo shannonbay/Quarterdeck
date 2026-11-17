@@ -108,6 +108,8 @@ function runPass($: Engine): Promise<void> {
       await releaseLease($, await $.session.id()).catch(() => { /* refused too: the lease lapses on its own */ })
     }
     // otherwise not connected: the pane shows it; the next tick retries
+  }).catch(() => {
+    // The session ended under the pass (its state is gone): nothing left to record
   }).finally(() => {
     ticking = null
   })

@@ -263,6 +263,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
       return {
         id: plan.id,
         name: plan.name,
+        working_dir: plan.working_dir,
         objective: clip(goal.objective, CLIP.objective)!,
         status: goal.status,
         one_off: goal.one_off,
