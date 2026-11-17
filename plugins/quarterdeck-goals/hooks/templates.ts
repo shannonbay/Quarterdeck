@@ -685,12 +685,12 @@ export const PR_REVIEW_ROUNDS = 3
 
 /**
  * What keeps the reviewer and a fixer that acts on its reviews (the Issue Fixer's
- * comment watch) from going round and round: a re-review posts only real problems,
- * and after PR_REVIEW_ROUNDS posted reviews the person decides. The runaway breaker
+ * comment watch) from going round and round: a re-review raises only real problems,
+ * and after PR_REVIEW_ROUNDS posted reviews that raise something the person decides. The runaway breaker
  * doesn't see this loop, since each goal's watch fires on the other's work.
  */
 export const PR_REREVIEW = [
-  'A re-review posts only real problems: a bug, a failing check or test, or a security problem, in what changed or left unaddressed from before.',
+  'A re-review raises only real problems: a bug, a failing check or test, or a security problem, in what changed or left unaddressed from before.',
   "Smaller points (style, naming, nice-to-haves) go in your end_run summary for me, not on GitHub: a posted review can start another goal's run to act on it (the Issue Fixer acts on reviews of its pull requests), so each one should be worth a round.",
   'When a re-review finds no real problem, still propose the review (a github.review item as below) with no inline comments, so the pull request shows it was looked at: its body names the commit ("Reviewed at <sha>: no problems found"), says which earlier points are now addressed and gives the check results. It does not count as one of the rounds below, which count only reviews that raise something.',
   `Keep count of the reviews you've posted that raise something on each pull request in memory. Once ${PR_REVIEW_ROUNDS} are posted on one, ask me (add_item with ask_person, external_ref github-pr-rounds:<number>@<sha>) before proposing another, with what you'd raise; propose it only if I say yes.`,

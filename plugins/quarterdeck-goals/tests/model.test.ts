@@ -398,11 +398,13 @@ test('the PR reviewer may only post a COMMENT review, once approved, from its ow
   expect(PR_REVIEW).toContain('try the change live')
   expect(PR_REVIEW).toContain('never my real data')
   expect(PR_REVIEW).toContain('git clean -fd')
-  // It and the Issue Fixer act on each other's work, which the runaway breaker doesn't count: re-reviews post only real problems, and rounds are capped
-  expect(PR_REVIEW).toContain('A re-review posts only real problems')
+  // It and the Issue Fixer act on each other's work, which the runaway breaker doesn't count: re-reviews raise only real problems, and rounds are capped
+  expect(PR_REVIEW).toContain('A re-review raises only real problems')
   expect(PR_REVIEW).toContain('When a re-review finds no real problem, still propose the review')
   expect(PR_REVIEW).toContain('Reviewed at <sha>: no problems found')
   expect(PR_REVIEW).toContain('Once 3 are posted on one, ask me')
+  expect(PR_REVIEW).toContain("reviews you've posted that raise something")
+  expect(PR_REVIEW).toContain('It does not count as one of the rounds below')
 })
 
 test('the issue fixer skips help-wanted issues and signs its pull requests', () => {
