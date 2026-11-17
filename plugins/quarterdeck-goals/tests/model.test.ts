@@ -7,7 +7,7 @@ import {
   statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
-  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
+  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
@@ -608,6 +608,15 @@ test('the issue triage goal proposes one batch per run, never writes but labels,
   expect(ISSUE_TRIAGE).toContain('gh issue edit <numbers> --add-label needs-refinement and nothing else in the command')
   expect(ISSUE_TRIAGE).toContain("Don't ask again about the issues I didn't pick")
   expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
+})
+
+test('the issue fixer resolves review threads through the server tool, under the push approval', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Fixer')!
+  expect(t.tool_map[RESOLVE_THREAD_TOOL]).toBe('code.pull_request')
+  expect(t.autonomy['code.pull_request']).toBe('propose')
+  expect(ISSUE_FIX_WORK).toContain('resolve_review_thread')
+  expect(ISSUE_FIX_WORK).toContain('{id, path, line, author') // the inline read carries the comment ids the tool takes
+  expect(TEMPLATES.find((x) => x.name === 'PR Reviewer')!.tool_map[RESOLVE_THREAD_TOOL]).toBeUndefined()
 })
 
 test('the issue fixer reads inline review comments with the repo written out; the read is untrusted, its write forms are off', () => {
