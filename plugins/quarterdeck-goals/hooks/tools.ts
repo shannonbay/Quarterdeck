@@ -473,7 +473,7 @@ async function newRepoGoals($: Engine): Promise<string> {
   }
   if (branch === 'Cancel' || !branch.trim()) return 'No goal created.'
   const cwd = await $.session.root()
-  // A goal already here: same name, same folder, not abandoned
+  // A goal already here: same name, same folder, not retired (a done one-off is retired)
   let existing: OverviewGoal[] = []
   try {
     const overview = await fetchOverview($, null)
@@ -481,7 +481,7 @@ async function newRepoGoals($: Engine): Promise<string> {
   } catch {
     // no overview: create them all
   }
-  const here = (name: string) => existing.some((g) => g.name === name && g.working_dir === cwd && g.status !== 'abandoned')
+  const here = (name: string) => existing.some((g) => g.name === name && g.working_dir === cwd && g.status !== 'retired')
   const made: string[] = []
   const skipped: string[] = []
   const failed: string[] = []

@@ -603,6 +603,17 @@ test('Maintain my repo skips a goal already in this folder, not one in another f
   expect(made.text).toContain('Skipped as already here: Issue Fixer.')
 })
 
+test('Maintain my repo does not skip for a done one-off of the same name in this folder', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  const fake = fakeQuarterdeck(on, [
+    goal({ id: 'g1', name: 'Issue Triage', working_dir: '/work/project', status: 'retired', one_off: true }),
+  ])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(fake.of('create_goal').map((c) => (c.input as { name: string }).name)).toEqual(['Issue Triage', 'Issue Refiner', 'Issue Fixer', 'PR Reviewer', 'CI Watch And Fix'])
+  expect(made.text).not.toContain('Skipped as already here')
+})
+
 test('Maintain my repo creates nothing when the branch question is cancelled', async ($, on) => {
   engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'Cancel'] })
   const fake = fakeQuarterdeck(on, [])
