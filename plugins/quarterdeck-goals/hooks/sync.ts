@@ -85,10 +85,6 @@ export function stopPolling(): void {
   timer = null
 }
 
-/**
- * Runs one action for a button or tool: marks it busy under `key`, records
- * its error (or clears the last one), then re-reads. Resolves whether it worked.
- */
 /** The act() keys (before the colon) of the pane's and Claude's goal changes, which the server refuses while outdated. */
 export const OUTDATED_REFUSES = new Set([
   'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update',
@@ -101,6 +97,12 @@ export async function actFailure($: Engine, fallback: string): Promise<string> {
   return notice ?? fallback
 }
 
+/**
+ * Runs one action for a button or tool: marks it busy under `key`, records
+ * its error (or clears the last one), then re-reads. Resolves whether it worked.
+ * While the overview says outdated, a goal change (OUTDATED_REFUSES) is refused
+ * up front with OUTDATED_NOTICE, without calling the server.
+ */
 export async function act($: Engine, key: string, label: string, run: () => Promise<void>): Promise<boolean> {
   // A newer Quarterdeck upgraded the database: this session's server refuses changes it could
   // misread (#60), so say so before the press goes anywhere. Reads and to-dos carry on
