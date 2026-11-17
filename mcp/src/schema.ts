@@ -180,6 +180,12 @@ export const UnsubscribeOneClickSchema = z.object({
   url: z.string().describe("The https link from the message's List-Unsubscribe header (only when its List-Unsubscribe-Post header is List-Unsubscribe=One-Click)"),
 })
 
+export const ResolveReviewThreadSchema = z.object({
+  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('The repo as owner/name (from git remote get-url origin)'),
+  pr: z.number().int().positive().describe('The pull request number'),
+  comment_ids: z.array(z.number().int().positive()).min(1).max(50).describe("Ids of inline review comments you read and addressed with a change you pushed; the thread each belongs to is resolved"),
+})
+
 export const DeleteGoalSchema = z.object({
   goal_id: z.string(),
 })

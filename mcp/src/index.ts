@@ -43,7 +43,7 @@ import {
   WatchReportSchema,
   RunProgressSchema,
   DeleteGoalSchema,
-  UnsubscribeOneClickSchema,
+  UnsubscribeOneClickSchema, ResolveReviewThreadSchema,
   TodoListSchema,
   TodoAddSchema,
   TodoSetSchema,
@@ -69,6 +69,7 @@ import {
 } from './tools/goal_runner.js'
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
 import { unsubscribe_one_click } from './tools/unsubscribe.js'
+import { resolve_review_thread } from './tools/resolve_review_thread.js'
 import { handleListResources, handleReadResource } from './resources.js'
 import { getRun } from './db.js'
 import { withScope } from './session.js'
@@ -212,6 +213,12 @@ const TOOLS = [
     description: 'Queue a run of a goal now (e.g. after changing its instructions). It starts within about 30 seconds while Claude Code is open with the quarterdeck-goals plugin.',
     inputSchema: zodToJsonSchema(RunGoalSchema),
     handler: run_goal,
+  },
+  {
+    name: 'resolve_review_thread',
+    description: "Marks the review threads of a pull request resolved, given the ids of inline review comments in them, once you have pushed a change that answers those comments. Only threads started by the repo's owner, members or collaborators on an open pull request; it posts nothing. In a goal run, only as the goal's rules allow.",
+    inputSchema: zodToJsonSchema(ResolveReviewThreadSchema),
+    handler: resolve_review_thread,
   },
   {
     name: 'todo_list',
