@@ -89,13 +89,14 @@ function githubRules(merge: string): Record<string, string> {
  */
 const INLINE_READ = 'gh api repos/*/pulls/*/comments*'
 const INLINE_WRITE_FLAGS = ['--method', '-X', '-f', '--input']
+const INLINE_FLAG_BEFORE = 'gh api repos/* -*/pulls/*/comments*'
 function inlineReadRules(): Record<string, string> {
   return {
     [INLINE_READ]: 'untrusted',
-    ...Object.fromEntries(INLINE_WRITE_FLAGS.flatMap((flag) => [
-      [`${INLINE_READ}${flag}*`, 'github.write'], // a flag after the path
-      [`gh api repos/*${flag}*/pulls/*/comments*`, 'github.write'], // or before it, with the path text later (a field value, a --jq argument)
-    ])),
+    ...Object.fromEntries(INLINE_WRITE_FLAGS.map((flag) => [`${INLINE_READ}${flag}*`, 'github.write'])), // a flag after the path
+    // Any flag before it, with the path text later (a field value, a --jq argument). A repo path has no spaces, so the space keeps
+    // a `-f` or `-x` inside an owner or repo name (data-fetch, my-xorg) from counting.
+    [INLINE_FLAG_BEFORE]: 'github.write',
   }
 }
 
