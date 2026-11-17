@@ -66,6 +66,28 @@ test("the person's Quarterdeck actions are refused to a run, to other agents and
   }
 })
 
+test('a run may recall memory and propose a curation, under either server prefix, without a guard check', async ($, on) => {
+  const { inputs } = world(on)
+  const scopes: unknown[] = []
+  for (const P of ['mcp__quarterdeck__', 'mcp__plugin_quarterdeck-goals_quarterdeck__']) {
+    for (const name of ['recall', 'propose_curation', 'remember']) {
+      on('tool.call', { tool: `${P}${name}` as never }, (_, e) => {
+        scopes.push((e as unknown as { run_scope?: unknown }).run_scope)
+        return { result: '{"ok":true}' } as never
+      })
+    }
+  }
+  await $.session.start(START)
+  for (const P of ['mcp__quarterdeck__', 'mcp__plugin_quarterdeck-goals_quarterdeck__']) {
+    for (const name of ['recall', 'propose_curation', 'remember']) {
+      const r = await $.tool.call(call({ tool: `${P}${name}`, agentId: 'run-agent' }))
+      expect(said(r)).toBe('{"ok":true}')
+    }
+  }
+  expect(scopes).toEqual(Array(6).fill('run_abc123'))
+  expect(inputs).toEqual([])
+})
+
 test("a run's handback goes on, so Claude Code counts its report delivered", async ($, on) => {
   const { inputs } = world(on)
   on('tool.call', { tool: 'SubagentHandback' }, () => ({ result: 'delivered' }) as never)

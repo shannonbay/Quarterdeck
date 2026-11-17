@@ -8,6 +8,9 @@ import { type Event, type NewEvent, type NewPlan, type NewTask, type PlanRow, ty
 
 export type { Event, NewEvent, NewPlan, NewTask, PlanRow, Task, TreeStats } from '@quarterdeck/core'
 
+/** How much memory a run's brief carries (the goal page warns past it). */
+export const MEMORY_BRIEF_CHARS = core.MEMORY_BRIEF_CHARS
+
 // ─── DB singleton ─────────────────────────────────────────────────────────────
 
 let _db: core.Database | null = null

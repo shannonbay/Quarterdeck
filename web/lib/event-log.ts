@@ -31,6 +31,7 @@ export type EventType =
   | 'memory_added'
   | 'memory_updated'
   | 'memory_deleted'
+  | 'memory_curated'
 
 interface RecordEventOptions {
   planId: string

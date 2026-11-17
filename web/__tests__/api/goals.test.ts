@@ -52,6 +52,19 @@ describe('goals API', () => {
     expect(data.open_items).toEqual([expect.objectContaining({ goal: 'Invoice', external_ref: 'gmail:1' })])
   })
 
+  it("GET gives the brief's memory budget, and approving a memory curation applies it and records it", async () => {
+    const { body: { id } } = await createGoal()
+    const data = await (await GETGoal(req('GET'), p(id))).json()
+    expect(data.memory_brief_chars).toBe(core.MEMORY_BRIEF_CHARS)
+    const stale = core.insertMemory(getDb(), { plan_id: id, kind: 'fact', text: 'Old fact.', source: 'agent' })
+    const run = core.insertRun(getDb(), id, 'curate', 'running')
+    const task = core.proposeCuration(getDb(), id, run.id, [{ type: 'retire', id: stale.id, reason: 'stale' }])
+    const res = await POSTApprove(req('POST'), p(id, { itemId: task.id }))
+    expect(res.status).toBe(200)
+    expect(core.getMemory(getDb(), stale.id)!.active).toBe(false)
+    expect(core.getEvents(getDb(), id, { limit: 10 }).map((e) => e.event_type)).toContain('memory_curated')
+  })
+
   it('PATCH pauses, resumes (due now) and changes the schedule', async () => {
     const { body: { id } } = await createGoal({ interval_minutes: 30 })
     await PATCHGoal(req('PATCH', { status: 'paused' }), p(id))

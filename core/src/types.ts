@@ -170,12 +170,17 @@ export interface Goal {
   status_source: string | null
   /** When the goal last went back to active (set by updateGoal); the runaway breaker counts only runs since then. */
   resumed_at: string | null
+  /** When its memory was last curated: a curation request approved or rejected, or a curation run that proposed nothing. */
+  curated_at: string | null
 }
 
 export type NewGoal = Pick<Goal, 'plan_id' | 'objective'> & Partial<Omit<Goal, 'plan_id' | 'objective' | 'limits'>> & { limits?: Partial<GoalLimits> }
 
-/** How a run was started. 'health' = a failing health check queued it; 'watch' = a watch saw something new. */
-export type TriggerKind = 'manual' | 'interval' | 'cron' | 'event' | 'health' | 'watch'
+/**
+ * How a run was started. 'health' = a failing health check queued it; 'watch' = a watch saw something new;
+ * 'curate' = the scheduler queued a memory curation run (curation.ts), which does none of the goal's ordinary work.
+ */
+export type TriggerKind = 'manual' | 'interval' | 'cron' | 'event' | 'health' | 'watch' | 'curate'
 
 /**
  * A check whose new lines start a run. A 'command' watch is a shell command

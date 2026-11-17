@@ -18,6 +18,7 @@ import type { GoalRun, Task } from './types.js'
 import { getRunHold, type RunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { checkStatuses } from './status-check.js'
+import { applyCuration, curateModel, curationRunPrompt, isCurationRequest, queueCurationIfDue, rejectCuration, type CurationResult } from './curation.js'
 
 const LEASE_NAME = 'goals'
 /** A holder that misses this long (several 30 s ticks) loses the lease to the next session that asks. */
@@ -98,6 +99,7 @@ export function claimRun(db: Database, planId: string, opts: { holder: string; q
   if (!run) return null
   const goal = getGoal(db, planId)!
   const plan = listGoals(db).find((g) => g.plan.id === planId)!.plan
+  const curate = run.trigger === 'curate'
   return {
     run_id: run.id,
     goal_id: planId,
@@ -105,8 +107,11 @@ export function claimRun(db: Database, planId: string, opts: { holder: string; q
     working_dir: plan.working_dir,
     trigger: run.trigger,
     max_run_minutes: goal.limits.max_run_minutes,
-    model: goal.model,
-    prompt: goalRunPrompt({ goalId: planId, runId: run.id, name: plan.name, workingDir: plan.working_dir, maxRunMinutes: goal.limits.max_run_minutes }),
+    // Curation is judgement over every memory: opus (fable for a Fable goal), whatever the goal's own model
+    model: curate ? curateModel(goal.model) : goal.model,
+    prompt: curate
+      ? curationRunPrompt({ goalId: planId, runId: run.id, name: plan.name, maxRunMinutes: goal.limits.max_run_minutes })
+      : goalRunPrompt({ goalId: planId, runId: run.id, name: plan.name, workingDir: plan.working_dir, maxRunMinutes: goal.limits.max_run_minutes }),
   }
 }
 
@@ -193,7 +198,8 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
 export function queueForWatchEvents(db: Database, planId: string, now: Date = new Date()): GoalRun | null {
   if (countUnqueuedWatchEvents(db, planId) === 0) return null
   const open = getOpenRun(db, planId)
-  if (open?.status === 'running') return null
+  // A memory curation run reads no events: they wait for the run after it
+  if (open?.status === 'running' || open?.trigger === 'curate') return null
   const run = open ?? queueRun(db, planId, 'watch')
   markWatchEventsQueued(db, planId, now)
   return run
@@ -263,6 +269,8 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
   const claimed: ClaimedRun[] = []
   for (const { plan } of goals) {
     archiveResolved(db, plan.id, now)
+    // Memory over budget that changed since its last curation (at most weekly) gets a curation run
+    queueCurationIfDue(db, plan.id, now)
     const decision = decideTick(db, plan.id, now)
     if (decision.action === 'none') continue
     if (decision.action === 'defer') {
@@ -286,7 +294,8 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
     }
     // Any run that starts restarts an interval's clock (Run now at 9:55 means no 10:00 run on an
     // hourly goal); a cron schedule's next time after now is the slot it already had, so it keeps it
-    if (run || decision.trigger === 'interval' || decision.trigger === 'cron') updateGoal(db, plan.id, { next_run_at: nextIntervalRun(db, plan.id, now) })
+    // A curation run does none of the goal's work, so it leaves the schedule's clock alone
+    if ((run && decision.trigger !== 'curate') || decision.trigger === 'interval' || decision.trigger === 'cron') updateGoal(db, plan.id, { next_run_at: nextIntervalRun(db, plan.id, now) })
   }
   return withWatches({ leader: true, claimed, expired })
 }
@@ -307,11 +316,22 @@ function clipText(text: string, max: number): string {
  */
 export function decideItem(
   db: Database, planId: string, taskId: string, input: { decision: 'approve' | 'reject' | 'answer'; feedback?: string },
-): { task: Task; queuedRun: GoalRun | null } {
+): { task: Task; queuedRun: GoalRun | null; curation?: CurationResult } {
   const task = getTask(db, planId, taskId)
   if (!task) throw new GoalError(`Item ${taskId} not found.`)
   let queuedRun: GoalRun | null = null
   const active = () => getGoal(db, planId)?.status === 'active'
+  if (isCurationRequest(task)) {
+    // A memory curation request: the server applies exactly what the person saw on Approve
+    // (no run carries it out); Reject changes no memory. Either way it isn't proposed again for a week
+    if (input.decision === 'approve') {
+      const curation = applyCuration(db, planId, taskId)
+      return { task: getTask(db, planId, taskId)!, queuedRun: null, curation }
+    }
+    if (input.decision === 'answer') throw new GoalError(`Item ${taskId} is a request: approve or reject it.`)
+    rejectCuration(db, planId, taskId, input.feedback ?? '')
+    return { task: getTask(db, planId, taskId)!, queuedRun: null }
+  }
   if (input.decision === 'answer') {
     // The person's answer to a question a run asked: saved to the item and the
     // goal's memory, and a run is queued to carry on with it

@@ -46,6 +46,9 @@ export const rejectTask = (planId: string, taskId: string, feedback: string) => 
 export const listGoals = (status?: core.Goal['status']) => core.listGoals(db, status)
 export const getGoal = (planId: string) => core.getGoal(db, planId)
 export const buildBrief = (planId: string, runId?: string) => core.buildBrief(db, planId, runId)
+export const buildCurationBrief = (planId: string, runId: string) => core.buildCurationBrief(db, planId, runId)
+export const proposeCuration = (planId: string, runId: string | null, changes: core.CurationChange[]) => core.proposeCuration(db, planId, runId, changes)
+export const recallMemory =(planId: string, runId: string | null, ids: string[]) => core.recallMemory(db, planId, runId, ids)
 /**
  * A goal run touching a goal item: refuses while the item is blocked, and with `count` (the
  * run changes its status) records the attempt and refuses once the item is out of attempts.
@@ -61,6 +64,7 @@ export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core
 export const getMemory = (id: string) => core.getMemory(db, id)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(db, id, fields)
 export const getRun = (runId: string) => core.getRun(db, runId)
+export const insertRun = (planId: string, trigger: core.TriggerKind, status?: core.RunStatus) => core.insertRun(db, planId, trigger, status)
 export const markRunUntrusted = (runId: string, source: string) => core.markRunUntrusted(db, runId, source)
 export const endRun = (runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown) => core.endRun(db, runId, summary, status, statusCheck, statusTone)
 export const queueRun = (planId: string) => core.queueRun(db, planId, 'manual')

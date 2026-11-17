@@ -61,6 +61,8 @@ export async function decide_item(args: unknown) {
   const r = decideItem(input.goal_id, input.item_id, { decision: input.decision, feedback: input.feedback })
   if (input.decision === 'approve') {
     record(input.goal_id, input.item_id, 'approval_granted', {}, human)
+    // An approved memory curation was applied by the server: what changed goes in the history
+    if (r.curation) record(input.goal_id, input.goal_id, 'memory_curated', { item: input.item_id, ...r.curation }, human)
   } else {
     record(input.goal_id, input.item_id, 'review_rejected', { feedback: input.feedback }, human)
   }
@@ -68,6 +70,7 @@ export async function decide_item(args: unknown) {
   return {
     item: { id: r.task.id, status: r.task.status, approved_at: r.task.approved_at },
     queued_run: r.queuedRun ? { id: r.queuedRun.id, status: r.queuedRun.status } : null,
+    ...(r.curation && { curation: { applied: r.curation.applied.length, skipped: r.curation.skipped } }),
   }
 }
 

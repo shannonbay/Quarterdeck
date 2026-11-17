@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { list_goals, get_goal_brief, add_item, remember, forget, end_run, run_goal } from '../../tools/goals.js'
+import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from '../../tools/goals.js'
 import { set_status } from '../../tools/set_status.js'
 import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal } from '../../db.js'
+import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun } from '../../db.js'
 import { setOpenPlan } from '../../session.js'
 
 const now = new Date().toISOString()
@@ -26,6 +26,46 @@ async function startRun(goalId: string) {
 }
 
 beforeEach(() => setOpenPlan(null))
+
+describe('memory index and recall', () => {
+  it('the brief lists left-out memory and says how to recall it; recall reads it and writes no history', async () => {
+    const id = makeGoal()
+    insertMemory({ plan_id: id, kind: 'rule', text: 'h'.repeat(4000), source: 'human' })
+    const left = insertMemory({ plan_id: id, kind: 'fact', text: 'Alice is my manager, and she prefers short replies.', source: 'agent' })
+    const { brief } = await startRun(id)
+    expect(brief.memory_index).toEqual([{ id: left.id, kind: 'fact', source: 'agent', start: expect.stringContaining('Alice is my manager') }])
+    expect(brief.how_to_work.join('\n')).toMatch(/memory_index.*recall/)
+    const events = (await get_history({})).events.length
+    const r = await recall({ memory_ids: [left.id] })
+    expect(r.memory).toEqual([expect.objectContaining({ id: left.id, text: 'Alice is my manager, and she prefers short replies.' })])
+    expect(getMemory(left.id)!.last_used_at).not.toBeNull()
+    expect((await get_history({})).events.length).toBe(events)
+  })
+})
+
+describe('memory curation', () => {
+  it('a curation run gets its own brief, may not remember, and proposes through propose_curation', async () => {
+    const id = makeGoal()
+    const a = insertMemory({ plan_id: id, kind: 'fact', text: 'Old fact.', source: 'agent' })
+    const run = insertRun(id, 'curate', 'running')
+    const brief = await goal_brief_tool({ goal_id: id, run_id: run.id }) as { memory: unknown[]; rules: string[]; runs: unknown[] }
+    expect(brief.memory).toEqual([expect.objectContaining({ id: a.id, text: 'Old fact.' })])
+    expect(brief.rules.length).toBeGreaterThan(0)
+    await expect(remember({ kind: 'fact', text: 'x' })).rejects.toThrow(/propose_curation/)
+    const r = await propose_curation({ changes: [{ type: 'retire', id: a.id, reason: 'stale' }] })
+    expect(r.item.awaiting_review).toBe(true)
+    expect((await get_history({})).events.map((e) => e.type)).toContain('approval_requested')
+  })
+
+  it('an ordinary run gets the ordinary brief from the same tool, and cannot propose a curation', async () => {
+    const id = makeGoal()
+    const a = insertMemory({ plan_id: id, kind: 'fact', text: 'Old fact.', source: 'agent' })
+    const run = queueRun(id)
+    const brief = await goal_brief_tool({ goal_id: id, run_id: run.id }) as { how_to_work?: string[] }
+    expect(brief.how_to_work).toBeDefined()
+    await expect(propose_curation({ changes: [{ type: 'retire', id: a.id, reason: 'stale' }] })).rejects.toThrow(/curation runs only/)
+  })
+})
 
 describe('goal tools', () => {
   it('list_goals shows goals with counts', async () => {

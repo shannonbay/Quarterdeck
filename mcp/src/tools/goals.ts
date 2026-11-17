@@ -1,11 +1,11 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
   listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, updateMemory, getRun, endRun, queueRun, countItems, touchPlan,
-  reviveIfDone,
+  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration,
 } from '../db.js'
 import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
 import {
-  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, EndRunSchema, RunGoalSchema,
+  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, EndRunSchema, RunGoalSchema,
 } from '../schema.js'
 import { record } from '../history.js'
 
@@ -37,6 +37,21 @@ export async function list_goals(args: unknown) {
   }
 }
 
+/**
+ * The get_goal_brief tool: a memory curation run gets a brief of its own (all memory,
+ * a longer run history, curation only); every other call gets the goal's brief.
+ */
+export async function goal_brief_tool(args: unknown) {
+  const input = GetGoalBriefSchema.parse(args)
+  if (input.run_id && getGoal(input.goal_id) && getRun(input.run_id)?.trigger === 'curate') {
+    const curation = buildCurationBrief(input.goal_id, input.run_id)
+    setOpenPlan(input.goal_id)
+    setOpenRun(input.run_id)
+    return curation
+  }
+  return get_goal_brief(args)
+}
+
 export async function get_goal_brief(args: unknown) {
   const input = GetGoalBriefSchema.parse(args)
   if (!getGoal(input.goal_id)) throw new Error(`Goal ${input.goal_id} not found. Use list_goals.`)
@@ -52,6 +67,7 @@ export async function get_goal_brief(args: unknown) {
       'For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.',
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
       'Save anything worth knowing next time with remember. Finish with end_run and a short summary.',
+      'memory holds what fits in the brief; memory_index lists the rest (memory_omitted counts them all) by id and how each starts. When one looks relevant to what you are doing, read it in full with recall (several ids in one call).',
       'When the status you set in end_run describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue), attach a status_check so it updates by itself.',
     ],
   }
@@ -100,11 +116,33 @@ export async function remember(args: unknown) {
   const input = RememberSchema.parse(args)
   const planId = requireOpenGoal()
   const runId = getOpenRun()
+  if (runId && getRun(runId)?.trigger === 'curate') throw new Error('A memory curation run changes memory only through propose_curation, which the person approves.')
   // A run that has read outside content passes its mark on: the run whose brief hands this out is marked too
   const untrusted = runId ? getRun(runId)?.untrusted_source ?? null : null
   const m = insertMemory({ plan_id: planId, kind: input.kind, text: input.text, source: 'agent', source_ref: input.source_ref ?? runId, untrusted_source: untrusted })
   record(planId, planId, 'memory_added', { memory_id: m.id, kind: m.kind, text: m.text })
   return { memory: { id: m.id, kind: m.kind, text: m.text, ...(untrusted && { untrusted: true }) } }
+}
+
+/** A memory curation run's one proposal: it waits under Needs you, and the server applies it on Approve. */
+export async function propose_curation(args: unknown) {
+  const input = ProposeCurationSchema.parse(args)
+  const planId = requireOpenGoal()
+  const task = proposeCuration(planId, getOpenRun(), input.changes)
+  touchPlan(planId)
+  record(planId, task.id, 'task_created', { goal: task.goal, status: task.status, external_ref: task.external_ref })
+  record(planId, task.id, 'approval_requested', { curation: input.changes })
+  return {
+    item: { id: task.id, goal: task.goal, awaiting_review: true },
+    message: 'Proposed: it waits for the person, and the server applies it if they approve. Finish with end_run.',
+  }
+}
+
+/** A read, like get_goal_brief: it writes no history entry (only last_used_at, and the run's mark). */
+export async function recall(args: unknown) {
+  const input = RecallSchema.parse(args)
+  const planId = requireOpenGoal()
+  return { memory: recallMemory(planId, getOpenRun(), input.memory_ids) }
 }
 
 export async function forget(args: unknown) {

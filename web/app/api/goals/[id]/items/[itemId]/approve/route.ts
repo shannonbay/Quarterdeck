@@ -15,8 +15,10 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const { id: goalId, itemId } = await params
     if (!getGoal(goalId)) return notFound('Goal')
     if (!getTask(goalId, itemId)) return notFound('Item')
-    const { task } = decideItem(goalId, itemId, { decision: 'approve' })
+    const { task, curation } = decideItem(goalId, itemId, { decision: 'approve' })
     recordEvent({ planId: goalId, taskId: itemId, eventType: 'approval_granted', actor: 'human' })
+    // An approved memory curation was applied here: what changed goes in the history
+    if (curation) recordEvent({ planId: goalId, taskId: goalId, eventType: 'memory_curated', actor: 'human', payload: { item: itemId, ...curation } })
     return ok({ task })
   } catch (e) {
     if (e instanceof GateError) return err(e.message, 409)
