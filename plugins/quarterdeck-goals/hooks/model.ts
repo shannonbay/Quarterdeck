@@ -8,6 +8,8 @@ import type { GoalCard, Item, Schedule, Snapshot, Update } from '../types'
 export type OverviewGoal = {
   id: string
   name: string
+  /** The goal's folder; missing from a server older than #47. */
+  working_dir?: string
   objective: string
   status: string
   next_run_at: string | null

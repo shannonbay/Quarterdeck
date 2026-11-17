@@ -26,7 +26,7 @@ The idea behind it: persistent intent may matter more than persistent memory.
 
 *A friend's goal selling his old audio gear stops to ask for condition notes and his floor price instead of guessing.*
 
-Start with `/goal-new`: pick a ready-made goal (unsubscribe from mailing lists, a daily news digest, a weekly job scan with your CV, tidy Downloads, inbox triage, keep your GitHub profile current, fix failing CI, triage new GitHub issues, refine new GitHub issues, work on new GitHub issues, review pull requests) or type your own. Schedules can be plain words: "30d", "weekdays at 9", "the first of every month".
+Start with `/goal-new`: pick a ready-made goal (maintain my repo, which sets up all the GitHub goals below at once, unsubscribe from mailing lists, a daily news digest, a weekly job scan with your CV, tidy Downloads, inbox triage, keep your GitHub profile current, fix failing CI, triage new GitHub issues, refine new GitHub issues, work on new GitHub issues, review pull requests) or type your own. Schedules can be plain words: "30d", "weekdays at 9", "the first of every month".
 
 ## Example: from issue to merged PR
 
