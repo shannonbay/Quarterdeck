@@ -55,13 +55,21 @@ describe('memory over budget', () => {
     const recalled: Any = await server.call('recall', { memory_ids: [left], run_scope: second.run_id })
     expect(recalled.memory[0].text).toBe(`Note 1: ${'x'.repeat(size)}`)
     await server.call('end_run', { summary: 'Read the old note.', run_scope: second.run_id })
+    // Two runs aren't enough for a curation by time: it waits for a third
+    expect(await claim(goalId, 2)).toBeNull()
+    await server.call('run_goal', { goal_id: goalId })
+    const third = (await claim(goalId))!
+    expect(third.trigger).toBe('manual')
+    await server.call('get_goal_brief', { goal_id: goalId, run_id: third.run_id, run_scope: third.run_id })
+    await server.call('end_run', { summary: 'Nothing new.', run_scope: third.run_id })
 
-    // Over budget with new memory: the next tick starts a curation run on opus, whatever the goal's model
+    // Over budget after three runs: the next tick starts a curation run on opus, whatever the goal's model
     const curate = (await claim(goalId))!
     expect(curate).toMatchObject({ trigger: 'curate', model: 'opus' })
     const curation: Any = await server.call('get_goal_brief', { goal_id: goalId, run_id: curate.run_id, run_scope: curate.run_id })
     expect(curation.memory).toHaveLength(3)
-    expect(curation.runs.map((r: Any) => r.summary)).toEqual(['Read the old note.', 'Saved three notes.'])
+    expect(curation).toMatchObject({ due: 'time', runs_since_curation: 3 })
+    expect(curation.runs.map((r: Any) => r.summary)).toEqual(['Nothing new.', 'Read the old note.', 'Saved three notes.'])
     const ids: string[] = curation.memory.map((m: Any) => m.id)
     const proposed: Any = await server.call('propose_curation', {
       changes: [{ type: 'merge', from: ids, kind: 'fact', text: 'Notes 1 to 3: three long notes.' }],
