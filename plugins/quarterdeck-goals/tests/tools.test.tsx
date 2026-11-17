@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BAND, engine, fakeQuarterdeck, goal, proposal, START, SURFACES, question } from './fixtures'
+import { ISSUE_FIX_REFINED_WATCH } from '../hooks/templates'
 
 /** A command typed at the prompt. */
 const typed = (command: string, args: string) =>
@@ -299,6 +300,29 @@ test('the inbox template maps Gmail tools, whichever Gmail server it is', async 
   expect(input.autonomy).toEqual({ 'email.archive': 'propose', 'email.delete': 'off', 'email.send': 'off' })
 })
 
+test('/goal-new creates the news digest from a typed answer', async ($, on) => {
+  const { asked } = engine(on, { answers: ['Daily news digest', 'AI research; hnrss.org/frontpage'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked[1]).toContain('What should the digest cover?')
+  expect(made.text).toContain('Created the goal "Daily News Digest"')
+  const input = fake.of('create_goal')[0]?.input as Record<string, unknown>
+  expect(input.instructions).toContain('What I follow: AI research; hnrss.org/frontpage.')
+  expect(input.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(input.autonomy).toEqual({ 'email.send': 'propose' })
+})
+
+test('/goal-new news digest, ask me in the first run', async ($, on) => {
+  engine(on, { answers: ['Daily news digest', 'Ask me in the first run'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  const instructions = String(fake.of('create_goal')[0]?.input.instructions)
+  expect(instructions).toContain('What I follow: not set yet.')
+  expect(instructions).toContain('wait for my answer before building a digest')
+})
+
 test('the job scan template asks what to look for and puts the answer in its instructions', async ($, on) => {
   const { asked } = engine(on, { answer: 'Weekly job scan' }) // the fake gives the same answer to both questions
   const fake = fakeQuarterdeck(on, [])
@@ -367,12 +391,12 @@ test('/goal-new offers three templates and More…, which holds the rest', async
 })
 
 test('/goal-new pages on through More… to the last templates, each question holding at most 4 choices', async ($, on) => {
-  const { asked } = engine(on, { answers: ['More…', 'More…', 'Review pull requests'] })
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'More…', 'Review pull requests'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(asked).toHaveLength(3)
-  expect(asked[2]).toContain('More ready-made goals')
+  expect(asked).toHaveLength(4)
+  expect(asked[3]).toContain('More ready-made goals')
   expect(made.text).toContain('Created the goal "PR Reviewer"')
   const input = fake.of('create_goal')[0]?.input as { autonomy: Record<string, string>; watches: Record<string, unknown>; schedule: unknown }
   expect(input.autonomy).toEqual({ 'github.review': 'propose', 'github.write': 'off' })
@@ -409,11 +433,11 @@ test('the CI fixer takes a typed branch, and refuses one that is no branch name'
 })
 
 test('the issue fixer watches open issues and its own pull requests\' CI and conflicts, and works in a clone of its own', async ($, on) => {
-  const { asked } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Start on every new issue'] })
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'Start on every new issue'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(asked[3]).toContain('Should it wait until an issue is labelled refined?')
+  expect(asked[4]).toContain('Should it wait until an issue is labelled refined?')
   expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { schedule: unknown; instructions: string; watches: Record<string, { command: string }> }
   expect(input.schedule).toBeNull()
@@ -439,11 +463,11 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
 })
 
 test('the issue fixer offers to wait for refined first; waiting, one watch on the label replaces the two by author', async ($, on) => {
-  const { choices } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
+  const { choices } = engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(choices[3]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
+  expect(choices[4]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
   expect(made.text).toContain('a run starts when its watch sees refined issues, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { instructions: string; watches: Record<string, { command: string }> }
   expect(Object.keys(input.watches)).toEqual(['refined issues', 'failed CI on its pull requests', 'merge conflicts on its pull requests', 'comments on its pull requests'])
@@ -457,7 +481,7 @@ test('the issue fixer offers to wait for refined first; waiting, one watch on th
 })
 
 test('the issue fixer refuses an answer typed under Other that is neither choice', async ($, on) => {
-  engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'sometimes'] })
+  engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'sometimes'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
@@ -494,7 +518,7 @@ test('the issue triage goal watches untriaged issues, proposes labels, and runs 
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(choices[2]).toEqual(['Triage new issues', 'Refine new issues', 'Work on new GitHub issues', 'Review pull requests'])
+  expect(choices[2]).toEqual(['Keep my GitHub profile current', 'Fix failing CI', 'Triage new issues', 'More…'])
   expect(made.text).toContain('Created the goal "Issue Triage"')
   expect(made.text).toContain('a run starts when its watch sees issues to triage')
   expect(made.text).toContain('Its runs use Sonnet')
@@ -535,4 +559,66 @@ test('/goal-schedule takes "<goal> 30d" and plain words read by the small model'
     { goal_id: 'g1', schedule: { kind: 'cron', expr: '0 9 * * 1-5' } },
   ])
   expect(words.text).toContain('Read "weekdays at nine" as cron 0 9 * * 1-5.')
+})
+
+test('/goal-new offers Maintain my repo first; it asks the branch once and creates the five GitHub goals as one pipeline (#47)', async ($, on) => {
+  const { asked, choices } = engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(choices[0]?.[0]).toBe('Maintain my repo (all GitHub goals)')
+  expect(choices[0]?.[3]).toBe('More…')
+  expect(asked).toHaveLength(2)
+  expect(asked[1]).toContain('Which branch should stay green?')
+  const inputs = fake.of('create_goal').map((c) => c.input as { name: string; working_dir: string; instructions: string; watches: Record<string, unknown> })
+  expect(inputs.map((i) => i.name)).toEqual(['Issue Triage', 'Issue Refiner', 'Issue Fixer', 'PR Reviewer', 'CI Watch And Fix'])
+  expect(inputs.every((i) => i.working_dir === '/work/project')).toBe(true)
+  expect(Object.keys(inputs[4]!.watches)).toEqual(['failed CI on main'])
+  expect(inputs[4]!.instructions).toMatch(/^The branch to keep green is main\./)
+  expect(Object.keys(inputs[2]!.watches)).toContain(ISSUE_FIX_REFINED_WATCH)
+  expect(fake.of('run_goal')).toHaveLength(5)
+  expect(made.text).toContain('Created in /work/project')
+  expect(made.text).toContain('- PR Reviewer (')
+})
+
+test('Maintain my repo makes each goal as picking its template alone would', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main', 'More…', 'More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  await $.command.run(typed('goal-new', ''))
+  const inputs = fake.of('create_goal').map((c) => c.input)
+  expect(inputs[5]).toEqual(inputs[2])
+})
+
+test('Maintain my repo skips a goal already in this folder, not one in another folder', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  const fake = fakeQuarterdeck(on, [
+    goal({ id: 'g1', name: 'Issue Fixer', working_dir: '/work/project' }),
+    goal({ id: 'g2', name: 'PR Reviewer', working_dir: '/work/other' }),
+  ])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(fake.of('create_goal').map((c) => (c.input as { name: string }).name)).toEqual(['Issue Triage', 'Issue Refiner', 'PR Reviewer', 'CI Watch And Fix'])
+  expect(made.text).toContain('Skipped as already here: Issue Fixer.')
+})
+
+test('Maintain my repo does not skip for a done one-off of the same name in this folder', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  const fake = fakeQuarterdeck(on, [
+    goal({ id: 'g1', name: 'Issue Triage', working_dir: '/work/project', status: 'retired', one_off: true }),
+  ])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(fake.of('create_goal').map((c) => (c.input as { name: string }).name)).toEqual(['Issue Triage', 'Issue Refiner', 'Issue Fixer', 'PR Reviewer', 'CI Watch And Fix'])
+  expect(made.text).not.toContain('Skipped as already here')
+})
+
+test('Maintain my repo creates nothing when the branch question is cancelled', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'Cancel'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toBe('No goal created.')
+  expect(fake.of('create_goal')).toEqual([])
 })

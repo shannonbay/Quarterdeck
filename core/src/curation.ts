@@ -18,7 +18,7 @@ import {
   CURATION_REF, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertMemory, insertRun, listMemory, markRunUntrusted,
   RUN_SUMMARY_SOURCE, updateGoal, updateMemory,
 } from './goals.js'
-import { compareMemory, GoalError, MEMORY_BRIEF_CHARS, memoryRank, readOutsideContent } from './goal-engine.js'
+import { compareMemory, GoalError, markFromMemory, MEMORY_BRIEF_CHARS, memoryRank, readOutsideContent } from './goal-engine.js'
 import type { GoalMemory, GoalRun, MemoryKind, MemorySource, Task } from './types.js'
 
 /** The model curation runs on, whatever the goal's own (a Fable goal curates on fable): it is judgement over every memory. */
@@ -159,7 +159,7 @@ export function buildCurationBrief(db: Database, planId: string, runId: string):
   if (!run || run.plan_id !== planId || run.trigger !== 'curate') throw new GoalError(`Run ${runId} is not a curation run of this goal.`)
   const active = listMemory(db, planId, { activeOnly: true }).sort(compareMemory)
   const tainted = active.find((m) => m.untrusted_source)
-  if (tainted) markRunUntrusted(db, runId, `memory ${tainted.id} (written after ${tainted.untrusted_source})`)
+  if (tainted) markFromMemory(db, runId, tainted)
   // Every summary since the last curation, newest first, up to CURATE_RUNS (more only when curation was held off).
   // Summaries of runs that read outside content can carry injected text into the "So far" memory this run writes
   const runs = db.prepare(`SELECT * FROM goal_runs WHERE plan_id = ? AND id != ? AND trigger != 'curate' AND status != 'skipped'
@@ -168,7 +168,7 @@ export function buildCurationBrief(db: Database, planId: string, runId: string):
   const since = runsSinceCuration(db, planId, goal.curated_at)
   const due: CurationReason['due'] = since >= CURATE_AFTER_RUNS ? 'runs' : 'time'
   const taintedRun = runs.find(readOutsideContent)
-  if (taintedRun) markRunUntrusted(db, runId, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`)
+  if (taintedRun) markRunUntrusted(db, runId, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`, taintedRun.untrusted_root ?? taintedRun.untrusted_source!)
   const marked = getRun(db, runId)!
   return {
     goal: { id: planId, name: plan.name, objective: goal.objective, instructions: goal.instructions },
@@ -448,7 +448,10 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
   if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`)
   const state = (task.state as { curation: CurationState }).curation
   // Text the run wrote carries what it had read, as remember does: approving doesn't trust it
-  const runMark = getRun(db, state.run_id)?.untrusted_source ?? state.untrusted_source ?? null
+  const markedRun = getRun(db, state.run_id)
+  const runMark = markedRun?.untrusted_source ?? state.untrusted_source ?? null
+  // And the original read behind it, so marks it passes on stay one level deep (#52)
+  const runRoot = markedRun?.untrusted_root ?? runMark
   return db.transaction((): CurationResult => {
     const result: CurationResult = { applied: [], skipped: [], created: [] }
     for (const c of state.changes) {
@@ -464,19 +467,21 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
       switch (c.type) {
         case 'merge': {
           const sources = c.from.map((id) => state.memory[id]!)
+          const marked = sources.find((s) => s.untrusted_source)
           const m = insertMemory(db, {
             plan_id: planId, kind: c.kind, text: c.text, source: mergedSource(sources.map((s) => s.source)), source_ref: taskId,
             pinned: sources.some((s) => s.pinned),
-            untrusted_source: sources.find((s) => s.untrusted_source)?.untrusted_source ?? runMark,
+            untrusted_source: marked?.untrusted_source ?? runMark,
+            untrusted_root: marked ? getMemory(db, marked.id)?.untrusted_root ?? marked.untrusted_source : runRoot,
           })
           // insertMemory marks only agent memory; merged text is the run's, even when it merges the person's own
-          if (!m.untrusted_source && runMark) updateMemory(db, m.id, { untrusted_source: runMark })
+          if (!m.untrusted_source && runMark) updateMemory(db, m.id, { untrusted_source: runMark, untrusted_root: runRoot })
           for (const s of sources) updateMemory(db, s.id, { active: false })
           result.created.push(m.id)
           break
         }
         case 'rewrite':
-          updateMemory(db, c.id, { text: c.text, ...(runMark && !state.memory[c.id]!.untrusted_source && { untrusted_source: runMark }) })
+          updateMemory(db, c.id, { text: c.text, ...(runMark && !state.memory[c.id]!.untrusted_source && { untrusted_source: runMark, untrusted_root: runRoot }) })
           break
         case 'retire':
           updateMemory(db, c.id, { active: false })
@@ -485,7 +490,7 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
           updateMemory(db, c.id, { pinned: false })
           break
         case 'add': {
-          const m = insertMemory(db, { plan_id: planId, kind: c.kind, text: c.text, source: 'agent', source_ref: taskId, untrusted_source: runMark })
+          const m = insertMemory(db, { plan_id: planId, kind: c.kind, text: c.text, source: 'agent', source_ref: taskId, untrusted_source: runMark, untrusted_root: runRoot })
           result.created.push(m.id)
           break
         }

@@ -174,7 +174,7 @@ export async function trust_memory(args: unknown) {
   const m = getMemory(input.memory_id)
   if (!m || m.plan_id !== input.goal_id) throw new Error(`Memory ${input.memory_id} not found in this goal.`)
   if (m.untrusted_source) {
-    updateMemory(m.id, { untrusted_source: null })
+    updateMemory(m.id, { untrusted_source: null, untrusted_root: null })
     record(input.goal_id, input.goal_id, 'memory_trusted', { memory_id: m.id, text: m.text, was: m.untrusted_source }, human)
   }
   return { trusted: m.id }

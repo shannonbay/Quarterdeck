@@ -280,6 +280,24 @@ export const TEMPLATES: Template[] = [
     },
   },
   {
+    label: 'Daily news digest',
+    name: 'Daily News Digest',
+    objective: 'Each day, find stories matching my interests on the sites and feeds I follow and give me a digest',
+    instructions: '',
+    schedule: { kind: 'interval', minutes: DAY },
+    model: 'sonnet',
+    modelReason: 'it picks stories that match your interests',
+    autonomy: { 'email.send': 'propose' },
+    tool_map: gmail({ send_message: 'email.send', reply: 'email.send', forward: 'email.send' }),
+    needs: 'web access (WebFetch or WebSearch) or Claude in Chrome to read sites and feeds; the Gmail connector only if you want the digest emailed',
+    ask: {
+      question: 'What should the digest cover? Type it under Other: your interests and any sites or RSS feeds to start with, e.g. AI research, NZ politics, cycling; hnrss.org/frontpage, r/newzealand.',
+      later: 'Ask me in the first run',
+      laterText: '', // set below: NEWS_LATER is declared after the templates
+      fill: (answer) => [`What I follow: ${answer}.`, NEWS_RULES].join(' '),
+    },
+  },
+  {
     label: 'Tidy my Downloads',
     name: 'Tidy Downloads',
     objective: 'Delete installers older than 30 days from my Downloads folder',
@@ -749,6 +767,24 @@ export const PR_REVIEW = [
 export const FIRST_CHOICES = 3
 export const MORE = 'More…'
 
+/**
+ * /goal-new's first choice: all the GitHub goals as one pipeline, with the
+ * label handoff on. Not a template itself (the template tests iterate TEMPLATES).
+ */
+export const REPO_LABEL = 'Maintain my repo (all GitHub goals)'
+export const REPO_CI = 'CI Watch And Fix'
+/**
+ * The goals it creates, in pipeline order, each with the answer it is created
+ * with ('' for no question; null for the CI fixer, whose branch is asked once).
+ */
+export const REPO_GOALS: { name: string; answer: string | null }[] = [
+  { name: 'Issue Triage', answer: '' },
+  { name: 'Issue Refiner', answer: REFINE_WAIT },
+  { name: 'Issue Fixer', answer: ISSUE_FIX_WAIT },
+  { name: 'PR Reviewer', answer: '' },
+  { name: REPO_CI, answer: null },
+]
+
 /** The GitHub profile template's standing instructions, after where the repo is. */
 export const GITHUB_PROFILE = [
   'Each run, check my recent public activity with gh (my repos sorted by last push, and my public events) since the last run.',
@@ -787,9 +823,27 @@ export const ASK_LATER = [
   'Never apply for a job or contact an employer.',
 ].join(' ') + " I'll answer by discussing this goal."
 
+/** What every news digest run does, whatever the interests. */
+const NEWS_RULES = [
+  'Each run, read the sources I follow (feeds first), keep stories since your last digest (at most the last 3 days) that match my interests, and skip stories you have already reported (keep their links in one memory, replaced each run, holding only links from the last 3 days).',
+  'Put the digest in your end_run summary, grouped by interest: headline, source, link and one line on why it matches.',
+  'If the Gmail connector is available and you know my address, also propose one email.send item with the digest; send it once I approve.',
+  'You may search the web for new sites and feeds on my interests. For each good one, add one item with ask_person (external_ref news-source:<url>) saying what you found and why it fits, at most 2 new-source questions a run.',
+  'A yes arrives as memory and the source joins my list; remember every no so you never ask about it again.',
+  'Never sign up, log in, subscribe or post anywhere: adding a source only means reading it.',
+].join(' ')
+
+/** The instructions for a news digest whose interests the person will give later. */
+export const NEWS_LATER = [
+  'What I follow: not set yet.',
+  'In your first run, add one item with ask_person asking for my interests and any starting sites or feeds, and wait for my answer before building a digest.',
+  NEWS_RULES,
+].join(' ') + " I'll answer by discussing this goal."
+
 // Texts declared after the list, put in place
 const jobScan = TEMPLATES.find((t) => t.name === 'Weekly Job Scan')!
 jobScan.ask!.laterText = ASK_LATER
+TEMPLATES.find((t) => t.name === 'Daily News Digest')!.ask!.laterText = NEWS_LATER
 const github = TEMPLATES.find((t) => t.name === 'GitHub Profile')!
 github.instructions = GITHUB_PROFILE
 github.ask!.laterText = GITHUB_FIND

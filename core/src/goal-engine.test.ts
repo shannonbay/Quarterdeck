@@ -302,7 +302,7 @@ describe('buildBrief', () => {
       const tainted = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'From a page.', source: 'agent', untrusted_source: 'WebFetch' })
       const run = insertRun(db, 'g1', 'manual', 'running')
       expect(recallMemory(db, 'g1', run.id, [tainted.id])[0]).toMatchObject({ untrusted: true })
-      expect(getRun(db, run.id)!.untrusted_source).toBe(`memory ${tainted.id} (written after WebFetch)`)
+      expect(getRun(db, run.id)!.untrusted_source).toBe(`memory ${tainted.id} (first: WebFetch)`)
     })
   })
 

@@ -31,6 +31,7 @@ export const SURFACES = ['terminal', 'desktop'] as const
 
 type Item = { id: string; goal: string; action?: { category: string; summary: string } | null; asks_person?: boolean; notes?: string; clipped?: boolean; blocked?: boolean }
 type FakeGoal = {
+  working_dir?: string
   id: string
   name: string
   objective: string

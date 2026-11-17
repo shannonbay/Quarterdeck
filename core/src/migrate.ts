@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 14
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -288,7 +288,8 @@ export function runMigrations(db: Database): void {
       waiting_tool   TEXT,
       waiting_since  TEXT,
       untrusted_at     TEXT,
-      untrusted_source TEXT
+      untrusted_source TEXT,
+      untrusted_root   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_runs_plan ON goal_runs(plan_id, started_at);
 
@@ -303,7 +304,8 @@ export function runMigrations(db: Database): void {
       active       INTEGER NOT NULL DEFAULT 1,
       created_at   TEXT NOT NULL,
       last_used_at TEXT,
-      untrusted_source TEXT
+      untrusted_source TEXT,
+      untrusted_root   TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_memory_plan ON goal_memory(plan_id, active);
 
@@ -369,6 +371,10 @@ export function runMigrations(db: Database): void {
   }
   // Memory a marked run wrote, and what that run had read: a brief that hands it out marks its run too
   try { db.exec('ALTER TABLE goal_memory ADD COLUMN untrusted_source TEXT') } catch { /* already exists */ }
+  // The original source behind a mark, so a mark inherited from memory names it without nesting (#52)
+  for (const table of ['goal_runs', 'goal_memory']) {
+    try { db.exec(`ALTER TABLE ${table} ADD COLUMN untrusted_root TEXT`) } catch { /* already exists */ }
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS goal_health (

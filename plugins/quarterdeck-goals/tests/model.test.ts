@@ -11,6 +11,7 @@ import {
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
+  NEWS_LATER,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -617,6 +618,25 @@ test('the issue fixer resolves review threads through the server tool, under the
   expect(ISSUE_FIX_WORK).toContain('resolve_review_thread')
   expect(ISSUE_FIX_WORK).toContain('{id, path, line, author') // the inline read carries the comment ids the tool takes
   expect(TEMPLATES.find((x) => x.name === 'PR Reviewer')!.tool_map[RESOLVE_THREAD_TOOL]).toBeUndefined()
+})
+
+test('the news digest template: daily, sonnet, email proposed, discovery capped', async () => {
+  const t = TEMPLATES.find((x) => x.name === 'Daily News Digest')!
+  expect(t.model).toBe('sonnet')
+  expect(t.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(t.autonomy).toEqual({ 'email.send': 'propose' })
+  expect(Object.values(t.tool_map)).toContain('email.send')
+  const typed = t.ask!.fill('AI research; hnrss.org/frontpage')
+  expect(typed).toContain('AI research; hnrss.org/frontpage')
+  for (const text of [typed, t.ask!.laterText]) {
+    expect(text).toContain('end_run summary')
+    expect(text).toContain('email.send')
+    expect(text).toContain('news-source:<url>')
+    expect(text).toContain('at most 2 new-source questions a run')
+    expect(text).toContain('Never sign up')
+  }
+  expect(t.ask!.laterText).toBe(NEWS_LATER)
+  expect(NEWS_LATER).toContain('wait for my answer before building a digest')
 })
 
 test('the issue fixer reads inline review comments with the repo written out; the read is untrusted, its write forms are off', () => {

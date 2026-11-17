@@ -67,7 +67,7 @@ export const getRun = (runId: string) => core.getRun(db, runId)
 /** True when another session's newer Quarterdeck has upgraded the database past this server's code. */
 export const schemaOutdated = () => core.schemaOutdated(db)
 export const insertRun = (planId: string, trigger: core.TriggerKind, status?: core.RunStatus) => core.insertRun(db, planId, trigger, status)
-export const markRunUntrusted = (runId: string, source: string) => core.markRunUntrusted(db, runId, source)
+export const markRunUntrusted = (runId: string, source: string, root?: string) => core.markRunUntrusted(db, runId, source, root)
 export const endRun = (runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown) => core.endRun(db, runId, summary, status, statusCheck, statusTone)
 export const queueRun = (planId: string) => core.queueRun(db, planId, 'manual')
 export const getOpenGoalRun = (planId: string) => core.getOpenRun(db, planId)
