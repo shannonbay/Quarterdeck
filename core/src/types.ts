@@ -226,7 +226,7 @@ export interface WatchStatusOutcome {
   run?: boolean
 }
 
-/** The first rule whose `match` (a regular expression) matches any line wins; else `default`. */
+/** The first `run` rule whose `match` (a regular expression) matches any line wins, then the first matching rule, else `default`. */
 export interface WatchStatusRules {
   rules: (WatchStatusOutcome & { match: string })[]
   default?: WatchStatusOutcome
