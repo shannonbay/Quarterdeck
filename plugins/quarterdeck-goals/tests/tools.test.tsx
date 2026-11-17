@@ -299,6 +299,29 @@ test('the inbox template maps Gmail tools, whichever Gmail server it is', async 
   expect(input.autonomy).toEqual({ 'email.archive': 'propose', 'email.delete': 'off', 'email.send': 'off' })
 })
 
+test('/goal-new creates the news digest from a typed answer', async ($, on) => {
+  const { asked } = engine(on, { answers: ['Daily news digest', 'AI research; hnrss.org/frontpage'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked[1]).toContain('What should the digest cover?')
+  expect(made.text).toContain('Created the goal "Daily News Digest"')
+  const input = fake.of('create_goal')[0]?.input as Record<string, unknown>
+  expect(input.instructions).toContain('What I follow: AI research; hnrss.org/frontpage.')
+  expect(input.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(input.autonomy).toEqual({ 'email.send': 'propose' })
+})
+
+test('/goal-new news digest, ask me in the first run', async ($, on) => {
+  engine(on, { answers: ['Daily news digest', 'Ask me in the first run'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  const instructions = String(fake.of('create_goal')[0]?.input.instructions)
+  expect(instructions).toContain('What I follow: not set yet.')
+  expect(instructions).toContain('wait for my answer before building a digest')
+})
+
 test('the job scan template asks what to look for and puts the answer in its instructions', async ($, on) => {
   const { asked } = engine(on, { answer: 'Weekly job scan' }) // the fake gives the same answer to both questions
   const fake = fakeQuarterdeck(on, [])
@@ -367,12 +390,12 @@ test('/goal-new offers three templates and More…, which holds the rest', async
 })
 
 test('/goal-new pages on through More… to the last templates, each question holding at most 4 choices', async ($, on) => {
-  const { asked } = engine(on, { answers: ['More…', 'More…', 'Review pull requests'] })
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'More…', 'Review pull requests'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(asked).toHaveLength(3)
-  expect(asked[2]).toContain('More ready-made goals')
+  expect(asked).toHaveLength(4)
+  expect(asked[3]).toContain('More ready-made goals')
   expect(made.text).toContain('Created the goal "PR Reviewer"')
   const input = fake.of('create_goal')[0]?.input as { autonomy: Record<string, string>; watches: Record<string, unknown>; schedule: unknown }
   expect(input.autonomy).toEqual({ 'github.review': 'propose', 'github.write': 'off' })
@@ -409,11 +432,11 @@ test('the CI fixer takes a typed branch, and refuses one that is no branch name'
 })
 
 test('the issue fixer watches open issues and its own pull requests\' CI and conflicts, and works in a clone of its own', async ($, on) => {
-  const { asked } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Start on every new issue'] })
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'Start on every new issue'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(asked[3]).toContain('Should it wait until an issue is labelled refined?')
+  expect(asked[4]).toContain('Should it wait until an issue is labelled refined?')
   expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { schedule: unknown; instructions: string; watches: Record<string, { command: string }> }
   expect(input.schedule).toBeNull()
@@ -439,11 +462,11 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
 })
 
 test('the issue fixer offers to wait for refined first; waiting, one watch on the label replaces the two by author', async ($, on) => {
-  const { choices } = engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
+  const { choices } = engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'Wait for refined'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(choices[3]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
+  expect(choices[4]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
   expect(made.text).toContain('a run starts when its watch sees refined issues, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { instructions: string; watches: Record<string, { command: string }> }
   expect(Object.keys(input.watches)).toEqual(['refined issues', 'failed CI on its pull requests', 'merge conflicts on its pull requests', 'comments on its pull requests'])
@@ -457,7 +480,7 @@ test('the issue fixer offers to wait for refined first; waiting, one watch on th
 })
 
 test('the issue fixer refuses an answer typed under Other that is neither choice', async ($, on) => {
-  engine(on, { answers: ['More…', 'More…', 'Work on new GitHub issues', 'sometimes'] })
+  engine(on, { answers: ['More…', 'More…', 'More…', 'Work on new GitHub issues', 'sometimes'] })
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
@@ -494,7 +517,7 @@ test('the issue triage goal watches untriaged issues, proposes labels, and runs 
   const fake = fakeQuarterdeck(on, [])
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
-  expect(choices[2]).toEqual(['Triage new issues', 'Refine new issues', 'Work on new GitHub issues', 'Review pull requests'])
+  expect(choices[2]).toEqual(['Fix failing CI', 'Triage new issues', 'Refine new issues', 'More…'])
   expect(made.text).toContain('Created the goal "Issue Triage"')
   expect(made.text).toContain('a run starts when its watch sees issues to triage')
   expect(made.text).toContain('Its runs use Sonnet')
