@@ -599,7 +599,10 @@ test('the issue fixer reads inline review comments with the repo written out; th
   const read = 'gh api repos/*/pulls/*/comments*'
   for (const tool of ['Bash', 'PowerShell']) {
     expect(t.tool_map[`${tool}(${read})`]).toBe('untrusted')
-    for (const flag of ['--method', '-X', '-f', '--input']) expect(t.autonomy[t.tool_map[`${tool}(${read}${flag}*)`]]).toBe('off')
+    for (const flag of ['--method', '-X', '-f', '--input']) {
+      expect(t.autonomy[t.tool_map[`${tool}(${read}${flag}*)`]]).toBe('off')
+      expect(t.autonomy[t.tool_map[`${tool}(gh api repos/*${flag}*/pulls/*/comments*)`]]).toBe('off')
+    }
     expect(t.autonomy[t.tool_map[`${tool}(gh api*)`]]).toBe('off')
   }
   expect(ISSUE_FIX_WORK).toContain('gh api repos/<owner>/<name>/pulls/<number>/comments --jq')

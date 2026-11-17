@@ -85,13 +85,17 @@ function githubRules(merge: string): Record<string, string> {
  * comments (the jq filter in its instructions keeps only trusted authors'). It
  * reads outside text, so it is `untrusted`, and longer than `gh api*` so it wins.
  * A `*` matches flags too, so still longer rules send any method, field or input
- * flag (which would make it a write) back to `github.write`.
+ * flag (which would make it a write) back to `github.write`, wherever it stands.
  */
 const INLINE_READ = 'gh api repos/*/pulls/*/comments*'
+const INLINE_WRITE_FLAGS = ['--method', '-X', '-f', '--input']
 function inlineReadRules(): Record<string, string> {
   return {
     [INLINE_READ]: 'untrusted',
-    ...Object.fromEntries(['--method', '-X', '-f', '--input'].map((flag) => [`${INLINE_READ}${flag}*`, 'github.write'])),
+    ...Object.fromEntries(INLINE_WRITE_FLAGS.flatMap((flag) => [
+      [`${INLINE_READ}${flag}*`, 'github.write'], // a flag after the path
+      [`gh api repos/*${flag}*/pulls/*/comments*`, 'github.write'], // or before it, with the path text later (a field value, a --jq argument)
+    ])),
   }
 }
 

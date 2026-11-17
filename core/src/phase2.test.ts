@@ -192,7 +192,10 @@ describe('goal guard', () => {
   it("lets the Issue Fixer read a PR's inline comments, but no gh api write (inlineReadRules in the goals plugin)", () => {
     const read = 'Bash(gh api repos/*/pulls/*/comments*)'
     const map: Record<string, string> = { 'Bash(gh api*)': 'github.write', [read]: 'untrusted' }
-    for (const f of ['--method', '-X', '-f', '--input']) map[`${read.slice(0, -1)}${f}*)`] = 'github.write'
+    for (const f of ['--method', '-X', '-f', '--input']) {
+      map[`${read.slice(0, -1)}${f}*)`] = 'github.write'
+      map[`Bash(gh api repos/*${f}*/pulls/*/comments*)`] = 'github.write'
+    }
     const jq = `--jq '[.[] | select(.author_association | IN("OWNER")) | {path, line, author: .user.login, body}]'`
     expect(matchToolCategory(map, 'Bash', { command: `gh api repos/octo/my-app/pulls/65/comments ${jq}` })).toBe('untrusted')
     // the placeholders fall to gh api* (commandParts splits at the braces)
@@ -203,6 +206,9 @@ describe('goal guard', () => {
       'gh api repos/o/r/pulls/65/comments --field body=hi', 'gh api repos/o/r/pulls/65/comments --raw-field body=hi',
       'gh api repos/o/r/pulls/65/comments --input c.json', 'gh api repos/o/r/pulls/comments/9 -X DELETE',
       'gh api repos/o/r/pulls/65/merge -X PUT', 'gh api user',
+      // a write flag before a later /pulls/<n>/comments text (review on #67)
+      'gh api repos/o/r/issues/1/comments -f body=see/pulls/1/comments', 'gh api repos/o/r/pulls/9/merge -X PUT --jq .x/pulls/1/comments',
+      'gh api repos/o/r/pulls/1/comments/5 -X DELETE --jq .a/pulls/1/comments',
     ]) expect([c, matchToolCategory(map, 'Bash', { command: c })]).toEqual([c, 'github.write'])
   })
 
