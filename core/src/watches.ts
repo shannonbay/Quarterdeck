@@ -282,11 +282,16 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     const outcome = matchStatusRules(watch.status_rules, result.lines)
     if (!outcome?.run) fresh = []
     if (watch.fires === 'new') {
-      // Only lines a run rule handled, or no rule matched, count as seen
-      const held = heldByStatusRules(watch.status_rules, result.lines)
-      if (held.size) {
-        fresh = fresh.filter((l) => !held.has(l))
-        seen = seen.filter((l) => !held.has(l))
+      if (!outcome?.run) {
+        // A check that starts no run marks nothing seen, so a run rule or default added later can still fire on these lines
+        seen = watch.seen
+      } else {
+        // A run rule won: lines only a quiet rule matches are held, not events and not seen
+        const held = heldByStatusRules(watch.status_rules, result.lines)
+        if (held.size) {
+          fresh = fresh.filter((l) => !held.has(l))
+          seen = seen.filter((l) => !held.has(l))
+        }
       }
     }
     const goal = getGoal(db, watch.plan_id)

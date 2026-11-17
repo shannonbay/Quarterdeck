@@ -524,7 +524,7 @@ describe('status rules', () => {
   })
 
   it('editing rules keeps what was seen; adding or removing them starts the watch over', () => {
-    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: { default: { status: 'fine', run: true } } })
     recordWatchLines(db, w.id, { lines: ['1'] })
     const edited = setWatch(db, 'g1', 'tree', { command: 'echo', status: { default: { status: 'fine' } } })
     expect(edited).toMatchObject({ seen: ['1'], status_rules: { rules: [], default: { status: 'fine' } } })
@@ -547,12 +547,21 @@ describe('status rules', () => {
     recordWatchLines(db, w.id, { lines: ['other'] })
     const quiet = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
     expect(quiet.fresh).toEqual([])
-    expect(getWatch(db, w.id)!.seen).toEqual(['other', 'new'])
-    // A run rule over the held line, and an unrelated line, now fire
+    expect(getWatch(db, w.id)!.seen).toEqual([])
+    // A check that starts no run marks nothing seen, so a run rule now fires on every matching line
     setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: '^M ', status: 'dirty', run: true }] } })
     const fired = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
-    expect(fired.fresh).toEqual(['M a.ts'])
+    expect(fired.fresh).toEqual(['other', 'M a.ts', 'new'])
     expect(getWatch(db, w.id)!.seen).toEqual(['other', 'M a.ts', 'new'])
+  })
+
+  it('a line the run default covers still fires after first showing up beside a quiet line', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: { rules: [{ match: '^M ', status: 'dirty' }], default: { status: 'something new', run: true } } })
+    recordWatchLines(db, w.id, { lines: [] })
+    expect(recordWatchLines(db, w.id, { lines: ['M a.ts', 'issue 7'] }).fresh).toEqual([])
+    const check = recordWatchLines(db, w.id, { lines: ['issue 7'] })
+    expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'something new' })
+    expect(check.fresh).toEqual(['issue 7'])
   })
 
   it('a run fired by a run rule leaves out the lines a quiet rule holds', () => {
