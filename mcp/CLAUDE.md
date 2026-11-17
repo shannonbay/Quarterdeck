@@ -34,6 +34,7 @@ scripts/bundle.mjs
 2. Create `src/tools/<tool_name>.ts` with an exported async handler function
 3. Import both in `src/index.ts` and add an entry to the `TOOLS` array
 4. If it mutates anything, call `record()` (below). If only the person or the plugin may call it, add it to the guard's person-only lists.
+5. If it changes goals, settles items or queues runs, add it to `REFUSED_WHEN_OUTDATED` (`src/outdated.ts`): a server on older code than the database refuses it with a reload message (#60), and the pane's matching `act()` key goes in `OUTDATED_REFUSES` (`plugins/quarterdeck-goals/hooks/sync.ts`).
 
 **Change history**: every mutating MCP tool calls `record()` (`src/history.ts`) to write an `events` row with `actor: 'agent'`, `via: 'mcp'` and, for edits/status changes, old and new values. The web app writes `actor: 'human'` rows via `recordEvent()`. Both show in the activity feed and in the `get_history` tool.
 

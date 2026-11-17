@@ -64,6 +64,8 @@ export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core
 export const getMemory = (id: string) => core.getMemory(db, id)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(db, id, fields)
 export const getRun = (runId: string) => core.getRun(db, runId)
+/** True when another session's newer Quarterdeck has upgraded the database past this server's code. */
+export const schemaOutdated = () => core.schemaOutdated(db)
 export const insertRun = (planId: string, trigger: core.TriggerKind, status?: core.RunStatus) => core.insertRun(db, planId, trigger, status)
 export const markRunUntrusted = (runId: string, source: string) => core.markRunUntrusted(db, runId, source)
 export const endRun = (runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown) => core.endRun(db, runId, summary, status, statusCheck, statusTone)

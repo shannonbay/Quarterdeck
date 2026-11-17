@@ -21,7 +21,7 @@ export * from './todos.js'
 export * from './goal-changes.js'
 export * from './curation.js'
 export { envVar, defaultDbPath } from './paths.js'
-export { runMigrations, REVISION_TRIGGERS, SCHEMA_VERSION, dbSchemaVersion, schemaOutdated } from './migrate.js'
+export { runMigrations, REVISION_TRIGGERS, SCHEMA_VERSION, dbSchemaVersion, schemaOutdated, OUTDATED_MESSAGE } from './migrate.js'
 
 /** Opens the shared database in WAL mode and brings its schema up to date. */
 export function openDatabase(path: string = defaultDbPath()): Database {

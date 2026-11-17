@@ -39,6 +39,24 @@ test('approve_item approves once the person confirms', async ($, on) => {
   expect(fake.of('decide_item').map((c) => c.input)).toEqual([{ goal_id: 'g1', item_id: '11', decision: 'approve' }])
 })
 
+test("approve_item tells Claude why it didn't go through: reload first while outdated, or the server's reason (#60)", async ($, on) => {
+  engine(on, { answer: 'Approve' })
+  const fake = fakeQuarterdeck(on, [inbox()], { outdated: true })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__approve_item', goal: 'Inbox', item_id: '11' })
+  expect(String(res.result)).toContain("Couldn't approve: Quarterdeck was updated in another session")
+  expect(fake.of('decide_item')).toEqual([])
+})
+
+test("approve_item passes on the server's refusal", async ($, on) => {
+  engine(on, { answer: 'Approve' })
+  fakeQuarterdeck(on, [inbox()], { errors: { decide_item: 'Quarterdeck was updated in another session and this session still runs the older version' } })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__approve_item', goal: 'Inbox', item_id: '11' })
+  expect(String(res.result)).toContain("Couldn't approve:")
+  expect(String(res.result)).toContain('still runs the older version')
+})
+
 test('an unknown item or ambiguous goal name is explained', async ($, on) => {
   engine(on, { answer: 'Approve' })
   fakeQuarterdeck(on, [inbox(), goal({ id: 'g2', name: 'Inbox archive' })])

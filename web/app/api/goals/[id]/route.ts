@@ -7,7 +7,7 @@ import {
 } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
 import { itemView } from '@/lib/goal-views'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -82,6 +82,8 @@ const PatchSchema = z.object({
 /** PATCH — edit goal settings, pause/resume/retire, change the schedule. */
 export async function PATCH(req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     const goal = getGoal(id)
     if (!goal) return notFound('Goal')

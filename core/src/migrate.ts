@@ -43,10 +43,20 @@ export function dbSchemaVersion(db: Database): number {
   return Number(db.pragma('user_version', { simple: true }) ?? 0)
 }
 
-/** True when another session's newer Quarterdeck has upgraded the database past this code. */
+/**
+ * True when another session's newer Quarterdeck has upgraded the database past this code.
+ * Such code schedules nothing (schedulerPass) and refuses the tools and routes that change
+ * goals or settle items (#60): it can't tell what newer data means, so it could settle a
+ * request it doesn't understand without saying so (Nov 2026: curation requests approved
+ * through an older server were marked done and never applied). Reads still work.
+ */
 export function schemaOutdated(db: Database): boolean {
   return dbSchemaVersion(db) > SCHEMA_VERSION
 }
+
+/** What a session on outdated code answers to a change it refuses (MCP tools, the pane). */
+export const OUTDATED_MESSAGE =
+  'Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.'
 
 export function runMigrations(db: Database): void {
   // Legacy renames: projects → plans (idempotent via try/catch)
