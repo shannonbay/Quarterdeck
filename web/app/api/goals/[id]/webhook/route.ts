@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { getGoal, enableEventTrigger, disableEventTrigger } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
-import { ok, notFound, serverError } from '@/lib/api-utils'
+import { ok, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -12,6 +12,8 @@ type Params = { params: Promise<{ id: string }> }
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
     const secret = enableEventTrigger(id)
@@ -25,6 +27,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
 /** DELETE — turn the webhook off. */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
     disableEventTrigger(id)

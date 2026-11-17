@@ -4,7 +4,7 @@ import { nanoid } from 'nanoid'
 import { existsSync } from 'fs'
 import { createGoal, listGoals, getGoalItems, listRuns, GoalError, setSchedule, updateGoal, nextScheduledRun } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
-import { ok, err, serverError } from '@/lib/api-utils'
+import { ok, err, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 const AutonomySchema = z.record(z.enum(['off', 'propose', 'auto']))
 
@@ -46,6 +46,8 @@ export async function GET(req: NextRequest) {
 /** POST — create a goal (a plan of kind 'goal' plus its settings and optional interval trigger). */
 export async function POST(req: NextRequest) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const parsed = CreateGoalSchema.safeParse(await req.json())
     if (!parsed.success) return err(parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '))
     const input = parsed.data

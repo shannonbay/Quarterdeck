@@ -65,6 +65,21 @@ describe('goals API', () => {
     expect(core.getEvents(getDb(), id, { limit: 10 }).map((e) => e.event_type)).toContain('memory_curated')
   })
 
+  it('refuses changes while a newer Quarterdeck has upgraded the database, and still answers reads (#60)', async () => {
+    const { body: { id } } = await createGoal()
+    const item = core.addItem(getDb(), id, null, { goal: 'Reply to Alice', action: { category: 'email.send', summary: 'send' } }).task
+    getDb().exec(`PRAGMA user_version = ${core.SCHEMA_VERSION + 1}`)
+    const approve = await POSTApprove(req('POST'), p(id, { itemId: item.id }))
+    expect(approve.status).toBe(409)
+    expect((await approve.json()).error).toMatch(/Restart the web app/)
+    expect(getTask(id, item.id)!.review_requested_at).not.toBeNull() // nothing settled
+    expect((await PATCHGoal(req('PATCH', { status: 'paused' }), p(id))).status).toBe(409)
+    expect((await POSTRun(req('POST'), p(id))).status).toBe(409)
+    expect((await createGoal({ name: 'Another' })).status).toBe(409)
+    expect(getGoal(id)!.status).toBe('active')
+    expect((await GETGoal(req('GET'), p(id))).status).toBe(200)
+  })
+
   it('PATCH pauses, resumes (due now) and changes the schedule', async () => {
     const { body: { id } } = await createGoal({ interval_minutes: 30 })
     await PATCHGoal(req('PATCH', { status: 'paused' }), p(id))

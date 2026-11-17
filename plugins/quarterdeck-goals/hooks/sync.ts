@@ -9,7 +9,7 @@ import { announce, showStatus, savePoll } from './alerts'
 import { fetchOverview, fetchTodos, settings } from './api'
 import { planModeBlocked, toCard } from './model'
 import { kick } from './runner'
-import { getSnapshot, setBusy, setNotice, setSnapshot, setTodos, getExpanded } from './state'
+import { getNotice, getSnapshot, setBusy, setNotice, setSnapshot, setTodos, getExpanded } from './state'
 
 type Engine = EngineInterface
 
@@ -89,7 +89,25 @@ export function stopPolling(): void {
  * Runs one action for a button or tool: marks it busy under `key`, records
  * its error (or clears the last one), then re-reads. Resolves whether it worked.
  */
+/** The act() keys (before the colon) of the pane's and Claude's goal changes, which the server refuses while outdated. */
+export const OUTDATED_REFUSES = new Set([
+  'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update',
+])
+export const OUTDATED_NOTICE = 'Quarterdeck was updated in another session, and this session still runs the older version: press Reload now (above), or run /reload-plugins, first.'
+
+/** Why the last act() failed (its notice), for a tool's answer to Claude; `fallback` when there is none. */
+export async function actFailure($: Engine, fallback: string): Promise<string> {
+  const notice = await getNotice($)
+  return notice ?? fallback
+}
+
 export async function act($: Engine, key: string, label: string, run: () => Promise<void>): Promise<boolean> {
+  // A newer Quarterdeck upgraded the database: this session's server refuses changes it could
+  // misread (#60), so say so before the press goes anywhere. Reads and to-dos carry on
+  if (OUTDATED_REFUSES.has(key.split(':')[0]!) && (await getSnapshot($)).outdated) {
+    await setNotice($, `Couldn't ${label}: ${OUTDATED_NOTICE}`)
+    return false
+  }
   await setBusy($, key)
   let ok = false
   try {

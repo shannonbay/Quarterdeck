@@ -611,6 +611,19 @@ test('when a newer Quarterdeck has upgraded the database, the pane offers to rel
   await ui.unmount()
 })
 
+test("while outdated, the pane says to reload first instead of sending a change this session's server would misread (#60)", async ($, on) => {
+  engine(on)
+  on('command.list', () => ({ value: [] }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox', needs_you: [proposal('11', 'Reply to Alice')] })], { outdated: true })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'approve-g1/11' })
+  expect(fake.of('decide_item')).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /Couldn't approve/ }))?.text).toContain('press Reload now')
+  expect(await ui.find({ key: 'approve-g1/11' })).toBeDefined() // still waiting for the person
+  await ui.unmount()
+})
+
 test('when a newer Quarterdeck is already installed, Reload now runs /reload-plugins, or says to type it', async ($, on) => {
   const { prompts, toasts } = engine(on)
   const ran: string[] = []

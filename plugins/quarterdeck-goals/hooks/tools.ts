@@ -12,7 +12,7 @@ import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
 import { describeTodo, describeTodos, findTodo } from './todos'
-import { act, refresh, refreshTodos } from './sync'
+import { act, actFailure, refresh, refreshTodos } from './sync'
 import { phoneHint, readLastAlert, readLastPoll, readTrace } from './alerts'
 import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, MORE, TEMPLATES } from './templates'
 
@@ -280,7 +280,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
     const ok = await act($, `update:${goal.id}`, 'change the goal', async () => {
       ({ changed, watches } = await updateGoal($, goal.id, changes))
     })
-    if (!ok) return fail("The change didn't go through; see the Goals pane.")
+    if (!ok) return fail(await actFailure($, "The change didn't go through; see the Goals pane."))
     // A new tool watch is first called by the session running goals: if that is this one, now
     if (watches.length) void kick($).catch(() => {})
     const checks = watches.map((w) => ` Watch "${w.name}": ${w.result}.`).join('')
@@ -300,7 +300,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
     if (!(await confirmWith($, `Start a run of the goal "${goal.name}" now?`, 'Run it'))) return fail('The person declined; nothing was started.')
     return (await act($, `run:${goal.id}`, 'start the run', () => runNow($, goal.id)))
       ? { text: `Queued a run of ${goal.name}.`, isError: false }
-      : fail(`The run didn't start.`)
+      : fail(await actFailure($, "The run didn't start."))
   }
 
   const item = goal.needsYou.find((i) => i.id === String(input.item_id ?? ''))
@@ -316,7 +316,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
     if (!item.asksPerson) return fail(`"${item.title}" is a proposal, not a question: approve or reject it.`)
     return (await act($, `answer:${key}`, 'answer', () => answerItem($, goal.id, item.id, text)))
       ? { text: `Answered "${item.title}"; ${goal.name}'s next run carries on with it (queued now).`, isError: false }
-      : fail('The answer failed; see the Goals pane.')
+      : fail(await actFailure($, 'The answer failed; see the Goals pane.'))
   }
 
   if (name === 'approve_item') {
@@ -324,7 +324,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
     if (!(await confirmWith($, `Approve ${what} for the goal "${goal.name}"?`, 'Approve'))) return fail('The person declined; nothing was approved.')
     return (await act($, `approve:${key}`, 'approve', () => approve($, goal.id, item.id)))
       ? { text: `Approved "${item.title}". ${goal.name}'s next run will carry it out.`, isError: false }
-      : fail('The approval failed; see the Goals pane.')
+      : fail(await actFailure($, 'The approval failed; see the Goals pane.'))
   }
 
   const feedback = String(input.feedback ?? '').trim()
@@ -332,7 +332,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
   if (!(await confirmWith($, `Reject "${item.title}" for "${goal.name}" with this feedback: "${feedback}"?`, 'Reject'))) return fail('The person declined; nothing was rejected.')
   return (await act($, `reject:${key}`, 'reject', () => reject($, goal.id, item.id, feedback)))
     ? { text: `Rejected "${item.title}"; the feedback is saved to ${goal.name}'s memory.`, isError: false }
-    : fail('The rejection failed; see the Goals pane.')
+    : fail(await actFailure($, 'The rejection failed; see the Goals pane.'))
 }
 
 export const COMMANDS = [
@@ -358,7 +358,7 @@ export async function goalCommand($: Engine, command: 'goal-run' | 'goal-pause' 
   const found = await resolveGoal($, args)
   if ('error' in found) return found.error
   const { goal } = found
-  const ok = (done: boolean, text: string) => (done ? text : `That didn't work; see the Goals pane.`)
+  const ok = async (done: boolean, text: string) => (done ? text : actFailure($, "That didn't work; see the Goals pane."))
 
   if (command === 'goal-run') {
     if (goal.openRun) return `${goal.name} already has a run ${goal.openRun.status}.`
@@ -505,7 +505,7 @@ async function applySchedule($: Engine, goal: GoalCard, schedule: Parameters<typ
   const done = await act($, `schedule:${goal.id}`, 'set the schedule', async () => {
     next = (await setSchedule($, goal.id, schedule, oneOff)).next_run_at
   })
-  if (!done) return "That didn't work; see the Goals pane."
+  if (!done) return actFailure($, "That didn't work; see the Goals pane.")
   if (oneOff) return `${goal.name} is a one-off now: run it with /goal-run; it moves to Done when a run leaves nothing open.`
   if (!schedule) return `${goal.name} now runs only on demand (/goal-run).`
   const now = await $.clock.now()

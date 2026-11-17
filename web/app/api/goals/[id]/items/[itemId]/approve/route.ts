@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { getGoal, getTask, decideItem, GateError } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string; itemId: string }> }
 
@@ -12,6 +12,8 @@ type Params = { params: Promise<{ id: string; itemId: string }> }
  */
 export async function POST(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id: goalId, itemId } = await params
     if (!getGoal(goalId)) return notFound('Goal')
     if (!getTask(goalId, itemId)) return notFound('Item')

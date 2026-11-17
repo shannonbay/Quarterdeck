@@ -1,12 +1,14 @@
 import { NextRequest } from 'next/server'
 import { getGoal, getOpenRun, queueRun, runHealthCheck } from '@/lib/db'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
 /** POST — run the goal's health check now; a failure may queue a run (per the goal's setting). */
 export async function POST(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     const goal = getGoal(id)
     if (!goal) return notFound('Goal')

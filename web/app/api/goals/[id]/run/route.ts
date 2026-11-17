@@ -1,12 +1,14 @@
 import { NextRequest } from 'next/server'
 import { getGoal, queueRun, getOpenRun, failRun, GoalError } from '@/lib/db'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
 /** POST — "Run now": queue a run; the quarterdeck-goals plugin starts it at its next tick (within 30 s). */
 export async function POST(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
     const run = queueRun(id)
@@ -20,6 +22,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
 /** DELETE — cancel the goal's run in progress. */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
     // Mark the run cancelled; the quarterdeck-goals plugin stops its agent at its next tick

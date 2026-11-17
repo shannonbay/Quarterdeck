@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getMemory, updateMemory, deleteMemory } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string; memoryId: string }> }
 
@@ -26,6 +26,8 @@ function load(id: string, memoryId: string) {
  */
 export async function PATCH(req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id, memoryId } = await params
     if (!load(id, memoryId)) return notFound('Memory')
     const parsed = PatchSchema.safeParse(await req.json())
@@ -42,6 +44,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 /** DELETE — remove a memory entirely. */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id, memoryId } = await params
     const m = load(id, memoryId)
     if (!m) return notFound('Memory')

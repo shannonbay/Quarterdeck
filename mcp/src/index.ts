@@ -73,6 +73,7 @@ import { handleListResources, handleReadResource } from './resources.js'
 import { getRun } from './db.js'
 import { withScope } from './session.js'
 import { isListed } from './tool-filter.js'
+import { outdatedRefusal } from './outdated.js'
 import { recordCliPath } from './runner-session.js'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
@@ -293,6 +294,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     }
   }
+
+  // A newer Quarterdeck in another session upgraded the database: refuse changes this code could misread (#60)
+  const refusal = outdatedRefusal(tool.name)
+  if (refusal) return { content: [{ type: 'text', text: `Error: ${refusal}` }], isError: true }
 
   try {
     const { run_scope: runScope, ...args } = (request.params.arguments ?? {}) as Record<string, unknown>

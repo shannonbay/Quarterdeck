@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { getGoal, insertMemory } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
-import { ok, err, notFound, serverError } from '@/lib/api-utils'
+import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
@@ -15,6 +15,8 @@ const MemorySchema = z.object({
 /** POST — add a human-written memory. */
 export async function POST(req: NextRequest, { params }: Params) {
   try {
+    const stale = refuseIfOutdated()
+    if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
     const parsed = MemorySchema.safeParse(await req.json())
