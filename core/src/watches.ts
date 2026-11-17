@@ -89,13 +89,24 @@ export function validateStatusRules(label: string, input: unknown): WatchStatusR
   return fallback ? { rules, default: fallback } : { rules }
 }
 
-/** The outcome a check's lines give: the first rule matching any line, else the default. */
+/**
+ * The outcome a check's lines give: the first `run` rule matching any line, so a
+ * line that should start a run is never hidden by an earlier rule; else the first
+ * rule matching any line; else the default.
+ */
 export function matchStatusRules(rules: WatchStatusRules, lines: string[]): WatchStatusOutcome | undefined {
-  for (const rule of rules.rules) {
-    const re = new RegExp(rule.match)
-    if (lines.some((l) => re.test(l))) return rule
-  }
-  return rules.default
+  const matching = rules.rules.filter((rule) => { const re = new RegExp(rule.match); return lines.some((l) => re.test(l)) })
+  return matching.find((rule) => rule.run) ?? matching[0] ?? rules.default
+}
+
+/**
+ * The lines only a rule without `run` covers. They are left out of `seen` (and
+ * never become events), so a run rule that matches them later can still fire.
+ */
+export function heldByStatusRules(rules: WatchStatusRules, lines: string[]): Set<string> {
+  const run = rules.rules.filter((r) => r.run).map((r) => new RegExp(r.match))
+  const quiet = rules.rules.filter((r) => !r.run).map((r) => new RegExp(r.match))
+  return new Set(lines.filter((l) => quiet.some((re) => re.test(l)) && !run.some((re) => re.test(l))))
 }
 
 /** A watch's status rules in a line, for the person to read before setting them. */
@@ -166,11 +177,14 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
       .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, new Date().toISOString())
     return getWatch(db, id)!
   }
-  const same = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool
+  const sameCheck = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool
     && JSON.stringify(existing.tool_input) === what.tool_input && existing.match === what.match && existing.fires === fires
-    && JSON.stringify(existing.status_rules) === JSON.stringify(statusRules)
-  if (same) {
+  // Editing rules that stay set keeps what was seen, so lines a quiet rule held can fire under a new run rule
+  const rulesEdited = existing.status_rules !== null && statusRules !== null
+  if (sameCheck && (rulesEdited || JSON.stringify(existing.status_rules) === JSON.stringify(statusRules))) {
     db.prepare('UPDATE goal_watches SET every_minutes = ? WHERE id = ?').run(every, existing.id)
+    // Written only on a change: the column's update trigger bumps the plan's revision
+    if (JSON.stringify(existing.status_rules) !== JSON.stringify(statusRules)) db.prepare('UPDATE goal_watches SET status_rules = ? WHERE id = ?').run(rulesText, existing.id)
   } else {
     db.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
@@ -267,6 +281,20 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
   if (watch.status_rules) {
     const outcome = matchStatusRules(watch.status_rules, result.lines)
     if (!outcome?.run) fresh = []
+    if (watch.fires === 'new') {
+      if (!outcome?.run) {
+        // A check that starts no run marks nothing seen, so a run rule or default added later can still fire on these lines
+        // (the baseline is the exception: what was there when the watch was set never fires)
+        if (!baseline) seen = watch.seen
+      } else {
+        // A run rule won: lines only a quiet rule matches are held, not events and not seen
+        const held = heldByStatusRules(watch.status_rules, result.lines)
+        if (held.size) {
+          fresh = fresh.filter((l) => !held.has(l))
+          seen = seen.filter((l) => !held.has(l))
+        }
+      }
+    }
     const goal = getGoal(db, watch.plan_id)
     const source = `watch:${watch.name}`
     if (outcome && goal && (goal.status_note !== outcome.status || goal.status_tone !== (outcome.tone ?? null) || goal.status_source !== source)) status = outcome
