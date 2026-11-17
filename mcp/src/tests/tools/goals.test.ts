@@ -196,6 +196,23 @@ describe('goal tools', () => {
     expect(brief.run!.untrusted).toMatchObject({ source: expect.stringContaining('(first: WebFetch)') })
   })
 
+  it('memory remembered through three marked runs keeps the mark one level deep (#52)', async () => {
+    const id = makeGoal()
+    const { runId } = await startRun(id)
+    markRunUntrusted(runId, 'Bash: gh issue view')
+    await remember({ kind: 'fact', text: 'Run 1 note.' })
+    await end_run({ summary: 'run 1' })
+    for (const n of [2, 3]) {
+      const { brief } = await startRun(id)
+      expect(brief.run!.untrusted!.source).toMatch(/^memory mem_\w+ \(first: Bash: gh issue view\)$/)
+      const { memory } = await remember({ kind: 'fact', text: `Run ${n} note.` })
+      expect(getMemory(memory.id)!.untrusted_root).toBe('Bash: gh issue view')
+      await end_run({ summary: `run ${n}` })
+    }
+    const { brief } = await startRun(id)
+    expect(brief.run!.untrusted!.source).toMatch(/^memory mem_\w+ \(first: Bash: gh issue view\)$/)
+  })
+
   it('end_run completes the run with counts and requires a run', async () => {
     const id = makeGoal()
     await get_goal_brief({ goal_id: id })

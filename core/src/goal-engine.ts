@@ -32,6 +32,10 @@ export const RECENT_RUNS = 3
  * summary marks the run that reads it, so a mark ends instead of passing from run
  * to run for good.
  */
+export function readOutsideContent(run: Pick<GoalRun, 'untrusted_source'>): boolean {
+  return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE))
+}
+
 /**
  * Marks a run handed memory a marked run wrote. The source names that memory and the
  * original read only, one level deep however many runs passed it on (#52); old rows
@@ -40,10 +44,6 @@ export const RECENT_RUNS = 3
 export function markFromMemory(db: Database, runId: string, m: Pick<GoalMemory, 'id' | 'untrusted_source' | 'untrusted_root'>): void {
   const root = m.untrusted_root ?? m.untrusted_source!
   markRunUntrusted(db, runId, `memory ${m.id} (first: ${root})`, root)
-}
-
-export function readOutsideContent(run: Pick<GoalRun, 'untrusted_source'>): boolean {
-  return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE))
 }
 
 /** The person's word outranks the agent's: human and feedback memory rank 0, the agent's 1. */
