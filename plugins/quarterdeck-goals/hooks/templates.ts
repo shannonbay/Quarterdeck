@@ -61,6 +61,9 @@ function shell(rules: Record<string, string>): Record<string, string> {
   ]))
 }
 
+/** Who may give the issue fixer work: GitHub's author_association for the repo's owner, members and collaborators. */
+export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
+
 /**
  * What is host-specific about a repo goal's tool rules (#44): the CLI, the
  * subcommands that write to the host (off unless a rule maps them to a
@@ -76,7 +79,16 @@ export type Forge = {
   write: string
   /** The status_check kind that follows one of its pull requests, so a goal status stays current between runs. */
   prCheck: string
+  /** How a goal reads an issue: its text, and comments only from the people it trusts. */
+  issueRead: string
+  /** How a goal reads a pull request's comments and reviews, only from the people it trusts. */
+  prRead: string
+  /** How a goal reads a pull request's inline review comments, only from the people it trusts. */
+  prInlineRead: string
 }
+
+/** jq's list of the trusted author associations, for the read commands below. */
+const TRUSTED_JQ = TRUSTED_ASSOCIATIONS.map((a) => `"${a}"`).join(', ')
 
 /** GitHub through gh: what the repo templates were written for. */
 export const GITHUB: Forge = {
@@ -86,6 +98,9 @@ export const GITHUB: Forge = {
     'api', 'auth', 'repo', 'release', 'secret', 'variable', 'workflow', 'gist', 'ssh-key', 'gpg-key', 'label'],
   write: 'github.write',
   prCheck: 'github_pr',
+  issueRead: `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {author: .author.login, body}]}'`,
+  prRead: `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`,
+  prInlineRead: `gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {id, path, line, author: .user.login, body}]'`,
 }
 
 /** A forge's write subcommands, less `except`, as rules sending each to its write category. */
@@ -490,9 +505,6 @@ export const TEMPLATES: Template[] = [
   },
 ]
 
-/** Who may give the issue fixer work: GitHub's author_association for the repo's owner, members and collaborators. */
-export const TRUSTED_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR']
-
 /** A watch's jq test for a trusted author (escaped for the double quotes cmd.exe needs). */
 const ASSOC_WATCH = `(.author_association | IN(${TRUSTED_ASSOCIATIONS.map((a) => `\\"${a}\\"`).join(',')}))`
 
@@ -637,14 +649,13 @@ export const ISSUE_FIX_CONFLICT_WATCH = 'merge conflicts on its pull requests'
 export const ISSUE_FIX_COMMENT_WATCH = 'comments on its pull requests'
 
 /** How the issue fixer reads a pull request's feedback: comments, reviews and inline review comments, only from the people it trusts. */
-const TRUSTED_JQ = TRUSTED_ASSOCIATIONS.map((a) => `"${a}"`).join(', ')
-const PR_READ = `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`
-const PR_INLINE_READ = `gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {id, path, line, author: .user.login, body}]'`
+const PR_READ = GITHUB.prRead
+const PR_INLINE_READ = GITHUB.prInlineRead
 
 /** The issue fixer's second watch: issues opened by anyone but the owner, members and collaborators, as <number> by <login>. */
 export const ISSUE_FIX_OTHERS_WATCH = 'new issues from others'
 /** How the issue fixer reads an issue: its text, and comments only from the people it trusts. */
-const ISSUE_READ = `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_ASSOCIATIONS.map((a) => `"${a}"`).join(', ')})) | {author: .author.login, body}]}'`
+const ISSUE_READ = GITHUB.issueRead
 
 /** How the issue fixer starts on every new issue (not waiting for `refined`): trusted authors' issues at once, anyone else's once I say yes. */
 export const ISSUE_FIX_INTAKE = [
