@@ -76,7 +76,7 @@ export function curationReason(db: Database, planId: string, now: Date = new Dat
   if (!goal || goal.status !== 'active' || goal.one_off) return null
   const gapAgo = new Date(now.getTime() - CURATE_MIN_GAP_HOURS * 3_600_000).toISOString()
   if (goal.curated_at && goal.curated_at > gapAgo) return null
-  // A curation run that failed, or is still waiting for its request, doesn't set curated_at
+  // curated_at is the last settled curation run's start; one that failed, or whose request still waits, doesn't set it
   const recent = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND trigger = 'curate' AND status != 'skipped' AND started_at > ? LIMIT 1").get(planId, gapAgo)
   if (recent) return null
   const runs = runsSinceCuration(db, planId, goal.curated_at)
@@ -489,19 +489,33 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
     approveTask(db, planId, taskId)
     const summary = `Applied ${result.applied.length} of ${state.changes.length} changes${result.skipped.length ? `; skipped ${result.skipped.length}:\n${result.skipped.map((s) => `- ${s}`).join('\n')}` : '.'}`
     updateTask(db, planId, taskId, { result: summary, updated_at: new Date().toISOString() })
-    updateGoal(db, planId, { curated_at: new Date().toISOString() })
+    updateGoal(db, planId, { curated_at: curatedAt(db, state.run_id) })
     return result
   })()
 }
 
-/** The person rejected a curation request: no memory changes but the usual feedback memory, and it isn't proposed again for a week. */
+/**
+ * What curated_at becomes when a curation is settled: when its run started, which is as far
+ * as the summaries it read go, not when the person decided. Runs made while its request
+ * waited under Needs you are then still "since the last curation", so the next one folds them.
+ */
+export function curatedAt(db: Database, runId: string): string {
+  return getRun(db, runId)?.started_at ?? new Date().toISOString()
+}
+
+/**
+ * The person rejected a curation request: no memory changes but the usual feedback memory.
+ * curated_at moves to its run's start, as on Approve: the next curation waits the usual
+ * gap, and it reads only the summaries the rejected one didn't.
+ */
 export function rejectCuration(db: Database, planId: string, taskId: string, feedback: string): void {
   const task = getTask(db, planId, taskId)
   if (!task || !isCurationRequest(task)) throw new GoalError(`Item ${taskId} is not a memory curation request.`)
+  const state = (task.state as { curation: CurationState }).curation
   db.transaction(() => {
     rejectTask(db, planId, taskId, feedback)
     const now = new Date().toISOString()
     updateTask(db, planId, taskId, { status: 'abandoned', abandon_reason: `Rejected: ${feedback.trim()}`, updated_at: now })
-    updateGoal(db, planId, { curated_at: now })
+    updateGoal(db, planId, { curated_at: curatedAt(db, state.run_id) })
   })()
 }

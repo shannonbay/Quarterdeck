@@ -212,6 +212,46 @@ describe('the curation brief', () => {
     expect(b.how_to_work.join('\n')).toContain('memory is over budget and a week has passed')
   })
 
+  describe('runs made while a curation request waits (review on #59)', () => {
+    /** A curation run 50 hours ago whose request then waits while 4 ordinary runs go on. */
+    function waitingCuration(): { run: string; task: string } {
+      insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Fact ' + 'x'.repeat(MEMORY_BRIEF_CHARS), source: 'agent' })
+      const run = curationRun()
+      db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago(50 * HOUR), run)
+      const task = proposeCuration(db, 'g1', run, [{ type: 'add', kind: 'fact', text: 'So far: nothing.' }])
+      endRun(db, run, 'Proposed.')
+      for (let i = 0; i < 4; i++) {
+        const r = insertRun(db, 'g1', 'interval', 'completed')
+        updateRun(db, r.id, { summary: `waiting run ${i}` })
+        db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago((40 - i) * HOUR), r.id)
+      }
+      return { run, task: task.id }
+    }
+
+    it('reach the next curation after Approve: curated_at is the curation run\'s start, not the decision', () => {
+      const { run, task } = waitingCuration()
+      decideItem(db, 'g1', task, { decision: 'approve' })
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+      expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(4)
+      const b = buildCurationBrief(db, 'g1', curationRun())
+      expect(b.runs.map((r) => r.summary)).toEqual(['waiting run 3', 'waiting run 2', 'waiting run 1', 'waiting run 0'])
+    })
+
+    it('and after Reject', () => {
+      const { run, task } = waitingCuration()
+      decideItem(db, 'g1', task, { decision: 'reject', feedback: 'Not now.' })
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+      expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(4)
+    })
+
+    it('a curation run that proposes nothing also counts from its start', () => {
+      const run = curationRun()
+      db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago(2 * HOUR), run)
+      endRun(db, run, 'Memory is tidy.')
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+    })
+  })
+
   it("refuses the goal's ordinary work in a curation run", () => {
     const run = curationRun()
     expect(() => addItem(db, 'g1', run, { goal: 'x' })).toThrow(/curation run/)
