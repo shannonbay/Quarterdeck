@@ -67,7 +67,8 @@ export interface CurationReason { due: 'runs' | 'time'; runs: number }
  * since curated_at, memory over budget or not, so its history gets folded) or by time
  * (CURATE_EVERY_DAYS since curated_at, at least CURATE_MIN_RUNS runs since, and active
  * unpinned memory over MEMORY_BRIEF_CHARS). Either way: at least CURATE_MIN_GAP_HOURS
- * since curated_at and since the last curation run; the goal is active and not one-off;
+ * since curated_at, since the last curation run, and since the person settled the last
+ * curation request (curated_at is the run's start, which can be days earlier); the goal is active and not one-off;
  * no curation request waits; no run is open or due on schedule; and the day's run limit
  * has room (curation counts toward it).
  */
@@ -79,6 +80,11 @@ export function curationReason(db: Database, planId: string, now: Date = new Dat
   // curated_at is the last settled curation run's start; one that failed, or whose request still waits, doesn't set it
   const recent = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND trigger = 'curate' AND status != 'skipped' AND started_at > ? LIMIT 1").get(planId, gapAgo)
   if (recent) return null
+  // The gap also counts from the person's decision: a request that waited days under Needs you isn't
+  // followed by another the moment they settle it, least of all after a "not now" Reject
+  const settled = db.prepare(`SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref LIKE ? AND status IN ('completed', 'abandoned')
+    AND updated_at > ? LIMIT 1`).get(planId, `${CURATION_REF}%`, gapAgo)
+  if (settled) return null
   const runs = runsSinceCuration(db, planId, goal.curated_at)
   let due: CurationReason['due']
   if (runs >= CURATE_AFTER_RUNS) {
@@ -505,8 +511,8 @@ export function curatedAt(db: Database, runId: string): string {
 
 /**
  * The person rejected a curation request: no memory changes but the usual feedback memory.
- * curated_at moves to its run's start, as on Approve: the next curation waits the usual
- * gap, and it reads only the summaries the rejected one didn't.
+ * curated_at moves to its run's start, as on Approve, so the next curation reads only the
+ * summaries the rejected one didn't; it waits CURATE_MIN_GAP_HOURS from this decision (curationReason).
  */
 export function rejectCuration(db: Database, planId: string, taskId: string, feedback: string): void {
   const task = getTask(db, planId, taskId)

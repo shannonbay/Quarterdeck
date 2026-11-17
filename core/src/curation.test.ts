@@ -244,6 +244,24 @@ describe('the curation brief', () => {
       expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(4)
     })
 
+    /** A busy goal: 25 runs while a request from 50 hours ago waited under Needs you. */
+    function waitedBusy(): string {
+      const { task } = waitingCuration()
+      ran(CURATE_AFTER_RUNS - 4)
+      return task
+    }
+
+    for (const decision of ['approve', 'reject'] as const) {
+      it(`waits a day from the decision before the next one, after ${decision === 'approve' ? 'Approve' : 'Reject ("not now")'}`, () => {
+        const task = waitedBusy()
+        decideItem(db, 'g1', task, decision === 'approve' ? { decision } : { decision, feedback: 'Not now.' })
+        expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(CURATE_AFTER_RUNS) // still counted from the run's start
+        expect(curationReason(db, 'g1')).toBeNull()
+        expect(curationReason(db, 'g1', new Date(Date.now() + 23 * HOUR))).toBeNull()
+        expect(curationReason(db, 'g1', new Date(Date.now() + 25 * HOUR))).toEqual({ due: 'runs', runs: CURATE_AFTER_RUNS })
+      })
+    }
+
     it('a curation run that proposes nothing also counts from its start', () => {
       const run = curationRun()
       db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago(2 * HOUR), run)
