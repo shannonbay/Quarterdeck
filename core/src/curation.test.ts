@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateMemory, getTask,
-  schedulerPass, claimRun, decideItem, endRun, queueRun, addItem, MEMORY_BRIEF_CHARS, SCHEMA_VERSION, dbSchemaVersion, markRunUntrusted, buildBrief, rejectTask,
+  schedulerPass, claimRun, decideItem, endRun, queueRun, addItem, MEMORY_BRIEF_CHARS, SCHEMA_VERSION, dbSchemaVersion, markRunUntrusted, buildBrief, rejectTask, runMigrations,
   curationDue, curationReason, runsSinceCuration, CURATE_AFTER_RUNS, CURATE_RUNS, curateModel, buildCurationBrief, proposeCuration, mergedSource, CURATION_REF, type CurationChange,
 } from './index.js'
 
@@ -29,10 +29,22 @@ function curationRun(): string {
 }
 
 describe('schema', () => {
-  it('is version 13, with goals.curated_at', () => {
-    expect(SCHEMA_VERSION).toBe(13)
-    expect(dbSchemaVersion(db)).toBe(13)
+  it('is version 14, with goals.curated_at', () => {
+    expect(SCHEMA_VERSION).toBe(14)
+    expect(dbSchemaVersion(db)).toBe(14)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
+  })
+
+  it('adds untrusted_root to runs and memory from version 13, leaving existing text alone', () => {
+    const m = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'x', source: 'agent', untrusted_source: 'memory mem_a (written after Bash)' })
+    for (const table of ['goal_runs', 'goal_memory']) db.exec(`ALTER TABLE ${table} DROP COLUMN untrusted_root`)
+    db.exec('PRAGMA user_version = 13')
+    runMigrations(db)
+    expect(dbSchemaVersion(db)).toBe(14)
+    for (const table of ['goal_runs', 'goal_memory']) {
+      expect((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)).toContain('untrusted_root')
+    }
+    expect(getMemory(db, m.id)).toMatchObject({ untrusted_source: 'memory mem_a (written after Bash)', untrusted_root: null })
   })
 })
 
@@ -441,7 +453,7 @@ describe('approve and reject', () => {
     for (const m of listMemory(db, 'g1', { activeOnly: true })) if (m.id !== soFar.id) updateMemory(db, m.id, { active: false })
     const later = insertRun(db, 'g1', 'manual', 'running')
     buildBrief(db, 'g1', later.id)
-    expect(getRun(db, later.id)!.untrusted_source).toBe(`memory ${soFar.id} (written after ${soFar.untrusted_source})`)
+    expect(getRun(db, later.id)!.untrusted_source).toBe(`memory ${soFar.id} (first: Bash(gh issue view*))`)
     expect(addItem(db, 'g1', later.id, { goal: 'Archive bank mail', action: { category: 'email.archive', summary: 'archive' } }).mode).toBe('propose')
   })
 

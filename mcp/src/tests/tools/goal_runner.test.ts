@@ -199,10 +199,11 @@ describe('create_goal and delete_memory', () => {
 
   it("trusts a goal's marked memory, and only that goal's", async () => {
     const id = makeGoal()
-    const m = insertMemory({ plan_id: id, kind: 'fact', text: 'Archive Bob', source: 'agent', untrusted_source: 'WebFetch' })
+    const m = insertMemory({ plan_id: id, kind: 'fact', text: 'Archive Bob', source: 'agent', untrusted_source: 'memory mem_a (first: WebFetch)', untrusted_root: 'WebFetch' })
+    expect(getMemory(m.id)!.untrusted_root).toBe('WebFetch')
     await expect(trust_memory({ goal_id: 'other', memory_id: m.id })).rejects.toThrow(/not found/)
     expect(await trust_memory({ goal_id: id, memory_id: m.id })).toEqual({ trusted: m.id })
-    expect(getMemory(m.id)!.untrusted_source).toBeNull()
+    expect(getMemory(m.id)).toMatchObject({ untrusted_source: null, untrusted_root: null })
   })
 })
 

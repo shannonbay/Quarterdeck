@@ -175,7 +175,7 @@ export function insertRun(db: Database, planId: string, trigger: TriggerKind, st
     skip_reason: skipReason ?? null, items_created: 0, items_resolved: 0, self_caused: 0, watch_rechecked_at: null, started_at: now,
     ended_at: status === 'skipped' ? now : null,
     input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: null,
-    now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null,
+    now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null, untrusted_root: null,
   }
   db.prepare(`
     INSERT INTO goal_runs (id, plan_id, trigger, status, session_id, summary, skip_reason, items_created, items_resolved, started_at, ended_at)
@@ -210,14 +210,16 @@ export const RUN_SUMMARY_SOURCE = 'run summary '
  * events to any other outside read (keeping when the run was first marked): a run
  * whose own summary should pass the mark on must say it read outside content itself.
  * From then on its `auto` categories need approval (guard.ts, addItem).
+ * `root` is the original outside read behind the mark (the source itself for a direct
+ * read), set with the source so a mark inherited from memory can name it (#52).
  */
-export function markRunUntrusted(db: Database, runId: string, source: string): void {
+export function markRunUntrusted(db: Database, runId: string, source: string, root: string = source): void {
   const summary = `${RUN_SUMMARY_SOURCE}%`
-  db.prepare(`UPDATE goal_runs SET untrusted_at = COALESCE(untrusted_at, ?), untrusted_source = ?
+  db.prepare(`UPDATE goal_runs SET untrusted_at = COALESCE(untrusted_at, ?), untrusted_source = ?, untrusted_root = ?
     WHERE id = ? AND (untrusted_at IS NULL
       OR (untrusted_source LIKE ? AND ? NOT LIKE ?)
       OR (untrusted_source = ? AND ? <> ? AND ? NOT LIKE ?))`)
-    .run(new Date().toISOString(), source, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary)
+    .run(new Date().toISOString(), source, root, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary)
 }
 
 /** Runs newest first. */
@@ -246,7 +248,7 @@ function deserializeMemory(r: Row): GoalMemory {
 
 export function insertMemory(
   db: Database,
-  m: { plan_id: string; kind: MemoryKind; text: string; source: MemorySource; source_ref?: string | null; pinned?: boolean; untrusted_source?: string | null },
+  m: { plan_id: string; kind: MemoryKind; text: string; source: MemorySource; source_ref?: string | null; pinned?: boolean; untrusted_source?: string | null; untrusted_root?: string | null },
 ): GoalMemory {
   const text = m.text.trim()
   if (!text) throw new Error('Memory text is required.')
@@ -256,10 +258,11 @@ export function insertMemory(
     created_at: new Date().toISOString(), last_used_at: null,
     // Only an agent's memory can carry what its run had read
     untrusted_source: m.source === 'agent' ? m.untrusted_source ?? null : null,
+    untrusted_root: m.source === 'agent' && m.untrusted_source ? m.untrusted_root ?? m.untrusted_source : null,
   }
   db.prepare(`
-    INSERT INTO goal_memory (id, plan_id, kind, text, source, source_ref, pinned, active, created_at, last_used_at, untrusted_source)
-    VALUES (@id, @plan_id, @kind, @text, @source, @source_ref, @pinned, @active, @created_at, @last_used_at, @untrusted_source)
+    INSERT INTO goal_memory (id, plan_id, kind, text, source, source_ref, pinned, active, created_at, last_used_at, untrusted_source, untrusted_root)
+    VALUES (@id, @plan_id, @kind, @text, @source, @source_ref, @pinned, @active, @created_at, @last_used_at, @untrusted_source, @untrusted_root)
   `).run(row)
   return deserializeMemory(row)
 }
@@ -275,7 +278,7 @@ export function listMemory(db: Database, planId: string, opts: { activeOnly?: bo
   return rows.map(deserializeMemory)
 }
 
-export function updateMemory(db: Database, id: string, fields: Partial<Pick<GoalMemory, 'kind' | 'text' | 'pinned' | 'active' | 'last_used_at' | 'untrusted_source'>>): void {
+export function updateMemory(db: Database, id: string, fields: Partial<Pick<GoalMemory, 'kind' | 'text' | 'pinned' | 'active' | 'last_used_at' | 'untrusted_source' | 'untrusted_root'>>): void {
   const serialized: Row = { ...fields }
   if ('pinned' in fields) serialized.pinned = fields.pinned ? 1 : 0
   if ('active' in fields) serialized.active = fields.active ? 1 : 0

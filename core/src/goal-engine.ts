@@ -36,6 +36,16 @@ export function readOutsideContent(run: Pick<GoalRun, 'untrusted_source'>): bool
   return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE))
 }
 
+/**
+ * Marks a run handed memory a marked run wrote. The source names that memory and the
+ * original read only, one level deep however many runs passed it on (#52); old rows
+ * without a root fall back to their source text.
+ */
+export function markFromMemory(db: Database, runId: string, m: Pick<GoalMemory, 'id' | 'untrusted_source' | 'untrusted_root'>): void {
+  const root = m.untrusted_root ?? m.untrusted_source!
+  markRunUntrusted(db, runId, `memory ${m.id} (first: ${root})`, root)
+}
+
 /** The person's word outranks the agent's: human and feedback memory rank 0, the agent's 1. */
 export function memoryRank(source: MemorySource): number {
   return source === 'agent' ? 1 : 0
@@ -353,7 +363,7 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
   if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE)
   // So is memory a marked run wrote: otherwise injected text could wait one run and act unchecked
   const taintedMemory = memory.find((m) => m.untrusted_source)
-  if (run && taintedMemory) markRunUntrusted(db, run.id, `memory ${taintedMemory.id} (written after ${taintedMemory.untrusted_source})`)
+  if (run && taintedMemory) markFromMemory(db, run.id, taintedMemory)
   // And so is the summary of a run that read outside content itself: a summary can carry injected text
   // to the next run as well as memory can. A mark only inherited from a summary doesn't pass on, so the
   // mark ends once the run that read outside content leaves recent_runs (RECENT_RUNS clean runs later)
@@ -362,7 +372,7 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
   const recentRuns = listRuns(db, planId, 10, { includeSkipped: false })
     .filter((r) => r.id !== runId && r.summary && r.trigger !== 'curate').slice(0, RECENT_RUNS)
   const taintedRun = recentRuns.find(readOutsideContent)
-  if (run && taintedRun) markRunUntrusted(db, run.id, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`)
+  if (run && taintedRun) markRunUntrusted(db, run.id, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`, taintedRun.untrusted_root ?? taintedRun.untrusted_source!)
   const marked = run ? getRun(db, run.id) : undefined
 
   const dayAgo = new Date(Date.now() - 86_400_000).toISOString()
@@ -423,7 +433,7 @@ export function recallMemory(db: Database, planId: string, runId: string | null,
   const now = new Date().toISOString()
   for (const m of found) updateMemory(db, m.id, { last_used_at: now })
   const tainted = found.find((m) => m.untrusted_source)
-  if (runId && tainted) markRunUntrusted(db, runId, `memory ${tainted.id} (written after ${tainted.untrusted_source})`)
+  if (runId && tainted) markFromMemory(db, runId, tainted)
   return found.map((m) => ({
     id: m.id, kind: m.kind, text: m.text, source: m.source, pinned: m.pinned, created_at: m.created_at, ...(m.untrusted_source && { untrusted: true as const }),
   }))
