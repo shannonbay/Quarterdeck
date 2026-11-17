@@ -95,6 +95,11 @@ export function commandParts(command: string): string[] {
  * over a rule on the tool's name. Without `input` no command rule matches.
  */
 export function matchToolCategory(rawMap: Record<string, string>, rawName: string, input?: Record<string, unknown>): string | null {
+  return matchToolRule(rawMap, rawName, input)?.category ?? null
+}
+
+/** The rule matchToolCategory picks, with its pattern (as written in the map, canonical tool name). */
+export function matchToolRule(rawMap: Record<string, string>, rawName: string, input?: Record<string, unknown>): { category: string; pattern: string } | null {
   const toolName = canonicalToolName(rawName)
   const toolMap = Object.fromEntries(Object.entries(rawMap).map(([p, c]) => [canonicalToolName(p), c]))
   const command = typeof input?.command === 'string' ? input.command : ''
@@ -106,15 +111,15 @@ export function matchToolCategory(rawMap: Record<string, string>, rawName: strin
       .sort(([a], [b]) => b![2].length - a![2].length) // most specific first
     for (const [m, category] of rules) {
       const re = globRegExp(m![2].trim(), 'i')
-      if (parts.some((p) => re.test(p))) return category
+      if (parts.some((p) => re.test(p))) return { category, pattern: m![0] }
     }
   }
-  if (toolMap[toolName]) return toolMap[toolName]
+  if (toolMap[toolName]) return { category: toolMap[toolName], pattern: toolName }
   const globs = Object.entries(toolMap)
     .filter(([p]) => p.includes('*') && !COMMAND_RULE.test(p))
     .sort(([a], [b]) => b.length - a.length) // most specific first
   for (const [pattern, category] of globs) {
-    if (globRegExp(pattern).test(toolName)) return category
+    if (globRegExp(pattern).test(toolName)) return { category, pattern }
   }
   return null
 }
@@ -136,7 +141,25 @@ const BUILTIN_UNTRUSTED_MAP = Object.fromEntries(BUILTIN_UNTRUSTED.map((p) => [p
 
 /** Whether a tool reads untrusted content: the built-in list, or the goal maps it to `untrusted`. */
 export function readsUntrusted(toolMap: Goal['tool_map'], toolName: string, input?: Record<string, unknown>): boolean {
-  return matchToolCategory(toolMap, toolName, input) === UNTRUSTED_CATEGORY || matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null
+  return untrustedLabel(toolMap, toolName, input) !== null
+}
+
+/**
+ * What a call that reads untrusted content marks its run with, or null when it reads
+ * nothing untrusted. A command rule names the rule that matched (`Bash: gh issue view`
+ * for `Bash(gh issue view*)`); a name-only rule and the built-in readers give the tool name.
+ */
+export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, input?: Record<string, unknown>): string | null {
+  const rule = matchToolRule(toolMap, toolName, input)
+  if (rule?.category === UNTRUSTED_CATEGORY) {
+    const command = COMMAND_RULE.exec(rule.pattern)
+    if (command) {
+      const pattern = command[2].trim().replace(/\*+$/, '').trim()
+      return pattern ? `${command[1]}: ${pattern}` : command[1]
+    }
+    return toolName
+  }
+  return matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null ? toolName : null
 }
 
 /** The reserved category a refusal to touch Quarterdeck's own data is recorded under. */
@@ -244,7 +267,8 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, 'deny', reason)
     return { decision: 'deny', category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason }
   }
-  if (readsUntrusted(goal.tool_map, toolName, input)) markRunUntrusted(db, run.id, toolName)
+  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input)
+  if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead)
   const category = matchToolCategory(goal.tool_map, toolName, input)
   if (!category) return { decision: 'allow', run_id: run.id }
   if (category === UNTRUSTED_CATEGORY) {

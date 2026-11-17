@@ -320,6 +320,8 @@ export interface GoalRun {
    */
   untrusted_at: string | null
   untrusted_source: string | null
+  /** The original outside read behind `untrusted_source` (itself for a direct read; what the memory first came from for a mark inherited from memory). */
+  untrusted_root: string | null
 }
 
 export type MemoryKind = 'fact' | 'rule' | 'preference'
@@ -342,6 +344,8 @@ export interface GoalMemory {
    * A brief that hands it out marks its run untrusted too; the person can clear it (Trust).
    */
   untrusted_source: string | null
+  /** The original outside read behind it, carried from run to memory to run so marks don't nest. */
+  untrusted_root: string | null
 }
 
 export interface HealthResult {

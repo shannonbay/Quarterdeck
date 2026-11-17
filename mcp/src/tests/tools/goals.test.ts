@@ -193,7 +193,7 @@ describe('goal tools', () => {
     expect(getMemory(after.memory.id)!.untrusted_source).toBe('WebFetch')
     await end_run({ summary: 'done' })
     const { brief } = await startRun(id)
-    expect(brief.run!.untrusted).toMatchObject({ source: expect.stringContaining('written after WebFetch') })
+    expect(brief.run!.untrusted).toMatchObject({ source: expect.stringContaining('(first: WebFetch)') })
   })
 
   it('end_run completes the run with counts and requires a run', async () => {
