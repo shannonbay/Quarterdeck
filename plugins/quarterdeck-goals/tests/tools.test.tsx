@@ -299,6 +299,29 @@ test('the inbox template maps Gmail tools, whichever Gmail server it is', async 
   expect(input.autonomy).toEqual({ 'email.archive': 'propose', 'email.delete': 'off', 'email.send': 'off' })
 })
 
+test('/goal-new creates the news digest from a typed answer', async ($, on) => {
+  const { asked } = engine(on, { answers: ['Daily news digest', 'AI research; hnrss.org/frontpage'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked[1]).toContain('What should the digest cover?')
+  expect(made.text).toContain('Created the goal "Daily News Digest"')
+  const input = fake.of('create_goal')[0]?.input as Record<string, unknown>
+  expect(input.instructions).toContain('What I follow: AI research; hnrss.org/frontpage.')
+  expect(input.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(input.autonomy).toEqual({ 'email.send': 'propose' })
+})
+
+test('/goal-new news digest, ask me in the first run', async ($, on) => {
+  engine(on, { answers: ['Daily news digest', 'Ask me in the first run'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  const instructions = String(fake.of('create_goal')[0]?.input.instructions)
+  expect(instructions).toContain('What I follow: not set yet.')
+  expect(instructions).toContain('wait for my answer before building a digest')
+})
+
 test('the job scan template asks what to look for and puts the answer in its instructions', async ($, on) => {
   const { asked } = engine(on, { answer: 'Weekly job scan' }) // the fake gives the same answer to both questions
   const fake = fakeQuarterdeck(on, [])

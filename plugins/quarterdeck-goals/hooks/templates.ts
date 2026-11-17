@@ -776,7 +776,7 @@ export const ASK_LATER = [
 
 /** What every news digest run does, whatever the interests. */
 const NEWS_RULES = [
-  'Each run, read the sources I follow (feeds first), keep stories from the last day that match my interests, and skip stories you have already reported (keep their links in memory).',
+  'Each run, read the sources I follow (feeds first), keep stories since your last digest (at most the last 3 days) that match my interests, and skip stories you have already reported (keep their links in one memory, replaced each run, holding only links from the last 3 days).',
   'Put the digest in your end_run summary, grouped by interest: headline, source, link and one line on why it matches.',
   'If the Gmail connector is available and you know my address, also propose one email.send item with the digest; send it once I approve.',
   'You may search the web for new sites and feeds on my interests. For each good one, add one item with ask_person (external_ref news-source:<url>) saying what you found and why it fits, at most 2 new-source questions a run.',
