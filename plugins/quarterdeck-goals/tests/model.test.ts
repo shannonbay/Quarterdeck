@@ -11,6 +11,7 @@ import {
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
+  NEWS_LATER,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -592,4 +593,23 @@ test('the issue triage goal proposes one batch per run, never writes but labels,
   expect(ISSUE_TRIAGE).toContain('gh issue edit <numbers> --add-label needs-refinement and nothing else in the command')
   expect(ISSUE_TRIAGE).toContain("Don't ask again about the issues I didn't pick")
   expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
+})
+
+test('the news digest template: daily, sonnet, email proposed, discovery capped', async () => {
+  const t = TEMPLATES.find((x) => x.name === 'Daily News Digest')!
+  expect(t.model).toBe('sonnet')
+  expect(t.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(t.autonomy).toEqual({ 'email.send': 'propose' })
+  expect(Object.values(t.tool_map)).toContain('email.send')
+  const typed = t.ask!.fill('AI research; hnrss.org/frontpage')
+  expect(typed).toContain('AI research; hnrss.org/frontpage')
+  for (const text of [typed, t.ask!.laterText]) {
+    expect(text).toContain('end_run summary')
+    expect(text).toContain('email.send')
+    expect(text).toContain('news-source:<url>')
+    expect(text).toContain('at most 2 new-source questions a run')
+    expect(text).toContain('Never sign up')
+  }
+  expect(t.ask!.laterText).toBe(NEWS_LATER)
+  expect(NEWS_LATER).toContain('wait for my answer before building a digest')
 })
