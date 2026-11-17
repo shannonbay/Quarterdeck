@@ -170,7 +170,7 @@ export interface Goal {
   status_source: string | null
   /** When the goal last went back to active (set by updateGoal); the runaway breaker counts only runs since then. */
   resumed_at: string | null
-  /** When its memory was last curated: a curation request approved or rejected, or a curation run that proposed nothing. */
+  /** Where its last curation reached: the start of the curation run last settled (its request approved or rejected, or it proposed nothing). Runs since then are not yet folded. */
   curated_at: string | null
 }
 

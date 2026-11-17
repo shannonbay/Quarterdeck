@@ -519,9 +519,10 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
           status_check: check, status_check_at: check ? now : null, status_check_failures: 0, status_tone: tone, status_source: 'run' }
       : { status_note: null, status_note_at: null, status_note_untrusted: null, status_check: null, status_check_at: null, status_check_failures: 0, status_tone: null, status_source: null })
   }
-  // A curation run that proposed nothing found memory tidy: no new curation until memory changes or a week passes
+  // A curation run that proposed nothing found memory tidy: curated_at moves to its start (as far as the
+  // summaries it read go, like a settled request), so the run count starts again from there
   if (run.trigger === 'curate' && !db.prepare('SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?').get(run.plan_id, CURATION_REF + runId)) {
-    updateGoal(db, run.plan_id, { curated_at: now })
+    updateGoal(db, run.plan_id, { curated_at: run.started_at })
   }
   archiveResolved(db, run.plan_id)
   finishIfDone(db, run.plan_id)

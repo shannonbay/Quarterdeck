@@ -3,7 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateMemory, getTask,
   schedulerPass, claimRun, decideItem, endRun, queueRun, addItem, MEMORY_BRIEF_CHARS, SCHEMA_VERSION, dbSchemaVersion, markRunUntrusted, buildBrief, rejectTask,
-  curationDue, curateModel, buildCurationBrief, proposeCuration, mergedSource, CURATION_REF, type CurationChange,
+  curationDue, curationReason, runsSinceCuration, CURATE_AFTER_RUNS, CURATE_RUNS, curateModel, buildCurationBrief, proposeCuration, mergedSource, CURATION_REF, type CurationChange,
 } from './index.js'
 
 let db: Database
@@ -36,28 +36,74 @@ describe('schema', () => {
   })
 })
 
+/** `n` of the goal's own runs, ended, each with a summary. */
+function ran(n: number, trigger: 'manual' | 'interval' | 'curate' = 'interval', status: 'completed' | 'failed' | 'skipped' = 'completed'): void {
+  for (let i = 0; i < n; i++) {
+    const r = insertRun(db, 'g1', trigger, status)
+    updateRun(db, r.id, { summary: `${trigger} run ${i}` })
+  }
+}
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString()
+const HOUR = 3_600_000
+
 describe('when curation runs', () => {
-  it('is due when unpinned memory is over budget and changed since the last curation', () => {
-    expect(curationDue(db, 'g1')).toBe(false)
+  it('is due by time: memory over budget and at least 3 runs, a week after the last curation', () => {
     overBudget()
-    expect(curationDue(db, 'g1')).toBe(true)
+    ran(2)
+    expect(curationReason(db, 'g1')).toBeNull() // too few runs, however long ago
+    ran(1)
+    expect(curationReason(db, 'g1')).toEqual({ due: 'time', runs: 3 })
   })
 
-  it('is not due within a week of curated_at, nor with no new memory since', () => {
-    overBudget()
-    updateGoal(db, 'g1', { curated_at: new Date(Date.now() - 2 * DAY).toISOString() })
-    expect(curationDue(db, 'g1')).toBe(false)
-    updateGoal(db, 'g1', { curated_at: new Date(Date.now() + 1000).toISOString() })
-    expect(curationDue(db, 'g1', new Date(Date.now() + 8 * DAY))).toBe(false)
-  })
-
-  it('pinned memory does not count toward the budget', () => {
+  it('by time, needs memory over budget, and pinned memory does not count toward it', () => {
     insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'p'.repeat(MEMORY_BRIEF_CHARS * 2), source: 'human', pinned: true })
-    expect(curationDue(db, 'g1')).toBe(false)
+    ran(10)
+    expect(curationReason(db, 'g1')).toBeNull()
+  })
+
+  it('is due by runs after 25 of the goal\'s own runs, with memory under budget', () => {
+    ran(CURATE_AFTER_RUNS - 1)
+    expect(curationReason(db, 'g1')).toBeNull()
+    ran(1)
+    expect(curationReason(db, 'g1')).toEqual({ due: 'runs', runs: CURATE_AFTER_RUNS })
+  })
+
+  it("doesn't count curation runs or skipped runs, and counts failed ones", () => {
+    ran(CURATE_AFTER_RUNS - 2)
+    ran(5, 'interval', 'skipped')
+    ran(1, 'interval', 'failed')
+    expect(runsSinceCuration(db, 'g1', null)).toBe(CURATE_AFTER_RUNS - 1)
+    ran(3, 'curate')
+    expect(runsSinceCuration(db, 'g1', null)).toBe(CURATE_AFTER_RUNS - 1)
+    expect(runsSinceCuration(db, 'g1', new Date(Date.now() + 1000).toISOString())).toBe(0) // only runs after the curation count
+  })
+
+  it('waits a day after the last curation, and a week by time', () => {
+    updateGoal(db, 'g1', { curated_at: ago(2 * HOUR) })
+    ran(CURATE_AFTER_RUNS)
+    expect(curationReason(db, 'g1')).toBeNull()
+    expect(curationReason(db, 'g1', new Date(Date.now() + 21 * HOUR))).toBeNull()
+    expect(curationReason(db, 'g1', new Date(Date.now() + 23 * HOUR))).toEqual({ due: 'runs', runs: CURATE_AFTER_RUNS })
+    // By time: runs and memory over budget, but within the week
+    db.prepare('DELETE FROM goal_runs').run()
+    overBudget()
+    ran(3)
+    updateGoal(db, 'g1', { curated_at: ago(2 * DAY) })
+    db.prepare('UPDATE goal_runs SET started_at = ?').run(ago(DAY))
+    expect(curationReason(db, 'g1')).toBeNull()
+    expect(curationReason(db, 'g1', new Date(Date.now() + 6 * DAY))).toEqual({ due: 'time', runs: 3 })
+  })
+
+  it('waits a day after a curation run that set nothing (it failed)', () => {
+    ran(CURATE_AFTER_RUNS)
+    ran(1, 'curate', 'failed')
+    expect(curationReason(db, 'g1')).toBeNull()
+    expect(curationReason(db, 'g1', new Date(Date.now() + 25 * HOUR))).toEqual({ due: 'runs', runs: CURATE_AFTER_RUNS })
   })
 
   it('is not due while a request waits, nor within a week of the last curation run', () => {
     const ids = overBudget()
+    ran(3)
     const run = curationRun()
     expect(curationDue(db, 'g1')).toBe(false) // a run is open
     proposeCuration(db, 'g1', run, [{ type: 'retire', id: ids[0]!, reason: 'stale' }])
@@ -67,6 +113,7 @@ describe('when curation runs', () => {
 
   it('queues one curation run from the scheduler pass, which starts on opus and leaves the schedule alone', async () => {
     overBudget()
+    ran(3)
     updateGoal(db, 'g1', { model: 'haiku', next_run_at: null })
     const pass = await schedulerPass(db, { holder: 's1' })
     expect(pass.claimed).toEqual([expect.objectContaining({ trigger: 'curate', model: 'opus' })])
@@ -77,6 +124,7 @@ describe('when curation runs', () => {
 
   it('a curation run that proposes nothing sets curated_at, so it is not queued again', () => {
     overBudget()
+    ran(CURATE_AFTER_RUNS)
     const run = curationRun()
     endRun(db, run, 'Memory is tidy.')
     expect(getGoal(db, 'g1')!.curated_at).not.toBeNull()
@@ -139,6 +187,87 @@ describe('the curation brief', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('carries every summary since the last curation, up to 60, and says why it is due', () => {
+    ran(5)
+    db.prepare('UPDATE goal_runs SET started_at = ?').run(ago(3 * DAY))
+    updateGoal(db, 'g1', { curated_at: ago(2 * DAY) })
+    ran(CURATE_RUNS + 10)
+    const b = buildCurationBrief(db, 'g1', curationRun())
+    expect(b.runs).toHaveLength(CURATE_RUNS)
+    expect(b.runs_since_curation).toBe(CURATE_RUNS + 10)
+    expect(b.due).toBe('runs')
+    expect(b.how_to_work.join('\n')).toContain(`run ${CURATE_RUNS + 10} times since its last curation`)
+  })
+
+  it("leaves out summaries from before the last curation, and says it is due by time when it is", () => {
+    ran(4)
+    db.prepare('UPDATE goal_runs SET started_at = ?').run(ago(9 * DAY))
+    updateGoal(db, 'g1', { curated_at: ago(8 * DAY) })
+    ran(3)
+    const b = buildCurationBrief(db, 'g1', curationRun())
+    expect(b.runs).toHaveLength(3)
+    expect(b.due).toBe('time')
+    expect(b.how_to_work.join('\n')).toContain('memory is over budget and a week has passed')
+  })
+
+  describe('runs made while a curation request waits (review on #59)', () => {
+    /** A curation run 50 hours ago whose request then waits while 4 ordinary runs go on. */
+    function waitingCuration(): { run: string; task: string } {
+      insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Fact ' + 'x'.repeat(MEMORY_BRIEF_CHARS), source: 'agent' })
+      const run = curationRun()
+      db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago(50 * HOUR), run)
+      const task = proposeCuration(db, 'g1', run, [{ type: 'add', kind: 'fact', text: 'So far: nothing.' }])
+      endRun(db, run, 'Proposed.')
+      for (let i = 0; i < 4; i++) {
+        const r = insertRun(db, 'g1', 'interval', 'completed')
+        updateRun(db, r.id, { summary: `waiting run ${i}` })
+        db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago((40 - i) * HOUR), r.id)
+      }
+      return { run, task: task.id }
+    }
+
+    it('reach the next curation after Approve: curated_at is the curation run\'s start, not the decision', () => {
+      const { run, task } = waitingCuration()
+      decideItem(db, 'g1', task, { decision: 'approve' })
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+      expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(4)
+      const b = buildCurationBrief(db, 'g1', curationRun())
+      expect(b.runs.map((r) => r.summary)).toEqual(['waiting run 3', 'waiting run 2', 'waiting run 1', 'waiting run 0'])
+    })
+
+    it('and after Reject', () => {
+      const { run, task } = waitingCuration()
+      decideItem(db, 'g1', task, { decision: 'reject', feedback: 'Not now.' })
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+      expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(4)
+    })
+
+    /** A busy goal: 25 runs while a request from 50 hours ago waited under Needs you. */
+    function waitedBusy(): string {
+      const { task } = waitingCuration()
+      ran(CURATE_AFTER_RUNS - 4)
+      return task
+    }
+
+    for (const decision of ['approve', 'reject'] as const) {
+      it(`waits a day from the decision before the next one, after ${decision === 'approve' ? 'Approve' : 'Reject ("not now")'}`, () => {
+        const task = waitedBusy()
+        decideItem(db, 'g1', task, decision === 'approve' ? { decision } : { decision, feedback: 'Not now.' })
+        expect(runsSinceCuration(db, 'g1', getGoal(db, 'g1')!.curated_at)).toBe(CURATE_AFTER_RUNS) // still counted from the run's start
+        expect(curationReason(db, 'g1')).toBeNull()
+        expect(curationReason(db, 'g1', new Date(Date.now() + 23 * HOUR))).toBeNull()
+        expect(curationReason(db, 'g1', new Date(Date.now() + 25 * HOUR))).toEqual({ due: 'runs', runs: CURATE_AFTER_RUNS })
+      })
+    }
+
+    it('a curation run that proposes nothing also counts from its start', () => {
+      const run = curationRun()
+      db.prepare('UPDATE goal_runs SET started_at = ? WHERE id = ?').run(ago(2 * HOUR), run)
+      endRun(db, run, 'Memory is tidy.')
+      expect(getGoal(db, 'g1')!.curated_at).toBe(getRun(db, run)!.started_at)
+    })
   })
 
   it("refuses the goal's ordinary work in a curation run", () => {
