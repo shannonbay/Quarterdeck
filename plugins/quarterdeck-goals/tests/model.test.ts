@@ -10,6 +10,7 @@ import {
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
+  REVIEWER_MARK, signLine, prCommentWatch,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
@@ -607,4 +608,18 @@ test('the issue fixer reads inline review comments with the repo written out; th
   }
   expect(ISSUE_FIX_WORK).toContain('gh api repos/<owner>/<name>/pulls/<number>/comments --jq')
   expect(ISSUE_FIX_WORK).not.toContain('repos/{owner}/{repo}/pulls')
+})
+
+test('the issue fixer acts on PR Reviewer reviews on any pull request from this repo, not only its own', () => {
+  // the reviewer sign line (signLine) carries the mark the watch looks for
+  expect(signLine('Reviewed')).toContain(REVIEWER_MARK)
+  const watch = prCommentWatch()
+  expect(watch).toContain('isCrossRepository,comments,reviews')
+  expect(watch).toContain('select(.isCrossRepository | not)') // a fork's branch can't be pushed to
+  expect(watch).toContain(`contains(\\"${REVIEWER_MARK}\\")`) // on a pull request that isn't its own: reviews with the mark
+  expect(watch).toContain('then (.comments + .reviews)') // on its own: every trusted comment and review
+  expect(watch).not.toContain('$') // sh would expand a jq variable inside the double quotes
+  expect(ISSUE_FIX_WORK).toContain('lands on any other open pull request from a branch of this repo')
+  expect(ISSUE_FIX_WORK).toContain('act only on the reviews with those ids')
+  expect(ISSUE_FIX_WORK).toContain('pushing to that same branch once I approve')
 })
