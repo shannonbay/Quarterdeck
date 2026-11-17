@@ -74,6 +74,8 @@ export type Forge = {
   writes: string[]
   /** The category those writes fall to (off in every repo template). */
   write: string
+  /** The status_check kind that follows one of its pull requests, so a goal status stays current between runs. */
+  prCheck: string
 }
 
 /** GitHub through gh: what the repo templates were written for. */
@@ -83,6 +85,7 @@ export const GITHUB: Forge = {
     'issue comment', 'issue close', 'issue create', 'issue delete', 'issue edit', 'issue lock', 'issue reopen', 'issue transfer', 'issue pin', 'issue develop',
     'api', 'auth', 'repo', 'release', 'secret', 'variable', 'workflow', 'gist', 'ssh-key', 'gpg-key', 'label'],
   write: 'github.write',
+  prCheck: 'github_pr',
 }
 
 /** A forge's write subcommands, less `except`, as rules sending each to its write category. */
@@ -608,9 +611,9 @@ export function branchName(answer: string): string {
 const OWN_CLONE = (suffix: string, then = 'For each fix, fetch and branch from the latest default branch.') =>
   `Work in a clone of your own: on first use, clone this repo (its GitHub remote) into a sibling folder named after this one with -${suffix} on the end, and say where in your summary. Never change files, branches or the stash in this folder: it's mine. ${then}`
 
-/** What a GitHub fixer's goal status means, with a github_pr check so it stays current between runs. */
-export const STATUS = (open: string, pr: string) =>
-  `Status: end each run with a status saying how the goal stands: "${open}" while a ${pr} you opened waits (the oldest, if there are several; add "+N more" for the rest), otherwise "clean". Give it a status_tone: attention while a ${pr} waits, ok when clean, problem when something is broken that you couldn't fix. With a ${pr} status, attach a status_check (kind github_pr, this repo as owner/name, its number, holds_while ["OPEN"], otherwise {"MERGED": {"status": "PR #<number> merged", "tone": "ok"}, "CLOSED": {"status": "PR #<number> closed", "tone": "attention"}}), so it updates without a run.`
+/** What a fixer's goal status means, with its forge's pull request check (github_pr by default) so it stays current between runs. */
+export const STATUS = (open: string, pr: string, forge: Forge = GITHUB) =>
+  `Status: end each run with a status saying how the goal stands: "${open}" while a ${pr} you opened waits (the oldest, if there are several; add "+N more" for the rest), otherwise "clean". Give it a status_tone: attention while a ${pr} waits, ok when clean, problem when something is broken that you couldn't fix. With a ${pr} status, attach a status_check (kind ${forge.prCheck}, this repo as owner/name, its number, holds_while ["OPEN"], otherwise {"MERGED": {"status": "PR #<number> merged", "tone": "ok"}, "CLOSED": {"status": "PR #<number> closed", "tone": "attention"}}), so it updates without a run.`
 
 /** The CI fixer's standing instructions, after which branch. */
 export const CI_FIX = [

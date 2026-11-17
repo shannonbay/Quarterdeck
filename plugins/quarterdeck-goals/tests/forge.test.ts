@@ -1,17 +1,26 @@
 import { expect, test } from 'claude-code/testing'
 
-import { GITHUB, refineRules, reviewRules, triageRules, type Forge } from '../hooks/templates'
+import { GITHUB, STATUS, refineRules, reviewRules, triageRules, type Forge } from '../hooks/templates'
 
 test('the repo templates take their write rules from a forge, GitHub by default (#44)', async () => {
   for (const rules of [reviewRules, refineRules, triageRules]) expect(rules(GITHUB)).toEqual(rules())
 })
 
 test('another forge brings its own CLI, writes and category, and none of GitHub\'s', async () => {
-  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write' }
+  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr' }
   expect(reviewRules(other)['Bash(glab mr merge*)']).toBe('forge.write')
   expect(reviewRules(other)['PowerShell(glab label*)']).toBe('forge.write')
   // The refiner names label writes one by one, so the blanket rule is left out
   expect(refineRules(other)['Bash(glab label*)']).toBeUndefined()
   expect(Object.keys(reviewRules(other)).some((k) => k.includes('gh release'))).toBe(false)
   expect(Object.keys(reviewRules()).some((k) => k.includes('gh release'))).toBe(true)
+})
+
+test('a fixer status names its forge\'s pull request check, github_pr by default (#44)', async () => {
+  expect(STATUS('PR #<number> awaiting review', 'pull request')).toBe(STATUS('PR #<number> awaiting review', 'pull request', GITHUB))
+  expect(STATUS('open', 'pull request')).toContain('kind github_pr,')
+  const other: Forge = { cli: 'glab', writes: [], write: 'forge.write', prCheck: 'gitlab_mr' }
+  const status = STATUS('open', 'merge request', other)
+  expect(status).toContain('kind gitlab_mr,')
+  expect(status).not.toContain('github_pr')
 })
