@@ -69,6 +69,7 @@ What wakes the goal up.
 | `interval` | ✅ | Every N minutes, optionally within active hours (`"08:00-20:00"`, local time). |
 | `cron` | Phase 2 | Full cron expression. |
 | `event` | Phase 2 | `POST /api/goals/:id/trigger` with a per-goal secret (e.g. from a mail webhook). |
+| `curate` | Built (#42) | Queued by the scheduler to curate the goal's memory (see Memory, "Curation"). Does none of the goal's work. |
 
 Triggers that fire while a run is already in progress, or while the channel is busy, are **coalesced**: one pending run at most per goal, retried on the next scheduler tick, and shown as "skipped — busy" in the run timeline.
 
@@ -121,7 +122,18 @@ Rules:
 - Agents can add memories and deactivate their own; they can't edit or deactivate `human` memories.
 - Humans can edit, pin, deactivate or delete any memory in the UI.
 - When a human **rejects** an item with feedback, Quarterdeck creates a `feedback` memory from it automatically (editable afterwards). This is how the goal learns without anyone writing rules by hand.
-- Size is bounded: the brief includes every pinned memory plus the most recently used others, up to `MEMORY_BRIEF_CHARS` (default 4 000). The UI warns when active memories exceed that, so the human can prune or pin.
+- Size is bounded: the brief includes every pinned memory, then the others by which memory wins (below) up to `MEMORY_BRIEF_CHARS` (4 000). The UI warns when active memory exceeds that, so the human can prune or pin.
+- **Index and recall.** What the brief leaves out is listed in `memory_index`: one entry per left-out memory, `{ id, kind, source, start }` (`start`: its first 60 characters), best first, up to `MEMORY_INDEX_CHARS` (1 500 characters of JSON); `memory_omitted` stays the full count, so a run can tell when the index was cut too. An entry for an untrusted memory is `{ id, kind, untrusted: true }`, with no text. `recall(memory_ids)` (up to 20) returns the goal's active memories in full and sets their `last_used_at`; it is a read (no history entry), refuses another goal's or inactive memory, and marks the run for an untrusted memory (`memory <id> (written after …)`), as the brief does. Only `recall` sets `last_used_at`, so it means "a run looked this up".
+
+**Which memory wins** (the brief's cut, curation, and the server's check of a proposal):
+1. The person's word outranks the agent's: `human` (which includes answers to questions) and `feedback` beat `agent`, whatever their age.
+2. Within a rank, the newer memory wins, by `created_at`. `last_used_at` only says a run looked a memory up.
+3. Pinned memories are never retired, merged or unpinned unless the change names it (`pinned: true`) and the person approves it. Only the person can pin.
+4. Untrusted never replaces trusted: an untrusted memory can't be merged with a trusted one or be the `replaced_by` of one, and anything merged from untrusted memory keeps the mark.
+
+**Curation ("dreaming", `core/src/curation.ts`).** The scheduler queues a run with trigger `curate` when all hold: the goal is active and not one-off; active unpinned memory is over `MEMORY_BRIEF_CHARS`; memory was added since `goals.curated_at`; `curated_at` and the last curation run are at least 7 days old; no curation request waits under Needs you; no run is open or due on schedule; and the day's run limit has room (curation counts toward `max_runs_per_day`, and not toward the runaway breaker). It runs on `opus` (`CURATE_MODEL`), or `fable` for a Fable-family goal, whatever the goal's own model; `CLAUDE_CODE_SUBAGENT_MODEL` still outranks it. Its brief (`get_goal_brief` with its run id) has every active memory in full, the last 30 run summaries, the rules above, and curation-only instructions; it reads every memory, so an untrusted one marks it. It does none of the goal's work (`add_item` and `remember` are refused), leaves the schedule's clock alone, and nothing joins it: Run now, answers and watch events wait for the run after it.
+
+It calls `propose_curation({ changes })` once, with `merge { from, kind, text }`, `rewrite { id, text, reason? }`, `retire { id, reason, replaced_by? }`, `unpin { id, reason }` and `add { kind, text }` (a change to a pinned memory carries `pinned: true`). Folding run history is an `add` of one "So far" fact plus a `retire` of the previous one; `goal_runs` rows aren't pruned. The server checks the rules and refuses the batch on the first broken one. It becomes one Needs-you request whose notes list every change (old text → new, what is retired and why), changes to the person's own or pinned memory apart from the rest. **The server applies it on Approve**, in one transaction, so what is applied is exactly what the person saw; a change whose memory was edited, retired or deleted since is skipped and the result says so. A merged memory's `source` is the lowest rank among its sources (`agent` if any was; `human` only when all were, else `feedback`), it keeps `untrusted_source` if any source had it (approving doesn't trust it), it is pinned if a source was, and its `source_ref` is the request; `add` is always `agent`. Reject adds a feedback memory as usual and changes no other memory. Approve, Reject, and a curation run that proposes nothing all set `curated_at`.
 
 ### Autonomy and action categories
 
@@ -211,6 +223,8 @@ A run that exceeds `max_run_minutes` is cancelled through the channel's existing
   "run": { "id": "run_42", "trigger": "interval", "started_at": "…", "limits": { "max_run_minutes": 15, "max_items_per_run": 50 } },
   "autonomy": { "email.archive": "auto", "email.send": "propose", "email.delete": "off" },
   "memory": [ { "id": "m3", "kind": "rule", "text": "Never archive mail from the bank.", "source": "human" } ],
+  "memory_omitted": 1,
+  "memory_index": [ { "id": "m9", "kind": "fact", "source": "agent", "start": "The Thursday meeting moved to Friday from 14 Nov…" } ],
   "decisions_since_last_run": [
     { "item": "17", "decision": "approved", "action": { "category": "email.send", "summary": "…" } },
     { "item": "19", "decision": "rejected", "feedback": "Too formal — Alice is my manager, keep it casual." }
@@ -236,6 +250,8 @@ New tools. Existing task tools (`create_task`, `update_task`, `set_status`, `ver
 | `add_item` | Create a work item: `goal`, `external_ref`, optional gates and `action` (a proposal). If an item with that `external_ref` exists, returns it instead (`{ existing: true }`), including archived ones. Respects `max_items_per_run`. Rejects actions in `off` categories; forces `requires_approval` for `propose` categories. |
 | `remember` | Add a memory (`kind`, `text`, optional `source_ref`). |
 | `forget` | Deactivate a memory the agent created. |
+| `recall` | Read memories the brief left out (`memory_ids` from `memory_index`), in full. A read: no history entry. |
+| `propose_curation` | Curation runs only: one batch of memory changes, applied by the server if the person approves it. |
 | `end_run` | Finish the run with a `summary`. Required; a run that ends without it is marked failed with an empty summary. An optional `status` (a few words, e.g. `2 PRs awaiting review`) becomes the goal's status: kept on the `goals` row (`status_note`, `status_note_at`, `status_note_untrusted`), cut to 40 characters of plain text, and left as it is by a run that doesn't pass one (`""` clears it). The pane shows it as `[status]` after a quiet goal's name, in its own colours (a run can't colour it), dimmed when stale (the last run failed or ended without setting it), with a yellow ⚠ when the run that set it had read untrusted content other than watch lines (every watch-started run reads those, so there the expanded card says "set after reading watch events" instead; a later read replaces the watch-events mark, so the ⚠ comes back). A run can attach a `status_check` to the status when it describes something outside Quarterdeck that can change between runs: `{kind: github_pr \| github_issue, repo: "owner/name", number, holds_while: [states], otherwise: {state: status}}`. Core validates it (known kind, `repo` matching `^[\w.-]+/[\w.-]+$`, positive integer `number`, states from the kind's set: `OPEN`, `CLOSED`, plus `MERGED` for a PR) and stores it on `goals.status_check` (with `status_check_at`, `status_check_failures`); `otherwise` texts are cleaned like a status and keep the run's untrusted mark. Setting a new status or clearing it replaces or clears the check. The scheduler pass (`checkStatuses` in `status-check.ts`, after watches, own 20 s budget) evaluates each check at most every 5 minutes by running `gh pr\|issue view <n> --repo <repo> --json state` through `execFile` with an argument array (no shell). A state in `holds_while` writes nothing (no revision bump); a state in `otherwise` sets the status to that text and clears the check; any other state, or 3 failed checks in a row, shows the status as stale until a run sets a new one. |
 | `run_goal` | Ask Quarterdeck to start a run now (for chaining from an interactive session). |
 
@@ -404,7 +420,7 @@ After a few weeks, the approval stats show 40/40 `email.draft_reply` proposals a
 ## Open Questions
 
 1. **When do approved actions execute?** Next scheduled run (simple, may wait up to an interval) vs. an immediate run on approval (faster, more channel contention). Proposal: immediate run if the channel is free, else next run.
-2. **Memory quality.** Feedback-derived memories may be too specific ("this email was too formal"). Should the next run be asked to generalise a new feedback memory into a rule, with the human confirming?
+2. ~~**Memory quality.**~~ Answered by memory curation (#42, see Memory): a weekly curation run proposes generalising specific feedback into a rule, merging, retiring and folding run history, and the person approves the batch.
 3. **Goal-level gates.** Should a run itself have a verify command (e.g. "inbox count did not increase") that marks the run failed?
 4. ~~**Sharing the session.**~~ Answered by phase 2.5: each run has a subagent of its own.
 5. **Cost visibility.** Channel-based runs don't report token usage today. Without it, `limits` can only cap time and item counts.

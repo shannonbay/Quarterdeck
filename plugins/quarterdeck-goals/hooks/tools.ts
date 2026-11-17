@@ -6,7 +6,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GoalCard } from '../types'
-import { addTodo, answerItem, approve, createGoal, fetchOverview, editTodo, fetchTodos, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
+import { addTodo, answerItem, approve, createGoal, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
 import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
@@ -255,7 +255,11 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
   // and always fetch it: an expanded goal's detail has its instructions cut
   if (name === 'goal_detail' || name === 'update_goal') goal = await withDetail($, goal)
 
-  if (name === 'goal_detail') return { text: describe(goal, now), isError: false }
+  if (name === 'goal_detail') {
+    // What waits for the person in full (a memory curation lists every change), not the overview's clip
+    const needsYou = await Promise.all(goal.needsYou.map((i) => (i.clipped ? getItem($, goal.id, i.id).then((full) => ({ ...i, ...full }), () => i) : i)))
+    return { text: describe({ ...goal, needsYou }, now), isError: false }
+  }
 
   if (name === 'update_goal') {
     // Only the change fields: the call also carries the engine's own (tool, tool_use_id)

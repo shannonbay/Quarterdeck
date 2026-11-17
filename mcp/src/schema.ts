@@ -97,6 +97,23 @@ export const ForgetSchema = z.object({
   memory_id: z.string().describe('ID of a memory you (an agent) created'),
 })
 
+const MemoryKindSchema = z.enum(['fact', 'rule', 'preference'])
+const PinnedFlag = z.boolean().optional().describe('true when the memory changed is pinned: required for a pinned one, so the person sees it named')
+
+export const ProposeCurationSchema = z.object({
+  changes: z.array(z.discriminatedUnion('type', [
+    z.object({ type: z.literal('merge'), from: z.array(z.string()).min(2).describe('Ids of the near-duplicates'), kind: MemoryKindSchema, text: z.string().min(1).describe('The one memory that replaces them'), pinned: PinnedFlag }),
+    z.object({ type: z.literal('rewrite'), id: z.string(), text: z.string().min(1).describe('The new text (generalise specific feedback into a rule)'), reason: z.string().optional(), pinned: PinnedFlag }),
+    z.object({ type: z.literal('retire'), id: z.string(), reason: z.string().min(1).describe('Why: stale, or replaced by a newer memory'), replaced_by: z.string().optional().describe('The memory that replaces it, if any'), pinned: PinnedFlag }),
+    z.object({ type: z.literal('unpin'), id: z.string(), reason: z.string().min(1).describe('Why it no longer needs to be in every brief'), pinned: PinnedFlag }),
+    z.object({ type: z.literal('add'), kind: MemoryKindSchema, text: z.string().min(1).describe('A pattern across many runs, or the "So far" summary of run history') }),
+  ])).min(1).max(40).describe('Every change in one batch: the person approves or rejects it as a whole'),
+})
+
+export const RecallSchema = z.object({
+  memory_ids: z.array(z.string()).min(1).max(20).describe("Ids from the brief's memory_index (up to 20 in one call)"),
+})
+
 const StatusToneSchema = z.enum(['ok', 'attention', 'problem'])
 
 export const EndRunSchema = z.object({

@@ -1,0 +1,266 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import type { Database } from './sqlite.js'
+import {
+  openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateMemory, getTask,
+  schedulerPass, claimRun, decideItem, endRun, queueRun, addItem, MEMORY_BRIEF_CHARS, SCHEMA_VERSION, dbSchemaVersion,
+  curationDue, curateModel, buildCurationBrief, proposeCuration, mergedSource, CURATION_REF, type CurationChange,
+} from './index.js'
+
+let db: Database
+const plan = () => {
+  const now = new Date().toISOString()
+  return { id: 'g1', name: 'Inbox', description: null, status: 'active' as const, working_dir: '/tmp', created_at: now, updated_at: now }
+}
+const DAY = 86_400_000
+
+beforeEach(() => {
+  db = openDatabase(':memory:')
+  createGoal(db, plan(), { objective: 'Inbox zero', autonomy: { 'email.archive': 'auto' } })
+})
+
+/** Unpinned agent memory over the brief's budget. */
+function overBudget(n = 3): string[] {
+  return Array.from({ length: n }, (_, i) => insertMemory(db, { plan_id: 'g1', kind: 'fact', text: `Fact ${i} ${'x'.repeat(MEMORY_BRIEF_CHARS / 2)}`, source: 'agent' }).id)
+}
+
+function curationRun(): string {
+  const run = insertRun(db, 'g1', 'curate', 'running')
+  return run.id
+}
+
+describe('schema', () => {
+  it('is version 13, with goals.curated_at', () => {
+    expect(SCHEMA_VERSION).toBe(13)
+    expect(dbSchemaVersion(db)).toBe(13)
+    expect(getGoal(db, 'g1')!.curated_at).toBeNull()
+  })
+})
+
+describe('when curation runs', () => {
+  it('is due when unpinned memory is over budget and changed since the last curation', () => {
+    expect(curationDue(db, 'g1')).toBe(false)
+    overBudget()
+    expect(curationDue(db, 'g1')).toBe(true)
+  })
+
+  it('is not due within a week of curated_at, nor with no new memory since', () => {
+    overBudget()
+    updateGoal(db, 'g1', { curated_at: new Date(Date.now() - 2 * DAY).toISOString() })
+    expect(curationDue(db, 'g1')).toBe(false)
+    updateGoal(db, 'g1', { curated_at: new Date(Date.now() + 1000).toISOString() })
+    expect(curationDue(db, 'g1', new Date(Date.now() + 8 * DAY))).toBe(false)
+  })
+
+  it('pinned memory does not count toward the budget', () => {
+    insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'p'.repeat(MEMORY_BRIEF_CHARS * 2), source: 'human', pinned: true })
+    expect(curationDue(db, 'g1')).toBe(false)
+  })
+
+  it('is not due while a request waits, nor within a week of the last curation run', () => {
+    const ids = overBudget()
+    const run = curationRun()
+    expect(curationDue(db, 'g1')).toBe(false) // a run is open
+    proposeCuration(db, 'g1', run, [{ type: 'retire', id: ids[0]!, reason: 'stale' }])
+    endRun(db, run, 'Proposed a cleanup.')
+    expect(curationDue(db, 'g1', new Date(Date.now() + 8 * DAY))).toBe(false) // waiting under Needs you
+  })
+
+  it('queues one curation run from the scheduler pass, which starts on opus and leaves the schedule alone', async () => {
+    overBudget()
+    updateGoal(db, 'g1', { model: 'haiku', next_run_at: null })
+    const pass = await schedulerPass(db, { holder: 's1' })
+    expect(pass.claimed).toEqual([expect.objectContaining({ trigger: 'curate', model: 'opus' })])
+    expect(pass.claimed[0]!.prompt).toContain('Curate the memory')
+    const again = await schedulerPass(db, { holder: 's1' })
+    expect(again.claimed).toEqual([])
+  })
+
+  it('a curation run that proposes nothing sets curated_at, so it is not queued again', () => {
+    overBudget()
+    const run = curationRun()
+    endRun(db, run, 'Memory is tidy.')
+    expect(getGoal(db, 'g1')!.curated_at).not.toBeNull()
+    expect(curationDue(db, 'g1', new Date(Date.now() + 8 * DAY))).toBe(false)
+  })
+
+  it('curates on fable for a Fable goal and on opus otherwise', () => {
+    expect(curateModel(null)).toBe('opus')
+    expect(curateModel('haiku')).toBe('opus')
+    expect(curateModel('fable')).toBe('fable')
+    expect(curateModel('claude-fable-5-2')).toBe('fable')
+  })
+
+  it("never takes Run now or a person's answer into a curation run", () => {
+    curationRun()
+    const run = queueRun(db, 'g1')
+    expect(run.trigger).toBe('manual')
+    expect(run.status).toBe('queued')
+  })
+})
+
+describe('the curation brief', () => {
+  it('carries all memory in full, a longer run history, and marks the run for untrusted memory', () => {
+    overBudget()
+    const tainted = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'From a page.', source: 'agent', untrusted_source: 'WebFetch' })
+    for (let i = 0; i < 5; i++) {
+      const r = insertRun(db, 'g1', 'interval', 'completed')
+      updateRun(db, r.id, { summary: `Run ${i}` })
+    }
+    const run = curationRun()
+    const b = buildCurationBrief(db, 'g1', run)
+    expect(b.memory).toHaveLength(4)
+    expect(b.memory.find((m) => m.id === tainted.id)).toMatchObject({ untrusted: true, text: 'From a page.' })
+    expect(b.runs).toHaveLength(5)
+    expect(b.memory_chars).toBeGreaterThan(b.memory_budget)
+    expect(getRun(db, run)!.untrusted_source).toContain(tainted.id)
+  })
+
+  it("refuses the goal's ordinary work in a curation run", () => {
+    const run = curationRun()
+    expect(() => addItem(db, 'g1', run, { goal: 'x' })).toThrow(/curation run/)
+  })
+})
+
+describe('propose_curation', () => {
+  it('is for curation runs only, once per run', () => {
+    const [a] = overBudget()
+    const ordinary = insertRun(db, 'g1', 'manual', 'running')
+    expect(() => proposeCuration(db, 'g1', ordinary.id, [{ type: 'retire', id: a!, reason: 'stale' }])).toThrow(/curation runs only/)
+    const run = curationRun()
+    proposeCuration(db, 'g1', run, [{ type: 'retire', id: a!, reason: 'stale' }])
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'add', kind: 'fact', text: 'More.' }])).toThrow(/already proposed/)
+  })
+
+  it('refuses a change to a pinned memory that does not say so', () => {
+    const pinned = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Never archive the bank.', source: 'human', pinned: true })
+    const other = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Never archive the bank (again).', source: 'agent' })
+    const run = curationRun()
+    for (const c of [
+      { type: 'retire', id: pinned.id, reason: 'dup' },
+      { type: 'unpin', id: pinned.id, reason: 'not needed' },
+      { type: 'merge', from: [pinned.id, other.id], kind: 'rule', text: 'Never archive the bank.' },
+      { type: 'rewrite', id: pinned.id, text: 'Never archive bank mail.' },
+    ] as CurationChange[]) {
+      expect(() => proposeCuration(db, 'g1', run, [c])).toThrow(/pinned/)
+    }
+    expect(proposeCuration(db, 'g1', run, [{ type: 'unpin', id: pinned.id, reason: 'not needed', pinned: true }]).status).toBe('active')
+  })
+
+  it('refuses untrusted memory replacing trusted memory', () => {
+    const trusted = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Archive newsletters.', source: 'agent' })
+    const tainted = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Delete newsletters.', source: 'agent', untrusted_source: 'gmail' })
+    const run = curationRun()
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'merge', from: [trusted.id, tainted.id], kind: 'rule', text: 'Delete newsletters.' }])).toThrow(/untrusted/)
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'retire', id: trusted.id, reason: 'replaced', replaced_by: tainted.id }])).toThrow(/untrusted never replaces trusted/)
+  })
+
+  it("refuses the agent's memory replacing the person's", () => {
+    const mine = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Reply formally.', source: 'human' })
+    const agents = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Reply casually.', source: 'agent' })
+    const run = curationRun()
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'retire', id: mine.id, reason: 'newer', replaced_by: agents.id }])).toThrow(/outranks/)
+  })
+
+  it("refuses another goal's memory and a memory changed twice", () => {
+    const now = new Date().toISOString()
+    createGoal(db, { ...plan(), id: 'g2', name: 'Other', created_at: now, updated_at: now }, { objective: 'Other' })
+    const theirs = insertMemory(db, { plan_id: 'g2', kind: 'fact', text: 'Theirs.', source: 'agent' })
+    const [a] = overBudget()
+    const run = curationRun()
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'retire', id: theirs.id, reason: 'x' }])).toThrow(/not found in this goal/)
+    expect(() => proposeCuration(db, 'g1', run, [{ type: 'retire', id: a!, reason: 'x' }, { type: 'rewrite', id: a!, text: 'y' }])).toThrow(/already changed/)
+  })
+
+  it("shows every change under Needs you, the person's own apart", () => {
+    const mine = insertMemory(db, { plan_id: 'g1', kind: 'preference', text: 'Feedback on "Reply to Alice": too formal', source: 'feedback' })
+    const [a] = overBudget()
+    const run = curationRun()
+    const task = proposeCuration(db, 'g1', run, [
+      { type: 'rewrite', id: mine.id, text: 'Keep replies to people I work closely with informal.', reason: 'generalise' },
+      { type: 'retire', id: a!, reason: 'stale' },
+    ])
+    expect(task).toMatchObject({ status: 'active', external_ref: CURATION_REF + run, requires_approval: true })
+    expect(task.review_requested_at).not.toBeNull()
+    expect(task.goal).toContain('2 changes (1 to your own or pinned memory)')
+    const [, yours, rest] = task.notes!.split('\n\n')
+    expect(yours).toContain('Changes to your own or pinned memory:')
+    expect(yours).toContain('"Feedback on "Reply to Alice": too formal"')
+    expect(yours).toContain('to: "Keep replies to people I work closely with informal."')
+    expect(rest).toContain('Other changes:')
+    expect(rest).toContain(`Retire ${a}`)
+  })
+})
+
+describe('approve and reject', () => {
+  it('Approve applies every change in one go and sets curated_at; merged memory inherits source and mark', () => {
+    const human = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Archive newsletters.', source: 'human' })
+    const agent = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Archive newsletters weekly.', source: 'agent' })
+    const t1 = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Bob sends spam.', source: 'agent', untrusted_source: 'gmail' })
+    const t2 = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Bob sends spam weekly.', source: 'agent', untrusted_source: 'gmail' })
+    const pinned = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Never touch the bank.', source: 'human', pinned: true })
+    const stale = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Old fact.', source: 'agent' })
+    const run = curationRun()
+    const task = proposeCuration(db, 'g1', run, [
+      { type: 'merge', from: [human.id, agent.id], kind: 'rule', text: 'Archive newsletters every week.' },
+      { type: 'merge', from: [t1.id, t2.id], kind: 'fact', text: 'Bob sends spam every week.' },
+      { type: 'unpin', id: pinned.id, reason: 'rarely matters', pinned: true },
+      { type: 'retire', id: stale.id, reason: 'stale' },
+      { type: 'add', kind: 'fact', text: 'So far: archived 40 newsletters.' },
+    ])
+    const r = decideItem(db, 'g1', task.id, { decision: 'approve' })
+    expect(r.queuedRun).toBeNull()
+    expect(r.curation!.applied).toHaveLength(5)
+    expect(r.curation!.skipped).toEqual([])
+    expect(r.task.status).toBe('completed')
+    const active = listMemory(db, 'g1', { activeOnly: true })
+    const merged = active.find((m) => m.text === 'Archive newsletters every week.')!
+    expect(merged).toMatchObject({ source: 'agent', source_ref: task.id, untrusted_source: null })
+    expect(active.find((m) => m.text === 'Bob sends spam every week.')).toMatchObject({ untrusted_source: 'gmail' })
+    expect(active.find((m) => m.text.startsWith('So far'))).toMatchObject({ source: 'agent', source_ref: task.id })
+    expect(getMemory(db, pinned.id)).toMatchObject({ pinned: false, active: true })
+    for (const id of [human.id, agent.id, t1.id, t2.id, stale.id]) expect(getMemory(db, id)!.active).toBe(false)
+    expect(getGoal(db, 'g1')!.curated_at).not.toBeNull()
+  })
+
+  it("a merge of the person's own memory stays theirs", () => {
+    expect(mergedSource(['human', 'human'])).toBe('human')
+    expect(mergedSource(['human', 'feedback'])).toBe('feedback')
+    expect(mergedSource(['feedback', 'agent'])).toBe('agent')
+  })
+
+  it('skips a change whose memory was edited or retired after the proposal, and says so', () => {
+    const a = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'A.', source: 'agent' })
+    const b = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'B.', source: 'agent' })
+    const run = curationRun()
+    const task = proposeCuration(db, 'g1', run, [
+      { type: 'rewrite', id: a.id, text: 'A, reworded.' },
+      { type: 'retire', id: b.id, reason: 'stale' },
+    ])
+    updateMemory(db, a.id, { text: 'A, edited by the person.' })
+    const r = decideItem(db, 'g1', task.id, { decision: 'approve' })
+    expect(r.curation!.applied).toHaveLength(1)
+    expect(r.curation!.skipped).toEqual([expect.stringContaining('changed since the proposal')])
+    expect(getMemory(db, a.id)!.text).toBe('A, edited by the person.')
+    expect(getMemory(db, b.id)!.active).toBe(false)
+    expect(getTask(db, 'g1', task.id)!.result).toContain('skipped 1')
+  })
+
+  it('Reject changes no memory but adds the feedback, and sets curated_at', () => {
+    const [a] = overBudget()
+    const run = curationRun()
+    const task = proposeCuration(db, 'g1', run, [{ type: 'retire', id: a!, reason: 'stale' }])
+    const before = listMemory(db, 'g1').length
+    decideItem(db, 'g1', task.id, { decision: 'reject', feedback: 'Keep that fact.' })
+    expect(getMemory(db, a!)!.active).toBe(true)
+    const after = listMemory(db, 'g1')
+    expect(after).toHaveLength(before + 1)
+    expect(after.at(-1)).toMatchObject({ source: 'feedback' })
+    expect(getTask(db, 'g1', task.id)!.status).toBe('abandoned')
+    expect(getGoal(db, 'g1')!.curated_at).not.toBeNull()
+  })
+
+  it('claimRun keeps the goal model for ordinary runs', () => {
+    updateGoal(db, 'g1', { model: 'haiku' })
+    expect(claimRun(db, 'g1', { holder: 's1', trigger: 'manual' })!.model).toBe('haiku')
+  })
+})

@@ -19,6 +19,7 @@ export * from './status-check.js'
 export * from './goal-overview.js'
 export * from './todos.js'
 export * from './goal-changes.js'
+export * from './curation.js'
 export { envVar, defaultDbPath } from './paths.js'
 export { runMigrations, REVISION_TRIGGERS, SCHEMA_VERSION, dbSchemaVersion, schemaOutdated } from './migrate.js'
 

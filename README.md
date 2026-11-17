@@ -101,6 +101,8 @@ The tools for building plans by hand (`create_plan`, `provision_tasks`, `next_ta
 | `get_goal_brief` | Start of a run: everything a fresh agent needs, in one call |
 | `add_item` | Add a work item (deduplicated by `external_ref`); actions are proposed, recorded or refused per the goal's autonomy |
 | `remember` / `forget` | Add a fact, rule or preference to the goal's memory; deactivate one an agent added |
+| `recall` | Read in full the memories the brief only lists (`memory_index`) |
+| `propose_curation` | A memory curation run's one proposal (merge, reword, retire, unpin, add), which the server applies if you approve it |
 | `end_run` | Finish a run with a summary for the next one |
 | `run_goal` | Queue a run now |
 

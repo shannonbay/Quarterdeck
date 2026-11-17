@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import {
   getPlan, updatePlan, getGoal, updateGoal, getIntervalTrigger, listRuns, getOpenRun,
-  listMemory, getGoalItems, getApprovalStats,
+  listMemory, getGoalItems, getApprovalStats, MEMORY_BRIEF_CHARS,
   getSchedule, setSchedule, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions,
 } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
@@ -35,6 +35,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
         .slice(0, 20)
         .map(itemView),
       memory: listMemory(id),
+      memory_brief_chars: MEMORY_BRIEF_CHARS,
       approval_stats: getApprovalStats(id),
       schedule: getSchedule(id),
       webhook_enabled: Boolean(getEventTrigger(id)),

@@ -21,6 +21,8 @@ import {
   GetGoalBriefSchema,
   AddItemSchema,
   RememberSchema,
+  RecallSchema,
+  ProposeCurationSchema,
   ForgetSchema,
   EndRunSchema,
   RunGoalSchema,
@@ -60,7 +62,7 @@ import { provision_tasks } from './tools/provision_tasks.js'
 import { next_task } from './tools/next_task.js'
 import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
-import { list_goals, get_goal_brief, add_item, remember, forget, end_run, run_goal } from './tools/goals.js'
+import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, watch_report, run_progress,
@@ -166,7 +168,7 @@ const TOOLS = [
     name: 'get_goal_brief',
     description: 'Start of every goal run: returns everything you need in one call — objective, standing instructions, autonomy per action category, memory (rules, facts, preferences), human decisions since the last run (approvals, rejections with feedback), open items (approved ones to carry out first), and recent run summaries. Opens the goal. Pass the run_id you were given.',
     inputSchema: zodToJsonSchema(GetGoalBriefSchema),
-    handler: get_goal_brief,
+    handler: goal_brief_tool,
   },
   {
     name: 'add_item',
@@ -179,6 +181,18 @@ const TOOLS = [
     description: "Save a fact, rule or preference to the goal's memory so future runs know it. Keep each one short and general.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember,
+  },
+  {
+    name: 'propose_curation',
+    description: "Memory curation runs only: propose one cleanup of the goal's memory (merge, rewrite, retire, unpin, add). It waits for the person under Needs you; the server applies exactly these changes if they approve. A change to a pinned memory needs pinned: true.",
+    inputSchema: zodToJsonSchema(ProposeCurationSchema),
+    handler: propose_curation,
+  },
+  {
+    name: 'recall',
+    description: "Read memories the brief left out, in full: pass ids from the brief's memory_index (several in one call). Only the open goal's active memory.",
+    inputSchema: zodToJsonSchema(RecallSchema),
+    handler: recall,
   },
   {
     name: 'forget',

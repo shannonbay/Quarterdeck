@@ -130,6 +130,16 @@ test('goal_detail and update_goal read long instructions whole, so an edit past 
   await ui.unmount()
 })
 
+test('goal_detail shows a clipped request in full, such as every change of a memory curation', async ($, on) => {
+  engine(on)
+  const all = 'Changes to your own or pinned memory:\n- Retire m1\n\nOther changes:\n- Merge m2 and m3 into one fact, the last change'
+  fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox', needs_you: [{ id: '4', goal: "Tidy this goal's memory: 2 changes", notes: all.slice(0, 40), clipped: true }] })],
+    { full: { '4': { id: '4', goal: "Tidy this goal's memory: 2 changes", notes: all } } })
+  await $.session.start(START)
+  const detail = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'inbox' } as never)
+  expect(String(detail.result)).toContain('Merge m2 and m3 into one fact, the last change')
+})
+
 test('update_goal passes a confirmed category merge to the server', async ($, on) => {
   const asked = engine(on, { answer: 'Apply changes' })
   const fake = fakeQuarterdeck(on, [failed()])

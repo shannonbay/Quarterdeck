@@ -27,6 +27,8 @@ interface GoalData {
   open_items: Item[]
   recently_resolved: Item[]
   memory: GoalMemory[]
+  /** MEMORY_BRIEF_CHARS: how much memory a run's brief carries. */
+  memory_brief_chars: number
   approval_stats: Record<string, { approved: number; rejected: number }>
   schedule: Schedule | null
   webhook_enabled: boolean
@@ -207,7 +209,7 @@ export function GoalView({ goalId }: { goalId: string }) {
           <GuardSection calls={data.tool_calls} hasRules={Object.keys(goal.tool_map).length > 0} />
         </div>
 
-        <MemorySection memory={data.memory} goalId={goalId} busy={busy} call={call} />
+        <MemorySection memory={data.memory} budget={data.memory_brief_chars} goalId={goalId} busy={busy} call={call} />
 
         <Settings data={data} busy={busy} patch={patch} call={call} />
       </main>
@@ -285,7 +287,7 @@ function NeedsYou({ items, goalId, busy, call }: { items: Item[]; goalId: string
   )
 }
 
-function MemorySection({ memory, goalId, busy, call }: { memory: GoalMemory[]; goalId: string; busy: string | null; call: Call }) {
+function MemorySection({ memory, budget, goalId, busy, call }: { memory: GoalMemory[]; budget: number; goalId: string; busy: string | null; call: Call }) {
   const [kind, setKind] = useState<GoalMemory['kind']>('rule')
   const [text, setText] = useState('')
   const active = memory.filter((m) => m.active)
@@ -333,7 +335,7 @@ function MemorySection({ memory, goalId, busy, call }: { memory: GoalMemory[]; g
           <button disabled={busy !== null || !text.trim()} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-md disabled:opacity-50">Add</button>
         </form>
       </div>
-      {chars > 4000 && <p className="text-xs text-amber-700 mt-2">Active memory is over the 4,000-character brief budget; runs see pinned items plus the most recently used. Consider pinning or disabling some.</p>}
+      {chars > budget && <p className="text-xs text-amber-700 mt-2">Active memory is over the {budget.toLocaleString()}-character brief budget: runs get pinned items, then yours, then the newest, and the rest as a list they can look up when it matters. Pin what every run must see.</p>}
     </Section>
   )
 }

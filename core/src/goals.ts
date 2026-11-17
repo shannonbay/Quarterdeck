@@ -38,6 +38,7 @@ function deserializeGoal(r: Row): Goal {
     status_tone: (r.status_tone as Goal['status_tone'] | undefined) ?? null,
     status_source: (r.status_source as string | null | undefined) ?? null,
     resumed_at: (r.resumed_at as string | null | undefined) ?? null,
+    curated_at: (r.curated_at as string | null | undefined) ?? null,
   } as Goal
 }
 
@@ -129,6 +130,8 @@ export function updateGoal(
 
 /** The external_ref of a goal's one runaway-breaker question (reopened each time the breaker trips). */
 export const RUNAWAY_REF = 'runaway-breaker'
+/** A memory curation request's external_ref starts with this, then the curation run's id (curation.ts). */
+export const CURATION_REF = 'memory-curation:'
 
 // ── Triggers ──────────────────────────────────────────────────────────────────
 
