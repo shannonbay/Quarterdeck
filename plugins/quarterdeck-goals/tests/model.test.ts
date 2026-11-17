@@ -593,3 +593,15 @@ test('the issue triage goal proposes one batch per run, never writes but labels,
   expect(ISSUE_TRIAGE).toContain("Don't ask again about the issues I didn't pick")
   expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
 })
+
+test('the issue fixer reads inline review comments with the repo written out; the read is untrusted, its write forms are off', () => {
+  const t = TEMPLATES.find((x) => x.name === 'Issue Fixer')!
+  const read = 'gh api repos/*/pulls/*/comments*'
+  for (const tool of ['Bash', 'PowerShell']) {
+    expect(t.tool_map[`${tool}(${read})`]).toBe('untrusted')
+    for (const flag of ['--method', '-X', '-f', '--input']) expect(t.autonomy[t.tool_map[`${tool}(${read}${flag}*)`]]).toBe('off')
+    expect(t.autonomy[t.tool_map[`${tool}(gh api*)`]]).toBe('off')
+  }
+  expect(ISSUE_FIX_WORK).toContain('gh api repos/<owner>/<name>/pulls/<number>/comments --jq')
+  expect(ISSUE_FIX_WORK).not.toContain('repos/{owner}/{repo}/pulls')
+})

@@ -189,6 +189,23 @@ describe('goal guard', () => {
     expect(matchToolCategory({ 'Bash(gh issue view*)': 'untrusted' }, 'Bash', { command: 'gh issue view 3' })).toBe('untrusted')
   })
 
+  it("lets the Issue Fixer read a PR's inline comments, but no gh api write (inlineReadRules in the goals plugin)", () => {
+    const read = 'Bash(gh api repos/*/pulls/*/comments*)'
+    const map: Record<string, string> = { 'Bash(gh api*)': 'github.write', [read]: 'untrusted' }
+    for (const f of ['--method', '-X', '-f', '--input']) map[`${read.slice(0, -1)}${f}*)`] = 'github.write'
+    const jq = `--jq '[.[] | select(.author_association | IN("OWNER")) | {path, line, author: .user.login, body}]'`
+    expect(matchToolCategory(map, 'Bash', { command: `gh api repos/octo/my-app/pulls/65/comments ${jq}` })).toBe('untrusted')
+    // the placeholders fall to gh api* (commandParts splits at the braces)
+    expect(matchToolCategory(map, 'Bash', { command: `gh api repos/{owner}/{repo}/pulls/65/comments ${jq}` })).toBe('github.write')
+    for (const c of [
+      'gh api repos/o/r/pulls/65/comments --method POST -f body=hi', 'gh api repos/o/r/pulls/65/comments -X POST -f body=hi',
+      'gh api repos/o/r/pulls/65/comments -XPOST', 'gh api repos/o/r/pulls/65/comments -F body=hi',
+      'gh api repos/o/r/pulls/65/comments --field body=hi', 'gh api repos/o/r/pulls/65/comments --raw-field body=hi',
+      'gh api repos/o/r/pulls/65/comments --input c.json', 'gh api repos/o/r/pulls/comments/9 -X DELETE',
+      'gh api repos/o/r/pulls/65/merge -X PUT', 'gh api user',
+    ]) expect([c, matchToolCategory(map, 'Bash', { command: c })]).toEqual([c, 'github.write'])
+  })
+
   it("lets the PR reviewer's reviews endpoint past gh api* only with the repo written out (reviewRules in the goals plugin)", () => {
     const map = { 'Bash(gh api*)': 'github.write', 'Bash(gh pr review*)': 'github.write', 'Bash(gh api repos/*/pulls/*/reviews*)': 'github.review' }
     expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/octo/app/pulls/3/reviews --method POST --input C:/tmp/r.json' })).toBe('github.review')
