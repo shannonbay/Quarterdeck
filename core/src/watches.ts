@@ -284,7 +284,8 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     if (watch.fires === 'new') {
       if (!outcome?.run) {
         // A check that starts no run marks nothing seen, so a run rule or default added later can still fire on these lines
-        seen = watch.seen
+        // (the baseline is the exception: what was there when the watch was set never fires)
+        if (!baseline) seen = watch.seen
       } else {
         // A run rule won: lines only a quiet rule matches are held, not events and not seen
         const held = heldByStatusRules(watch.status_rules, result.lines)

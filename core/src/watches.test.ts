@@ -544,7 +544,7 @@ describe('status rules', () => {
 
   it('lines only a quiet rule covers stay unseen, so a later run rule can fire on them', () => {
     const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
-    recordWatchLines(db, w.id, { lines: ['other'] })
+    recordWatchLines(db, w.id, { lines: [] })
     const quiet = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
     expect(quiet.fresh).toEqual([])
     expect(getWatch(db, w.id)!.seen).toEqual([])
@@ -553,6 +553,13 @@ describe('status rules', () => {
     const fired = recordWatchLines(db, w.id, { lines: ['other', 'M a.ts', 'new'] })
     expect(fired.fresh).toEqual(['other', 'M a.ts', 'new'])
     expect(getWatch(db, w.id)!.seen).toEqual(['other', 'M a.ts', 'new'])
+  })
+
+  it('lines already there at a quiet baseline do not fire when a run rule wins later', () => {
+    const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
+    recordWatchLines(db, w.id, { lines: ['old 1', 'old 2'] })
+    const fired = recordWatchLines(db, w.id, { lines: ['old 1', 'old 2', '!! build'] })
+    expect(fired.fresh).toEqual(['!! build'])
   })
 
   it('a line the run default covers still fires after first showing up beside a quiet line', () => {
