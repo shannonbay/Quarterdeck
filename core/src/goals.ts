@@ -201,16 +201,23 @@ export function updateRun(db: Database, runId: string, fields: Partial<Omit<Goal
  * goal's line (the pane's card says so instead).
  */
 export const WATCH_EVENTS_SOURCE = 'watch events'
+/** How a run marked by an earlier run's summary names it: "run summary <run id> (written after …)" (buildBrief). */
+export const RUN_SUMMARY_SOURCE = 'run summary '
 
 /**
  * Marks a run as having read untrusted content. The first source is kept, except
- * watch events, which a later read replaces (keeping when the run was first marked).
+ * that a mark inherited from a run summary gives way to any outside read, and watch
+ * events to any other outside read (keeping when the run was first marked): a run
+ * whose own summary should pass the mark on must say it read outside content itself.
  * From then on its `auto` categories need approval (guard.ts, addItem).
  */
 export function markRunUntrusted(db: Database, runId: string, source: string): void {
+  const summary = `${RUN_SUMMARY_SOURCE}%`
   db.prepare(`UPDATE goal_runs SET untrusted_at = COALESCE(untrusted_at, ?), untrusted_source = ?
-    WHERE id = ? AND (untrusted_at IS NULL OR (untrusted_source = ? AND ? <> ?))`)
-    .run(new Date().toISOString(), source, runId, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE)
+    WHERE id = ? AND (untrusted_at IS NULL
+      OR (untrusted_source LIKE ? AND ? NOT LIKE ?)
+      OR (untrusted_source = ? AND ? <> ? AND ? NOT LIKE ?))`)
+    .run(new Date().toISOString(), source, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary)
 }
 
 /** Runs newest first. */
