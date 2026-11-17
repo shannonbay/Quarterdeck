@@ -692,8 +692,8 @@ export const PR_REVIEW_ROUNDS = 3
 export const PR_REREVIEW = [
   'A re-review posts only real problems: a bug, a failing check or test, or a security problem, in what changed or left unaddressed from before.',
   "Smaller points (style, naming, nice-to-haves) go in your end_run summary for me, not on GitHub: a posted review can start another goal's run to act on it (the Issue Fixer acts on reviews of its pull requests), so each one should be worth a round.",
-  'When a re-review finds no real problem, post nothing and add no item: say in your summary that the pull request looks ready, with the check results.',
-  `Keep count of the reviews you've posted on each pull request in memory. Once ${PR_REVIEW_ROUNDS} are posted on one, ask me (add_item with ask_person, external_ref github-pr-rounds:<number>@<sha>) before proposing another, with what you'd raise; propose it only if I say yes.`,
+  'When a re-review finds no real problem, still propose the review (a github.review item as below) with no inline comments, so the pull request shows it was looked at: its body names the commit ("Reviewed at <sha>: no problems found"), says which earlier points are now addressed and gives the check results. It does not count as one of the rounds below, which count only reviews that raise something.',
+  `Keep count of the reviews you've posted that raise something on each pull request in memory. Once ${PR_REVIEW_ROUNDS} are posted on one, ask me (add_item with ask_person, external_ref github-pr-rounds:<number>@<sha>) before proposing another, with what you'd raise; propose it only if I say yes.`,
 ].join(' ')
 
 /** The PR reviewer's standing instructions. */
@@ -705,7 +705,7 @@ export const PR_REVIEW = [
   PR_TESTING,
   'Remember each review as "reviewed #<number> at <sha>". When a pull request you reviewed is pushed to, review only what changed (git diff <last sha>..<new sha>) if the last sha is still an ancestor of the new head, otherwise (a force-push) the whole pull request. Don\'t repeat points you made before, and say which of them are now addressed.',
   PR_REREVIEW,
-  "Look for correctness bugs, missing tests, security problems, and fit with the repo's existing style and design. Each inline comment goes on a line of the diff, says concretely what's wrong and why, and suggests a fix when there's an obvious one. Don't comment for the sake of it: when you find nothing, the review says so with the check results.",
+  "Look for correctness bugs, missing tests, security problems, and fit with the repo's existing style and design. Each inline comment goes on a line of the diff, says concretely what's wrong and why, and suggests a fix when there's an obvious one. Don't comment for the sake of it: when you find nothing, the review says so with the check results, as \"Reviewed at <sha>: no problems found\", and is still posted: a pull request with no review looks unreviewed.",
   'Then propose one github.review item (external_ref github-pr-review:<number>@<sha>) with the exact review: its summary, the check results and every inline comment (path:line and its text).',
   'Once I approve, write the review as JSON {commit_id: <sha>, event: "COMMENT", body, comments: [{path, line, side: "RIGHT", body}]} to a file outside your clone, post it with gh api repos/<owner>/<name>/pulls/<number>/reviews --method POST --input <file>, then complete the item. Write the repo out as owner/name, from git remote get-url origin (gh repo is refused): repos/{owner}/{repo} is refused there.',
   `End the review body with the line "${signLine('Reviewed')}"`,
