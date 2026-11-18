@@ -238,14 +238,16 @@ test('a steps watch passes a picked value to the next call, reads the last answe
       watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
       steps: [
         { tool: 'mcp__chrome__navigate', input: { url: 'https://example.com/inbox' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
-        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}', label: 'tab {{tabId}}' } },
       ],
       finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
     }],
   })
   await $.session.start(START)
   await settle()
-  expect(calls.map((c) => [c.tool, c.tabId])).toEqual([['mcp__chrome__navigate', undefined], ['mcp__chrome__get_page_text', '42'], ['mcp__chrome__tabs_close', '42']])
+  // A reference that is the whole string becomes a number; text around it stays a string
+  expect(calls.map((c) => [c.tool, c.tabId])).toEqual([['mcp__chrome__navigate', undefined], ['mcp__chrome__get_page_text', 42], ['mcp__chrome__tabs_close', 42]])
+  expect(calls[1].label).toBe('tab 42')
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi' }])
 })
 

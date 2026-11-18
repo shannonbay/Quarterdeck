@@ -214,9 +214,11 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
 /** How long a watch's clean-up call may take. */
 export const WATCH_FINALLY_MS = 10_000
 
-/** Replaces {{name}} in every string of an input with a picked value; a name never picked is an error. */
+/** Replaces {{name}} in every string of an input with a picked value; a name never picked is an error. A string that is exactly one reference to a plain number becomes a number (a tab id), text around it stays a string. */
 export function substitute(input: unknown, values: Record<string, string>): unknown {
   if (typeof input === 'string') {
+    const only = /^\{\{\s*([^}]*?)\s*\}\}$/.exec(input)
+    if (only && only[1] in values && /^-?\d+(\.\d+)?$/.test(values[only[1]])) return Number(values[only[1]])
     return input.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_m, name: string) => {
       if (!(name in values)) throw new Error(`{{${name}}} was never picked`)
       return values[name]
