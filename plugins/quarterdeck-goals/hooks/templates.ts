@@ -91,6 +91,28 @@ export type Forge = {
   fixer: ForgeFixer
   /** The commands the issue refiner's instructions name. */
   refiner: ForgeRefiner
+  /** The command prefixes the repo templates' tool rules name, each matched with a trailing `*`. */
+  rules: ForgeRules
+}
+
+/** Command prefixes for the repo templates' tool rules, in the host's own CLI (no trailing `*`). */
+export type ForgeRules = {
+  /** Opens a pull request. */
+  prCreate: string
+  /** Merges a pull request. */
+  prMerge: string
+  /** Reads an issue. */
+  issueView: string
+  /** Lists issues (with their titles, so outside text). */
+  issueList: string
+  /** Comments on an issue. */
+  issueComment: string
+  /** Edits an issue, its labels included. */
+  issueEdit: string
+  /** Creates a label. */
+  labelCreate: string
+  /** Changes or removes labels, which no repo template may do. */
+  labelWrites: string[]
 }
 
 /** The commands the issue refiner runs besides its issue reads and watches, in the host's own CLI. */
@@ -197,6 +219,21 @@ export const GITHUB: Forge = {
     labelCreate: 'gh label create',
     openIssues: 'gh issue list --json number,author,labels',
   },
+  rules: {
+    prCreate: 'gh pr create',
+    prMerge: 'gh pr merge',
+    issueView: 'gh issue view',
+    issueList: 'gh issue list',
+    issueComment: 'gh issue comment',
+    issueEdit: 'gh issue edit',
+    labelCreate: 'gh label create',
+    labelWrites: ['gh label delete', 'gh label edit', 'gh label clone'],
+  },
+}
+
+/** A forge's label changes other than creating one, as rules sending each to its write category. */
+function labelWriteRules(forge: Forge): Record<string, string> {
+  return Object.fromEntries(forge.rules.labelWrites.map((w) => [`${w}*`, forge.write]))
 }
 
 /** A forge's write subcommands, less `except`, as rules sending each to its write category. */
@@ -215,10 +252,10 @@ function githubRules(merge: string, forge: Forge = GITHUB): Record<string, strin
   return shell({
     'git push*': 'code.pull_request',
     'git -C * push*': 'code.pull_request',
-    'gh pr create*': 'code.pull_request',
-    'gh pr merge*': merge,
+    [`${forge.rules.prCreate}*`]: 'code.pull_request',
+    [`${forge.rules.prMerge}*`]: merge,
     ...writeRules(forge),
-    'gh issue view*': 'untrusted',
+    [`${forge.rules.issueView}*`]: 'untrusted',
     ...inlineReadRules(),
   })
 }
@@ -263,13 +300,13 @@ export function reviewRules(forge: Forge = GITHUB): Record<string, string> {
     ...writeRules(forge),
     'git push*': 'github.write',
     'git -C * push*': 'github.write',
-    'gh pr create*': 'github.write',
-    'gh pr merge*': 'github.write',
+    [`${forge.rules.prCreate}*`]: 'github.write',
+    [`${forge.rules.prMerge}*`]: 'github.write',
     'gh api repos/*/pulls/*/reviews*': 'github.review',
     'gh pr view*': 'untrusted',
     'gh pr diff*': 'untrusted',
     'gh pr checkout*': 'untrusted',
-    'gh issue view*': 'untrusted',
+    [`${forge.rules.issueView}*`]: 'untrusted',
   })
 }
 
@@ -298,17 +335,15 @@ export const ISSUE_FIX_EVERY = 'Start on every new issue'
 export function refineRules(forge: Forge = GITHUB): Record<string, string> {
   return shell({
     ...writeRules(forge, ['label']),
-    'gh label delete*': 'github.write',
-    'gh label edit*': 'github.write',
-    'gh label clone*': 'github.write',
+    ...labelWriteRules(forge),
     'git push*': 'github.write',
     'git -C * push*': 'github.write',
-    'gh pr create*': 'github.write',
-    'gh pr merge*': 'github.write',
-    'gh issue comment*': 'github.issue',
-    'gh issue edit*': 'github.issue',
-    'gh label create*': 'github.issue',
-    'gh issue view*': 'untrusted',
+    [`${forge.rules.prCreate}*`]: 'github.write',
+    [`${forge.rules.prMerge}*`]: 'github.write',
+    [`${forge.rules.issueComment}*`]: 'github.issue',
+    [`${forge.rules.issueEdit}*`]: 'github.issue',
+    [`${forge.rules.labelCreate}*`]: 'github.issue',
+    [`${forge.rules.issueView}*`]: 'untrusted',
   })
 }
 
@@ -346,19 +381,17 @@ export const SCHEDULE_WITH_FLAGS = `gh issue edit *-* --add-label ${NEEDS_REFINE
 export function triageRules(forge: Forge = GITHUB): Record<string, string> {
   return shell({
     ...writeRules(forge, ['label', 'issue edit']),
-    'gh label delete*': 'github.write',
-    'gh label edit*': 'github.write',
-    'gh label clone*': 'github.write',
+    ...labelWriteRules(forge),
     'git push*': 'github.write',
     'git -C * push*': 'github.write',
-    'gh pr create*': 'github.write',
-    'gh pr merge*': 'github.write',
-    'gh issue edit*': 'github.label',
-    'gh label create*': 'github.label',
+    [`${forge.rules.prCreate}*`]: 'github.write',
+    [`${forge.rules.prMerge}*`]: 'github.write',
+    [`${forge.rules.issueEdit}*`]: 'github.label',
+    [`${forge.rules.labelCreate}*`]: 'github.label',
     [SCHEDULE_COMMAND]: 'github.schedule',
     [SCHEDULE_WITH_FLAGS]: 'github.label',
-    'gh issue view*': 'untrusted',
-    'gh issue list*': 'untrusted',
+    [`${forge.rules.issueView}*`]: 'untrusted',
+    [`${forge.rules.issueList}*`]: 'untrusted',
   })
 }
 
