@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CI_FIX, ciFix, CLARIFY_LABEL, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -80,7 +80,7 @@ test('the repo templates take their write rules from a forge, GitHub by default 
 })
 
 test('another forge brings its own CLI, writes and category, and none of GitHub\'s', async () => {
-  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches, fixer: GITHUB.fixer, refiner: GITHUB.refiner, rules: GITHUB.rules }
+  const other: Forge = { name: 'GitLab', cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches, fixer: GITHUB.fixer, refiner: GITHUB.refiner, rules: GITHUB.rules }
   expect(reviewRules(other)['Bash(glab mr merge*)']).toBe('forge.write')
   expect(reviewRules(other)['PowerShell(glab label*)']).toBe('forge.write')
   // The refiner names label writes one by one, so the blanket rule is left out
@@ -92,7 +92,7 @@ test('another forge brings its own CLI, writes and category, and none of GitHub\
 test('a fixer status names its forge\'s pull request check, github_pr by default (#44)', async () => {
   expect(STATUS('PR #<number> awaiting review', 'pull request')).toBe(STATUS('PR #<number> awaiting review', 'pull request', GITHUB))
   expect(STATUS('open', 'pull request')).toContain('kind github_pr,')
-  const other: Forge = { cli: 'glab', writes: [], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches }
+  const other: Forge = { name: 'GitLab', cli: 'glab', writes: [], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches }
   const status = STATUS('open', 'merge request', other)
   expect(status).toContain('kind gitlab_mr,')
   expect(status).not.toContain('github_pr')
@@ -187,4 +187,17 @@ test("the needs-refinement command is built from the forge's issue edit and add-
   const text = issueTriage(other)
   expect(text).toContain('with xx issue update <numbers> --label needs-refinement and nothing else in the command (any other xx issue update needs its own proposal)')
   expect(text).not.toContain('gh issue edit <numbers>')
+})
+
+test("the instruction texts name the forge, not GitHub (#44)", async () => {
+  expect(GITHUB.name).toBe('GitHub')
+  const other: Forge = { ...GITHUB, name: 'Xhub' }
+  expect(ciFix(GITHUB)).toBe(CI_FIX)
+  expect(prRereview(GITHUB)).toBe(PR_REREVIEW)
+  for (const text of [ciFix(other), issueFixWork(other), issueRefineWork(other), prReview(other)]) expect(text).toContain('clone this repo (its Xhub remote)')
+  expect(issueFixWork(other)).toContain("you can't reply on Xhub.")
+  expect(refinePickedIntake(other)).toContain('(on Xhub, or by answering')
+  expect(issueTriage(other)).toContain('I can label them on Xhub later.')
+  expect(prRereview(other)).toContain('not on Xhub:')
+  for (const text of [ciFix(other), issueFixWork(other), refinePickedIntake(other), issueRefineWork(other), issueTriage(other), prReview(other)]) expect(text).not.toContain('GitHub')
 })
