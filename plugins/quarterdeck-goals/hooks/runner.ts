@@ -148,7 +148,7 @@ async function pass($: Engine): Promise<void> {
   }
 }
 
-/** How long a watch's tool may take before the check counts as failed. */
+/** How long a watch's tool may take before the check counts as failed; for steps it is the limit on the whole sequence, not on each step. */
 export const WATCH_CALL_MS = 30_000
 /** The most of a tool's answer sent on: ids are near the start, and a huge answer isn't worth a watch. */
 const WATCH_TEXT_MAX = 60_000
@@ -174,7 +174,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       try { input = substitute(step.input ?? {}, values) as Record<string, unknown> } catch (err) { return { error: `${err instanceof Error ? err.message : String(err)}${where}` } }
       const answer = await $.tool.call({ tool: step.tool, ...input } as never)
       if (timedOut) return { error: 'timeout' }
-      if (answer.deny !== undefined) return { error: `Claude Code refused the call${where}: ${answer.deny}` }
+      if (answer.deny !== undefined) return { error: `the call couldn't run${where}: ${answer.deny}` }
       if (answer.isError === true) return { error: `${resultText(answer).slice(0, 500)}${where}` }
       last = resultText(answer)
       if (step.expect !== undefined && !new RegExp(step.expect).test(last)) return { error: `step ${i + 1} (${step.tool}) answered something other than expected (/${step.expect}/)` }
@@ -206,7 +206,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       else if (answer.deny !== undefined) note = `finally ${watch.finally.tool} was refused: ${answer.deny}`
       else if (answer.isError === true) note = `finally ${watch.finally.tool} failed: ${resultText(answer).slice(0, 200)}`
     } catch (err) {
-      note = `finally ${watch.finally.tool} didn't run: ${err instanceof Error ? err.message : String(err)}`
+      note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
     }
     if (note && 'error' in report) report = { error: `${report.error}; ${note}` }
     // A clean-up failure after a good read keeps the text and adds the note; the next check tries again

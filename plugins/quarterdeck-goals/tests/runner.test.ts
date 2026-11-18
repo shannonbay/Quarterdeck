@@ -114,7 +114,7 @@ test('a tool watch whose call is refused or fails is reported as a failed check'
   await $.session.start(START)
   await settle()
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([
-    { watch_id: 'w-1', error: 'Claude Code refused the call: denied by a permission rule' },
+    { watch_id: 'w-1', error: "the call couldn't run: denied by a permission rule" },
     { watch_id: 'w-2', error: 'Not signed in' },
   ])
   expect(fake.of('goals_tick')).toHaveLength(1)
