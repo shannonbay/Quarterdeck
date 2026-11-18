@@ -201,3 +201,10 @@ test("the instruction texts name the forge, not GitHub (#44)", async () => {
   expect(prRereview(other)).toContain('not on Xhub:')
   for (const text of [ciFix(other), issueFixWork(other), refinePickedIntake(other), issueRefineWork(other), issueTriage(other), prReview(other)]) expect(text).not.toContain('GitHub')
 })
+
+test("the CI fixer reads a failure with its forge's command (#44)", async () => {
+  const other: Forge = { ...GITHUB, fixer: { ...GITHUB.fixer, runLog: 'xx ci trace <id>' } }
+  const text = ciFix(other)
+  expect(text).toContain('read the failure with xx ci trace <id>.')
+  expect(text).not.toContain('gh run view')
+})
