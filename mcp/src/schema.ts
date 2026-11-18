@@ -186,6 +186,10 @@ export const ResolveReviewThreadSchema = z.object({
   comment_ids: z.array(z.number().int().positive()).min(1).max(50).describe("Ids of inline review comments you read and addressed with a change you pushed; the thread each belongs to is resolved"),
 })
 
+export const DetectForgeSchema = z.object({
+  working_dir: z.string().min(1).describe("The repo's folder (absolute path)"),
+})
+
 export const DeleteGoalSchema = z.object({
   goal_id: z.string(),
 })

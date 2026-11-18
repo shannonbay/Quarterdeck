@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BAND, engine, fakeQuarterdeck, goal, proposal, START, SURFACES, question } from './fixtures'
-import { ISSUE_FIX_REFINED_WATCH } from '../hooks/templates'
+import { FORGE_QUESTION, ISSUE_FIX_REFINED_WATCH } from '../hooks/templates'
 
 /** A command typed at the prompt. */
 const typed = (command: string, args: string) =>
@@ -621,4 +621,49 @@ test('Maintain my repo creates nothing when the branch question is cancelled', a
   const made = await $.command.run(typed('goal-new', ''))
   expect(made.text).toBe('No goal created.')
   expect(fake.of('create_goal')).toEqual([])
+})
+
+/** Answers detect_forge as the server would (#44 step 2). */
+function forgeIs(on: Parameters<Parameters<typeof test>[1]>[1], answer: Record<string, unknown>) {
+  on('tool.call', { tool: 'mcp__quarterdeck__detect_forge' }, () => ({ result: JSON.stringify(answer) }) as never)
+}
+
+test('/goal-new on a GitLab repo creates no repo goal yet and says why (#44)', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  forgeIs(on, { forge: 'gitlab', host: 'gitlab.com', cli: 'glab', cli_installed: true, signed_in: true })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toMatch(/No goal created: .*GitLab \(gitlab\.com\).*only with GitHub/)
+  expect(fake.of('create_goal')).toHaveLength(0)
+})
+
+test('/goal-new asks the host when it cannot tell, and goes on with GitHub when picked (#44)', async ($, on) => {
+  const { asked } = engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'GitHub', 'main'] })
+  forgeIs(on, { forge: null, host: null, cli: null, cli_installed: false, signed_in: false })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  expect(asked[1]).toBe(FORGE_QUESTION)
+  expect(fake.of('create_goal')).toHaveLength(5)
+})
+
+test('/goal-new creates nothing when the host question is cancelled (#44)', async ($, on) => {
+  engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'Cancel'] })
+  forgeIs(on, { forge: null, host: 'codeberg.org', cli: null, cli_installed: false, signed_in: false })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toBe('No goal created.')
+  expect(fake.of('create_goal')).toHaveLength(0)
+})
+
+test('/goal-new on a GitHub repo asks nothing more (#44)', async ($, on) => {
+  const { asked } = engine(on, { answers: ['Maintain my repo (all GitHub goals)', 'main'] })
+  forgeIs(on, { forge: 'github', host: 'github.com', cli: 'gh', cli_installed: true, signed_in: false })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await $.command.run(typed('goal-new', ''))
+  expect(asked).toHaveLength(2)
+  expect(fake.of('create_goal')).toHaveLength(5)
 })

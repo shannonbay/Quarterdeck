@@ -1054,6 +1054,42 @@ export const REPO_GOALS: { name: string; answer: string | null }[] = [
   { name: REPO_CI, answer: null },
 ]
 
+/**
+ * The templates that work on the folder's repo through a forge adapter, so
+ * /goal-new checks its host first. Keep my GitHub profile current stays
+ * GitHub-only, so it isn't one.
+ */
+export const FORGE_TEMPLATES: readonly string[] = REPO_GOALS.map((g) => g.name)
+
+/** /goal-new's question when it can't tell the folder's git host. */
+export const FORGE_QUESTION = "Which git host is this folder's repo on? (I couldn't tell from its origin remote.)"
+export const FORGE_CHOICES = ['GitHub', 'GitLab', 'Cancel']
+
+/** The hosts with an adapter so far (GitLab's comes in a later step of issue #44). */
+export const SUPPORTED_FORGES: readonly string[] = ['github']
+
+export type ForgeDecision = { kind: 'use'; forge: string } | { kind: 'ask' } | { kind: 'refuse'; message: string }
+
+/**
+ * What /goal-new does about the folder's host, from detect_forge's answer
+ * (null: an older server without it, or it failed): `use` that forge's
+ * adapter, `ask` the person (no remote, or a host no CLI knows), or `refuse`
+ * with a message (a host with no adapter yet). An older server is treated as
+ * GitHub, so nothing changes for current installs.
+ */
+export function forgeDecision(detected: { forge: string | null; host: string | null } | null): ForgeDecision {
+  if (!detected || typeof detected !== 'object' || !('forge' in detected)) return { kind: 'use', forge: 'github' }
+  if (!detected.forge) return { kind: 'ask' }
+  return forgeAnswer(detected.forge, detected.host)
+}
+
+/** The decision for a known forge, detected or picked: its adapter, or a refusal while it has none. */
+export function forgeAnswer(forge: string, host: string | null = null): ForgeDecision {
+  if (SUPPORTED_FORGES.includes(forge)) return { kind: 'use', forge }
+  const name = forge === 'gitlab' ? 'GitLab' : forge
+  return { kind: 'refuse', message: `No goal created: this folder's repo is on ${name}${host ? ` (${host})` : ''}, and these goals work only with GitHub for now.` }
+}
+
 /** The GitHub profile template's standing instructions, after where the repo is. */
 export const GITHUB_PROFILE = [
   'Each run, check my recent public activity with gh (my repos sorted by last push, and my public events) since the last run.',

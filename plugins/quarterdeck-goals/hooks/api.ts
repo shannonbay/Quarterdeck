@@ -108,6 +108,18 @@ export async function fetchOverview($: Engine, etag: string | null, detail: read
   return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null }
 }
 
+/** What the server's detect_forge found: the folder's git host and its CLI. */
+export type ForgeDetection = { forge: 'github' | 'gitlab' | null; host: string | null; cli: string | null; cli_installed: boolean; signed_in: boolean }
+
+/** Which git host the folder's repo is on; null when the server can't say (an older server without detect_forge, or any failure). */
+export async function detectForge($: Engine, workingDir: string): Promise<ForgeDetection | null> {
+  try {
+    return await call<ForgeDetection>($, 'detect_forge', { working_dir: workingDir })
+  } catch {
+    return null
+  }
+}
+
 /** Applies goal changes the person has confirmed; answers what changed, and how each new watch's first check went. */
 export async function updateGoal($: Engine, goalId: string, changes: GoalChanges): Promise<{ changed: string[]; watches: { name: string; result: string }[] }> {
   const r = await call<{ changed: string[]; watches?: { name: string; result: string }[] }>($, 'update_goal', { goal_id: goalId, ...changes })
