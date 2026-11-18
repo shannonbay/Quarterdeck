@@ -59,10 +59,10 @@ test("the refiner's other commands come from its forge (#44)", async () => {
   const other: Forge = { ...GITHUB, refiner: {
     replyRead: 'X-REPLY-READ', comment: 'X-COMMENT', labelEdit: 'X-LABEL-EDIT',
     relabel: (add, remove) => `X-RELABEL +${add}${remove ? ` -${remove}` : ''}`, removeLabel: (label) => `X-REMOVE ${label}`,
-    labelList: 'X-LABEL-LIST', labelCreate: 'X-LABEL-CREATE', openIssues: 'X-OPEN-ISSUES',
+    labelList: 'X-LABEL-LIST', labelListNote: ' X-LABEL-NOTE', labelCreate: 'X-LABEL-CREATE', openIssues: 'X-OPEN-ISSUES',
   } }
   const text = `${refinePickedIntake(other)} ${issueRefineWork(other)}`
-  for (const command of [`add X-REMOVE ${NEEDS_REFINEMENT_LABEL} to its X-LABEL-EDIT.`, 'post it with X-COMMENT, then add the label with X-RELABEL +<label>, and', 'Read the reply with X-REPLY-READ,', `(X-RELABEL +${REFINED_LABEL} -${CLARIFY_LABEL})`, 'labels exist with X-LABEL-LIST (', 'the exact X-LABEL-CREATE commands', '(X-OPEN-ISSUES, not their titles']) expect(text).toContain(command)
+  for (const command of [`add X-REMOVE ${NEEDS_REFINEMENT_LABEL} to its X-LABEL-EDIT.`, 'post it with X-COMMENT, then add the label with X-RELABEL +<label>, and', 'Read the reply with X-REPLY-READ,', `(X-RELABEL +${REFINED_LABEL} -${CLARIFY_LABEL})`, 'labels exist with X-LABEL-LIST X-LABEL-NOTE, and', 'the exact X-LABEL-CREATE commands', '(X-OPEN-ISSUES, not their titles']) expect(text).toContain(command)
   expect(text).not.toMatch(/\bgh (issue (comment|edit|list)|label)|--(add|remove)-label/)
   // The GitHub goal keeps the gh commands it had.
   const github = `${REFINE_PICKED_INTAKE} ${ISSUE_REFINE_WORK}`
@@ -156,12 +156,13 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
 test("the PR reviewer text names the forge's commands, GitHub's by default (#44)", async () => {
   expect(prReview()).toBe(PR_REVIEW)
   const other: Forge = { ...GITHUB, issueRead: 'X-ISSUE-READ', reviewer: {
-    closingIssues: 'X-CLOSING', headBranch: 'X-HEAD', body: 'X-BODY', checkout: 'X-CHECKOUT', postReview: 'X-POST', openPulls: 'X-OPEN-PULLS',
+    closingIssues: 'X-CLOSING', headBranch: 'X-HEAD', body: 'X-BODY', checkout: 'X-CHECKOUT', postReview: 'X-POST', repoNote: '', openPulls: 'X-OPEN-PULLS',
   } }
   const text = prReview(other)
   for (const s of ['X-ISSUE-READ', 'X-CLOSING', 'X-HEAD', 'X-BODY', 'X-CHECKOUT', 'X-POST', 'X-OPEN-PULLS']) expect(text).toContain(s)
-  // Only the "(gh repo is refused)" note still names gh; it goes with the GitHub wording.
-  expect(text.replace('(gh repo is refused)', '')).not.toMatch(/\bgh (pr|api|issue) /)
+  expect(text).not.toMatch(/\bgh (pr|api|issue|repo) |repos\/\{owner\}/)
+  expect(text).toContain('post it with X-POST, then complete the item.')
+  expect(prReview({ ...other, reviewer: { ...other.reviewer, repoNote: 'X-REPO-NOTE' } })).toContain('then complete the item. X-REPO-NOTE')
 })
 
 test("the triage text names the forge's commands, GitHub's by default (#44)", async () => {
