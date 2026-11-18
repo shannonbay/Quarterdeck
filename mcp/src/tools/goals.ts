@@ -66,6 +66,7 @@ export async function get_goal_brief(args: unknown) {
       'Look for new work; add each piece with add_item (use external_ref so it is never duplicated).',
       'For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.',
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
+      'When the goal needs a watch it does not have (or a changed one), propose it with propose_watch for the person to approve, rather than asking them how to watch for it.',
       'Save anything worth knowing next time with remember. Finish with end_run and a short summary.',
       'memory holds what fits in the brief; memory_index lists the rest (memory_omitted counts them all) by id and how each starts. When one looks relevant to what you are doing, read it in full with recall (several ids in one call).',
       'When the status you set in end_run describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue), attach a status_check so it updates by itself.',

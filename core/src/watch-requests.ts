@@ -47,6 +47,7 @@ export function isWatchRequest(task: Task): boolean {
 export function proposeWatch(db: Database, planId: string, runId: string | null, input: { name: string; spec: WatchSpec; reason?: string }): Task {
   const run = runId ? getRun(db, runId) : undefined
   if (!run || run.plan_id !== planId || run.status !== 'running') throw new GoalError('propose_watch needs an open run of this goal.')
+  if (run.trigger === 'curate') throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.")
   const { label } = validateWatchSpec(db, planId, input.name, input.spec)
   const waiting = getAllTasks(db, planId).find((t) => isWatchRequest(t) && (t.state as { watch: WatchRequestState }).watch.name === label && t.review_requested_at)
   if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`)

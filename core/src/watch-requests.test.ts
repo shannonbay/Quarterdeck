@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
 import {
-  openDatabase, createGoal, getGoal, updateGoal, insertRun, getTask, decideItem, listWatches, setWatch, proposeWatch, applyWatchRequest, isWatchRequest,
+  listMemory, openDatabase, createGoal, getGoal, updateGoal, insertRun, getTask, decideItem, listWatches, setWatch, proposeWatch, applyWatchRequest, isWatchRequest,
 
 } from './index.js'
 
@@ -55,6 +55,17 @@ describe('a run proposes a watch', () => {
     expect(getTask(db, 'g1', u.id)!.status).toBe('abandoned')
     // after a rejection the same name can be proposed again
     expect(() => proposeWatch(db, 'g1', run, { name: 'b', spec: { command: 'echo no' } })).not.toThrow()
+  })
+
+  it('saves the rejection feedback as memory', () => {
+    const u = proposeWatch(db, 'g1', run, { name: 'b', spec: { command: 'echo no' } })
+    decideItem(db, 'g1', u.id, { decision: 'reject', feedback: 'too noisy' })
+    expect(listMemory(db, 'g1', { activeOnly: true }).some((m) => m.text.includes('too noisy'))).toBe(true)
+  })
+
+  it('refuses a memory curation run', () => {
+    const c = insertRun(db, 'g1', 'curate', 'running').id
+    expect(() => proposeWatch(db, 'g1', c, { name: 'a', spec: { command: 'x' } })).toThrow(/propose_curation/)
   })
 
   it('refuses an answer', () => {
