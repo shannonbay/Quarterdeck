@@ -104,6 +104,7 @@ const StepsSchema = z.array(z.object({
   tool: z.string().trim().min(1),
   input: z.record(z.unknown()).optional().describe('May use {{name}} for a value an earlier step picked'),
   pick: z.record(z.union([z.object({ regex: z.string() }), z.object({ json: z.string() })])).optional().describe('Name to {regex: "one group"} or {json: "a.b[0]"} over this step answer text, for later inputs as {{name}}'),
+  expect: z.string().optional().describe('A regular expression this step answer text must match; an answer that does not is a failed check, so a problem the tool answers as plain text is not read as "nothing new"'),
 })).min(1).max(4).describe('Instead of tool + input: up to 4 read-only calls in order (e.g. a browser navigate, then get_page_text with {{tabId}}); the last answer is read with match')
 const FinallySchema = z.object({ tool: z.string().trim().min(1), input: z.record(z.unknown()).optional() }).describe('With steps: a call that always runs after them, even after a failure (e.g. close the tab)')
 

@@ -231,6 +231,8 @@ export interface WatchCall {
 /** A step: a call, and values picked from its answer text for later inputs as {{name}}. */
 export interface WatchStep extends WatchCall {
   pick?: Record<string, { regex: string } | { json: string }>
+  /** A regular expression this step's answer must match; an answer that doesn't is a failed check. */
+  expect?: string
 }
 
 /** What a watch sets the goal's status to: the status text comes only from here, never from the output. */

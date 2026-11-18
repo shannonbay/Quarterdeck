@@ -187,6 +187,11 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
       const tool = checkTool(s?.tool)
       refs(where, s.input)
       const step: WatchStep = { tool, ...(s.input && Object.keys(s.input).length ? { input: s.input } : {}) }
+      if (s.expect !== undefined) {
+        if (typeof s.expect !== 'string' || !s.expect) throw new Error(`The expect in ${where} of the watch "${label}" needs a regular expression.`)
+        try { new RegExp(s.expect) } catch { throw new Error(`The watch "${label}" has an expect in ${where} that isn't a regular expression: ${s.expect}`) }
+        step.expect = s.expect
+      }
       if (s.pick && Object.keys(s.pick).length) {
         step.pick = {}
         for (const [pname, how] of Object.entries(s.pick)) {

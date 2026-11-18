@@ -177,6 +177,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       if (answer.deny !== undefined) return { error: `Claude Code refused the call${where}: ${answer.deny}` }
       if (answer.isError === true) return { error: `${resultText(answer).slice(0, 500)}${where}` }
       last = resultText(answer)
+      if (step.expect !== undefined && !new RegExp(step.expect).test(last)) return { error: `step ${i + 1} (${step.tool}) answered something other than expected (/${step.expect}/): ${last.slice(0, 300)}` }
       for (const [name, how] of Object.entries(step.pick ?? {})) {
         const found = pickValue(last, how)
         if (found === null) return { error: `step ${i + 1} (${step.tool}) found nothing for its pick "${name}"` }

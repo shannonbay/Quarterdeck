@@ -646,6 +646,11 @@ describe('tool watches with steps', () => {
     expect(takeDueToolWatches(db, ['g1'])).toMatchObject([{ watch_id: w.id, steps: steps(), finally: { tool: CLOSE } }])
   })
 
+  it('keeps the expect of a step', () => {
+    const s = [{ tool: NAV }, { tool: TEXT, expect: 'Inbox' }]
+    expect(setWatch(db, 'g1', 'inbox2', { steps: s })).toMatchObject({ steps: s })
+  })
+
   it('refuses a bad sequence', () => {
     const t = (spec: object) => () => setWatch(db, 'g1', 'x', spec as never)
     expect(t({ steps: [...steps(), ...steps(), ...steps()] })).toThrow(/at most 4/)
@@ -658,6 +663,8 @@ describe('tool watches with steps', () => {
     expect(t({ steps: [{ tool: NAV, pick: { a: { regex: 'x' } } }] })).toThrow(/exactly one group, not 0/)
     expect(t({ steps: [{ tool: NAV, pick: { a: { regex: '(x)(y)' } } }] })).toThrow(/exactly one group, not 2/)
     expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'a..b' } } }] })).toThrow(/json path/)
+    expect(t({ steps: [{ tool: NAV, expect: '(' }] })).toThrow(/expect .* isn't a regular expression/)
+    expect(t({ steps: [{ tool: NAV, expect: '' }] })).toThrow(/needs a regular expression/)
     expect(t({ steps: [{ tool: NAV, input: { id: '{{nope}}' } }] })).toThrow(/\{\{nope\}\}.*no earlier step/)
     expect(t({ steps: [{ tool: NAV, input: { id: '{{a}}' }, pick: { a: { json: 'x' } } }] })).toThrow(/no earlier step/)
     expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'x' } } }, { tool: TEXT, pick: { a: { json: 'y' } } }] })).toThrow(/twice/)

@@ -214,7 +214,7 @@ export type ClaimedRun = {
 
 /** A goal's tool watch that is due: call `tool` with `input` and report what it answered. */
 export type WatchCall = { tool: string; input?: Record<string, unknown> }
-export type WatchStep = WatchCall & { pick?: Record<string, { regex: string } | { json: string }> }
+export type WatchStep = WatchCall & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string }
 export type ToolWatch = { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown>; steps?: WatchStep[]; finally?: WatchCall }
 
 /** One scheduler pass. `toolWatches` false asks for runs only (a second pass right after checking watches). */

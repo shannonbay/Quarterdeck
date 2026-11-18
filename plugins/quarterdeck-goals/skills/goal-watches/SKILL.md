@@ -137,7 +137,7 @@ Some sources need two calls, and the second needs a value from the first (Claude
 { "steps": [
     { "tool": "mcp__claude-in-chrome__tabs_create_mcp", "pick": { "tabId": { "regex": "Tab ID: ([0-9]+)" } } },
     { "tool": "mcp__claude-in-chrome__navigate", "input": { "tabId": "{{tabId}}", "url": "https://example.com/inbox" } },
-    { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" } } ],
+    { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" }, "expect": "Inbox" } ],
   "finally": { "tool": "mcp__claude-in-chrome__tabs_close_mcp", "input": { "tabId": "{{tabId}}" } },
   "match": "(.+)", "every_minutes": 15 }
 ```
@@ -145,7 +145,7 @@ Some sources need two calls, and the second needs a value from the first (Claude
 - Try the calls yourself first and read the answers: the pick's regex needs exactly one group (or use `json`: `a.b[0]`).
 - Page text changes (timestamps such as "2 m", "5 m"): make `match` pick only stable parts (a name, a message's first words), or `fires: new` will start runs that find nothing new. Test `match` against two reads a few minutes apart.
 - Reading can change what the site does: opening an inbox may mark messages seen and stop the site's own emails or pushes.
-- The extension not connected, or a site-permission prompt nobody can answer, is a failed check, never "nothing new".
+- The extension not connected, or a site-permission prompt nobody can answer, is a failed check, never "nothing new". A browser problem the tool answers as ordinary text (a lost tab group, a login page, "content not available") is not marked as an error, so it looks like "nothing new" unless the reading step gives `expect`, a regex its answer must match (text that is always on the page you mean, such as "Inbox"); an answer that doesn't match is a failed check showing the start of what came back. An empty result that matches `expect` is still a good check.
 - A picked number reaches the tool as a number when the input is exactly `"{{name}}"`.
 - Create the tab yourself: `navigate` without a `tabId` reuses the first tab in the session's group, which `finally` would then close.
 - Each check opens a tab in the person's real browser: always give a `finally` that closes it.

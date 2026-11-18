@@ -251,6 +251,29 @@ test('a steps watch passes a picked value to the next call, reads the last answe
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi' }])
 })
 
+test('a steps watch whose last answer does not match its expect is a failed check naming the step, and still runs finally', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'Opened tab 42', isError: false }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => ({ result: "This session's tab group no longer exists.", isError: false }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'closed', isError: false } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: {}, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' }, expect: 'Inbox' },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(closed).toHaveLength(1)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/): This session's tab group no longer exists." }])
+})
+
 test('a steps watch keeps a picked number that would change as a string', async ($, on) => {
   const { clock } = engine(on)
   settle = () => clock.settle()
