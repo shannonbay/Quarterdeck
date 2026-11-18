@@ -470,6 +470,17 @@ describe('the overview and deleting', () => {
     expect(full!.watches[0]).toMatchObject({ failing: false, error: 'finally tabs_close failed: no such tab' })
   })
 
+  it('a single failed check is not shown until the watch counts as failing', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+    recordWatchLines(db, w.id, { lines: ['1'] })
+    recordWatchLines(db, w.id, { error: 'Exit code 1: no network' })
+    const [full] = buildOverview(db, 'all').goals
+    expect(full!.watches[0]).toMatchObject({ failing: false, error: null })
+    const t = setWatch(db, 'g1', 'y', { tool: 'mcp__claude_ai_Gmail__search_threads', input: { query: 'a' } })
+    reportToolWatch(db, t.id, { error: 'timed out' } as never)
+    expect(buildOverview(db, 'all').goals[0]!.watches.find((x) => x.name === 'y')).toMatchObject({ failing: false, error: null })
+  })
+
   it('deleting a goal deletes its watches and their events', () => {
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
     recordWatchLines(db, w.id, { lines: [] })
