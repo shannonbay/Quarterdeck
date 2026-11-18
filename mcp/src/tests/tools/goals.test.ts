@@ -7,6 +7,8 @@ import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
 import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun } from '../../db.js'
 import { setOpenPlan } from '../../session.js'
+import { RememberSchema } from '../../schema.js'
+import { zodToJsonSchema } from 'zod-to-json-schema'
 
 const now = new Date().toISOString()
 
@@ -180,6 +182,25 @@ describe('goal tools', () => {
     await expect(forget({ memory_id: human.id })).rejects.toThrow(/only forget memories an agent created/)
     const { brief } = await startRun(id)
     expect(brief.memory.map((m) => m.text)).toEqual(['Alice is my manager.'])
+  })
+
+  it('remember defaults a missing kind to fact, keeps a given one, and refuses an unknown one (#95)', async () => {
+    const id = makeGoal()
+    await startRun(id)
+    const plain = await remember({ text: 'Labels: bug, enhancement.' })
+    expect(getMemory(plain.memory.id)!.kind).toBe('fact')
+    const rule = await remember({ kind: 'rule', text: 'Never label help wanted.' })
+    expect(getMemory(rule.memory.id)!.kind).toBe('rule')
+    const pref = await remember({ kind: 'preference', text: 'Keep notes short.' })
+    expect(getMemory(pref.memory.id)!.kind).toBe('preference')
+    await expect(remember({ kind: 'note', text: 'x' })).rejects.toThrow()
+    const { brief } = await startRun(id)
+    expect(brief.memory.find((m) => m.text === 'Labels: bug, enhancement.')).toMatchObject({ kind: 'fact' })
+  })
+
+  it("the remember tool's input schema requires only text (#95)", () => {
+    const schema = zodToJsonSchema(RememberSchema) as { required?: string[] }
+    expect(schema.required).toEqual(['text'])
   })
 
   it("remember passes a marked run's mark on to its memory, and the next brief marks its run", async () => {

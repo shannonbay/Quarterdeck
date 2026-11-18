@@ -88,7 +88,7 @@ export const AddItemSchema = z.object({
 })
 
 export const RememberSchema = z.object({
-  kind: z.enum(['fact', 'rule', 'preference']).describe('fact: "Alice is my manager"; rule: "Never archive mail from the bank"; preference: "Keep drafts short"'),
+  kind: z.enum(['fact', 'rule', 'preference']).default('fact').describe('fact: "Alice is my manager"; rule: "Never archive mail from the bank"; preference: "Keep drafts short" (default fact)'),
   text: z.string().min(1).describe('One clear statement'),
   source_ref: z.string().optional().describe('Item or run this came from'),
 })
