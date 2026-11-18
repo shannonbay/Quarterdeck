@@ -271,7 +271,7 @@ test('a steps watch whose last answer does not match its expect is a failed chec
   await $.session.start(START)
   await settle()
   expect(closed).toHaveLength(1)
-  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/): This session's tab group no longer exists." }])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/)" }])
 })
 
 test('a steps watch keeps a picked number that would change as a string', async ($, on) => {

@@ -272,7 +272,7 @@ const JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/
 export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null }): string {
   if (w.kind === 'command') return w.command ?? ''
   if (w.steps?.length) {
-    const call = (c: WatchCall & { pick?: unknown }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}`
+    const call = (c: WatchCall & { pick?: unknown; expect?: string }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}`
     return `${w.steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${w.finally ? `; finally ${call(w.finally)}` : ''}${w.match ? ` (lines: ${w.match})` : ''}`
   }
   const input = Object.keys(w.tool_input).length ? ` ${JSON.stringify(w.tool_input)}` : ''

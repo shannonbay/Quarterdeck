@@ -646,6 +646,11 @@ describe('tool watches with steps', () => {
     expect(takeDueToolWatches(db, ['g1'])).toMatchObject([{ watch_id: w.id, steps: steps(), finally: { tool: CLOSE } }])
   })
 
+  it('reads differently when only expect changes', () => {
+    const watch = (e: string) => ({ kind: 'tool' as const, command: null, tool: 'mcp__chrome__navigate', tool_input: {}, match: null, steps: [{ tool: 'mcp__chrome__get_page_text', input: {}, expect: e }] })
+    expect(describeWatch(watch('Inbox'))).not.toBe(describeWatch(watch('Sign in')))
+  })
+
   it('keeps the expect of a step', () => {
     const s = [{ tool: NAV }, { tool: TEXT, expect: 'Inbox' }]
     expect(setWatch(db, 'g1', 'inbox2', { steps: s })).toMatchObject({ steps: s })
