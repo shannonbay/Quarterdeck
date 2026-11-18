@@ -611,6 +611,12 @@ test('the issue triage goal proposes one batch per run, never writes but labels,
   expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
 })
 
+test('the issue fixer builds an issue as one pull request and asks before splitting it', () => {
+  expect(ISSUE_FIX_WORK).toContain("don't split an issue into parts")
+  expect(ISSUE_FIX_WORK).toContain('github-issue-split:<number>')
+  expect(ISSUE_FIX_WORK).toContain('Keep one pull request open per issue at a time')
+})
+
 test('the issue fixer resolves review threads through the server tool, under the push approval', () => {
   const t = TEMPLATES.find((x) => x.name === 'Issue Fixer')!
   expect(t.tool_map[RESOLVE_THREAD_TOOL]).toBe('code.pull_request')
