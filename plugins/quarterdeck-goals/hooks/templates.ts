@@ -149,6 +149,8 @@ export type ForgeRules = {
   labelCreate: string
   /** Changes or removes labels, which no repo template may do. */
   labelWrites: string[]
+  /** The flag of `issueEdit` that adds a label, as in the triage goal's needs-refinement command. */
+  addLabel: string
 }
 
 /** The commands the issue refiner runs besides its issue reads and watches, in the host's own CLI. */
@@ -264,6 +266,7 @@ export const GITHUB: Forge = {
     issueEdit: 'gh issue edit',
     labelCreate: 'gh label create',
     labelWrites: ['gh label delete', 'gh label edit', 'gh label clone'],
+    addLabel: '--add-label',
   },
   triage: {
     read: 'gh issue view <number> --json number,title,body,labels,author,url',
@@ -413,14 +416,24 @@ export const NEEDS_REFINEMENT_LABEL = 'needs-refinement'
  * person answers "Which of these should be refined?". Its own category, longer
  * than `gh issue edit*` so it wins: the answer approves this command, not other labels.
  */
-export const SCHEDULE_COMMAND = `gh issue edit * --add-label ${NEEDS_REFINEMENT_LABEL}`
+export function scheduleCommand(forge: Forge = GITHUB): string {
+  return `${forge.rules.issueEdit} * ${forge.rules.addLabel} ${NEEDS_REFINEMENT_LABEL}`
+}
+
+/** The needs-refinement command on GitHub. */
+export const SCHEDULE_COMMAND = scheduleCommand(GITHUB)
 
 /**
  * The same command with any other flag before the label (`--body x`, `-R o/r`):
  * a `*` matches anything, so this longer rule, checked first, sends those back
  * to `github.label`. Issue numbers have no `-`, and every flag does.
  */
-export const SCHEDULE_WITH_FLAGS = `gh issue edit *-* --add-label ${NEEDS_REFINEMENT_LABEL}`
+export function scheduleWithFlags(forge: Forge = GITHUB): string {
+  return `${forge.rules.issueEdit} *-* ${forge.rules.addLabel} ${NEEDS_REFINEMENT_LABEL}`
+}
+
+/** The needs-refinement command with other flags, on GitHub. */
+export const SCHEDULE_WITH_FLAGS = scheduleWithFlags(GITHUB)
 
 /**
  * The issue triage goal's command rules: adding labels to an issue and
@@ -440,8 +453,8 @@ export function triageRules(forge: Forge = GITHUB): Record<string, string> {
     [`${forge.rules.prMerge}*`]: 'github.write',
     [`${forge.rules.issueEdit}*`]: 'github.label',
     [`${forge.rules.labelCreate}*`]: 'github.label',
-    [SCHEDULE_COMMAND]: 'github.schedule',
-    [SCHEDULE_WITH_FLAGS]: 'github.label',
+    [scheduleCommand(forge)]: 'github.schedule',
+    [scheduleWithFlags(forge)]: 'github.label',
     [`${forge.rules.issueView}*`]: 'untrusted',
     [`${forge.rules.issueList}*`]: 'untrusted',
   })
@@ -932,7 +945,7 @@ export function issueTriage(forge: Forge = GITHUB): string {
   `Once I approve, add the labels to each issue with ${t.addLabels(`<label>,<label>,${TRIAGED_LABEL}`)}, then complete the item. If I reject it, my feedback is in memory: abandon that item and propose the batch again with what I said, adding :2, :3 to its external_ref.`,
   `Only ever add labels. Never comment, close, reopen, assign, remove a label, or change an issue's title or body, and never touch a pull request.`,
   `Once a batch is labelled, if any of its issues are ready to refine, ask me one question in the same run: add_item with ask_person and an action (category github.schedule, summary "Label the issues I pick ${NEEDS_REFINEMENT_LABEL}"), external_ref github-issue-schedule:<numbers>, goal "Which of these should be refined?", and in its notes each of those issues with its number, link, priority and one-line summary, highest priority first, then "Answer with the numbers, all, or none." My answer approves that one action.`,
-  `When decisions_since_last_run carries my answer and the item shows approved_to_execute, add ${NEEDS_REFINEMENT_LABEL} to exactly the issues I named (all: every issue in the question; none, or Done with no answer: no issue), with ${SCHEDULE_COMMAND.replace('*', '<numbers>')} and nothing else in the command (any other gh issue edit needs its own proposal), then complete the item. Don't ask again about the issues I didn't pick; I can label them on GitHub later.`,
+  `When decisions_since_last_run carries my answer and the item shows approved_to_execute, add ${NEEDS_REFINEMENT_LABEL} to exactly the issues I named (all: every issue in the question; none, or Done with no answer: no issue), with ${scheduleCommand(forge).replace('*', '<numbers>')} and nothing else in the command (any other ${forge.rules.issueEdit} needs its own proposal), then complete the item. Don't ask again about the issues I didn't pick; I can label them on GitHub later.`,
   `The first run (no watch_events) checks the labels as above and says in its summary how many open issues have no ${TRIAGED_LABEL} label (${t.untriaged}); it triages those only when I ask, in a rule in my memory or feedback.`,
   'Remember which issues you have triaged and which you asked about, so you never propose the same issue twice.',
   ].join(' ')
