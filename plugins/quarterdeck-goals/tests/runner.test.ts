@@ -248,7 +248,7 @@ test('a steps watch passes a picked value to the next call, reads the last answe
   // A reference that is the whole string becomes a number; text around it stays a string
   expect(calls.map((c) => [c.tool, c.tabId])).toEqual([['mcp__chrome__navigate', undefined], ['mcp__chrome__get_page_text', 42], ['mcp__chrome__tabs_close', 42]])
   expect(calls[1].label).toBe('tab 42')
-  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi' }])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi', cleanup: 'ok' }])
 })
 
 test('a steps watch whose last answer does not match its expect is a failed check naming the step, and still runs finally', async ($, on) => {
@@ -271,7 +271,7 @@ test('a steps watch whose last answer does not match its expect is a failed chec
   await $.session.start(START)
   await settle()
   expect(closed).toHaveLength(1)
-  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/)" }])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/)", cleanup: 'ok' }])
 })
 
 test('a steps watch keeps a picked number that would change as a string', async ($, on) => {
@@ -312,8 +312,27 @@ test('a steps watch whose pick finds nothing reports an error naming the step, a
   })
   await $.session.start(START)
   await settle()
-  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'step 1 (mcp__chrome__navigate) found nothing for its pick "tabId"' }])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'step 1 (mcp__chrome__navigate) found nothing for its pick "tabId"', cleanup: 'ok' }])
   expect(closed).toHaveLength(1)
+})
+
+test('a steps watch whose finally needs a picked tab that was never picked reports the clean-up as unrunnable', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'no tab here' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [{ tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } }],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: expect.stringMatching(/found nothing for its pick.*a tab may have been left open/), cleanup: 'unrunnable' }])
+  expect(closed).toHaveLength(0)
 })
 
 test('a steps watch whose call throws names the step, and a failed finally after a good read adds a note to the text', async ($, on) => {
@@ -332,5 +351,5 @@ test('a steps watch whose call throws names the step, and a failed finally after
   await settle()
   const reports = fake.of('watch_report').map((c) => c.input as Record<string, unknown>)
   expect(reports.find((r) => r.watch_id === 'w-1')).toEqual({ watch_id: 'w-1', error: expect.stringMatching(/step 2, mcp__chrome__navigate[)]$/) })
-  expect(reports.find((r) => r.watch_id === 'w-2')).toEqual({ watch_id: 'w-2', text: 'Anna: hi', note: 'finally mcp__chrome__tabs_close failed: no such tab' })
+  expect(reports.find((r) => r.watch_id === 'w-2')).toEqual({ watch_id: 'w-2', text: 'Anna: hi', note: 'finally mcp__chrome__tabs_close failed: no such tab', cleanup: 'failed' })
 })

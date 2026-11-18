@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 15
+export const SCHEMA_VERSION = 16
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -491,6 +491,8 @@ export function runMigrations(db: Database): void {
   // Schema version 15: a tool watch can be a sequence of calls (steps) with a final clean-up call
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN steps TEXT') } catch { /* already exists */ }
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN finally_call TEXT') } catch { /* already exists */ }
+  // Schema version 16: clean-up calls of a steps watch that failed in a row (a tab may have been left open)
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
   // Schema version 12: a watch can set the goal's status
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN status_rules TEXT') } catch { /* already exists */ }
   db.exec(`

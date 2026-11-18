@@ -173,6 +173,7 @@ export const WatchReportSchema = z.object({
   watch_id: z.string(),
   text: z.string().optional().describe("The tool's answer as text"),
   error: z.string().optional().describe('Why the call failed, when it did'),
+  cleanup: z.enum(['ok', 'failed', 'unrunnable']).optional().describe("How the watch's clean-up (finally) call went: ok, failed, or unrunnable (it could not be called). Failures in a row stop the watch until it is edited"),
   note: z.string().optional().describe('With text: a clean-up call that failed after a good read; shown on the watch, not a failed check'),
 }).refine((v) => v.text !== undefined || v.error !== undefined, { message: 'Give the text the tool answered, or the error.' })
 

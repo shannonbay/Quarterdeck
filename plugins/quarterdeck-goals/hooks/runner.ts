@@ -161,7 +161,7 @@ const WATCH_TEXT_MAX = 60_000
 async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   const steps: WatchStep[] = watch.steps ?? [{ tool: watch.tool, input: watch.input }]
   const values: Record<string, string> = {}
-  let report: { text: string; note?: string } | { error: string }
+  let report: ({ text: string; note?: string } | { error: string }) & { cleanup?: 'ok' | 'failed' | 'unrunnable' }
   let timedOut = false
   let at = 0
   const run = async (): Promise<{ text: string } | { error: string }> => {
@@ -196,8 +196,14 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   // The clean-up call always runs (a tab the steps opened), with a limit of its own; its failure is noted, not the result
   if (watch.finally) {
     let note: string | null = null
-    try {
-      const input = substitute(watch.finally.input ?? {}, values) as Record<string, unknown>
+    let cleanup: 'ok' | 'failed' | 'unrunnable' = 'ok'
+    let input: Record<string, unknown> | null = null
+    try { input = substitute(watch.finally.input ?? {}, values) as Record<string, unknown> } catch (err) {
+      // A pick found nothing, so the call has no tab to close: the tab may still be open
+      cleanup = 'unrunnable'
+      note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
+    }
+    if (input) try {
       const answer = await Promise.race([
         $.tool.call({ tool: watch.finally.tool, ...input } as never),
         $.clock.sleep(WATCH_FINALLY_MS).then(() => 'timeout' as const),
@@ -205,12 +211,15 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       if (answer === 'timeout') note = `finally ${watch.finally.tool} didn't finish within ${WATCH_FINALLY_MS / 1000} s`
       else if (answer.deny !== undefined) note = `finally ${watch.finally.tool} was refused: ${answer.deny}`
       else if (answer.isError === true) note = `finally ${watch.finally.tool} failed: ${resultText(answer).slice(0, 200)}`
+      if (note) cleanup = 'failed'
     } catch (err) {
+      cleanup = 'failed'
       note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
     }
     if (note && 'error' in report) report = { error: `${report.error}; ${note}` }
     // A clean-up failure after a good read keeps the text and adds the note; the next check tries again
     else if (note) report = { ...report, note }
+    report = { ...report, cleanup }
   }
   return reportWatch($, watch.watch_id, report).then((r) => r.queued_run !== null).catch(() => false)
 }

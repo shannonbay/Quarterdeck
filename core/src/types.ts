@@ -217,6 +217,8 @@ export interface Watch {
   last_error: string | null
   /** Checks failed in a row. */
   fail_count: number
+  /** Clean-up (finally) calls that failed in a row, or could not run; at WATCH_CLEANUP_STOP_AFTER the watch stops until it is edited. */
+  cleanup_failures: number
   created_at: string
 }
 

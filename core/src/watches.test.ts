@@ -5,7 +5,7 @@ import { join } from 'path'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, getOpenRun, listRuns, buildBrief, claimRun, endRun, failRun, schedulerPass,
-  setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
+  setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
   matchLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
@@ -458,7 +458,7 @@ describe('the overview and deleting', () => {
     for (let i = 0; i < 3; i++) recordWatchLines(db, w.id, { error: 'gh: not logged in' })
     const [full] = buildOverview(db, 'all').goals
     expect(full).toMatchObject({ watch_count: 1, watch_failing: true })
-    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', runs: 'echo 1', last_fired_at: null, failing: true, error: 'gh: not logged in' }])
+    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, error: 'gh: not logged in' }])
     const [card] = buildOverview(db, []).goals
     expect(card).toMatchObject({ watch_count: 1, watch_failing: true, watches: [] })
   })
@@ -689,6 +689,52 @@ describe('tool watches with steps', () => {
     expect(getWatch(db, w.id)!.seen).toEqual(['one'])
     setWatch(db, 'g1', 'inbox', { steps: steps(), finally: { tool: CLOSE }, match: '^(.+)$' })
     expect(getWatch(db, w.id)!.seen).toEqual([])
+  })
+})
+
+describe('a steps watch whose clean-up keeps failing', () => {
+  const CLOSE = 'mcp__chrome__tabs_close'
+  const mk = () => setWatch(db, 'g1', 'inbox', { steps: [{ tool: 'mcp__chrome__read', input: {} }], finally: { tool: CLOSE }, match: '^(.+)$' })
+
+  it('stops after three failed clean-ups in a row, shows why, and is checked again once it is edited', () => {
+    const w = mk()
+    for (let i = 0; i < 2; i++) reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 2 })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(false)
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    const stopped = getWatch(db, w.id)!
+    expect(watchStopped(stopped)).toBe(true)
+    expect(watchFailing(stopped)).toBe(true)
+    expect(stopped.last_error).toMatch(/tab may have been left open/)
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toEqual([])
+    setWatch(db, 'g1', 'inbox', { steps: [{ tool: 'mcp__chrome__read', input: { x: 1 } }], finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0 })
+    expect(takeDueToolWatches(db, ['g1'])).toHaveLength(1)
+  })
+
+  it('a good clean-up clears the count', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'ok' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0 })
+  })
+
+  it('stops at once when the clean-up could not run, even after a failed check', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { error: 'step 1 found nothing for its pick', cleanup: 'unrunnable' })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(true)
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toEqual([])
+  })
+})
+
+describe('schema version 16', () => {
+  it('adds the cleanup_failures column to a database from version 15', () => {
+    const old = openDatabase(':memory:')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN cleanup_failures')
+    old.exec('PRAGMA user_version = 15')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('cleanup_failures')
   })
 })
 

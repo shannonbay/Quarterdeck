@@ -34,6 +34,10 @@ export const WATCH_SEEN_MAX = 1000
 export const WATCH_OUTPUT_CHARS = 64 * 1024
 /** Checks failed in a row before the watch is shown as failing. */
 export const WATCH_FAILING_AFTER = 3
+/** Clean-up calls failed in a row before a steps watch stops being checked (until it is edited): each failed one may leave a tab open. */
+export const WATCH_CLEANUP_STOP_AFTER = 3
+/** Shown on a watch stopped for its clean-up. */
+export const WATCH_CLEANUP_STOPPED = "its clean-up failed, so a tab may have been left open: the watch is stopped until it is edited"
 /** New lines per watch a brief lists; the rest are counted. */
 export const WATCH_BRIEF_LINES = 50
 export const WATCH_MIN_MINUTES = 1
@@ -251,12 +255,14 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   const rulesEdited = existing.status_rules !== null && statusRules !== null
   if (sameCheck && (rulesEdited || JSON.stringify(existing.status_rules) === JSON.stringify(statusRules))) {
     db.prepare('UPDATE goal_watches SET every_minutes = ? WHERE id = ?').run(every, existing.id)
+    // Saving it again resumes a watch stopped for its clean-up
+    if (existing.cleanup_failures) db.prepare('UPDATE goal_watches SET cleanup_failures = 0, last_error = NULL WHERE id = ?').run(existing.id)
     // Written only on a change: the column's update trigger bumps the plan's revision
     if (JSON.stringify(existing.status_rules) !== JSON.stringify(statusRules)) db.prepare('UPDATE goal_watches SET status_rules = ? WHERE id = ?').run(rulesText, existing.id)
   } else {
     db.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0 WHERE id = ?
+        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
     `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(existing.id)
   }
@@ -293,8 +299,13 @@ export function watchDue(watch: Watch, now: Date = new Date()): boolean {
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 60_000
 }
 
-export function watchFailing(watch: Pick<Watch, 'fail_count'>): boolean {
-  return watch.fail_count >= WATCH_FAILING_AFTER
+export function watchFailing(watch: Pick<Watch, 'fail_count'> & { cleanup_failures?: number }): boolean {
+  return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch)
+}
+
+/** True when the watch's clean-up has failed too often: it is not checked until it is edited. */
+export function watchStopped(watch: { cleanup_failures?: number }): boolean {
+  return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER
 }
 
 // ── Checking ──────────────────────────────────────────────────────────────────
@@ -448,7 +459,7 @@ export function takeDueToolWatches(db: Database, planIds: string[], now: Date = 
   const calls: ToolWatchCall[] = []
   for (const planId of planIds) {
     for (const w of listWatches(db, planId)) {
-      if (w.kind !== 'tool' || !(w.tool || w.steps) || !watchDue(w, now)) continue
+      if (w.kind !== 'tool' || !(w.tool || w.steps) || watchStopped(w) || !watchDue(w, now)) continue
       if (w.asked_at && now.getTime() - new Date(w.asked_at).getTime() < WATCH_REPORT_GRACE_MS) continue
       db.prepare('UPDATE goal_watches SET asked_at = ? WHERE id = ?').run(now.toISOString(), w.id)
       calls.push({ watch_id: w.id, goal_id: planId, name: w.name, tool: w.tool!, input: w.tool_input, ...(w.steps ? { steps: w.steps } : {}), ...(w.finally ? { finally: w.finally } : {}) })
@@ -458,12 +469,21 @@ export function takeDueToolWatches(db: Database, planIds: string[], now: Date = 
 }
 
 /** Records what a tool watch's call answered: its text, read into lines, or why it failed. */
-export function reportToolWatch(db: Database, watchId: string, result: { text: string; note?: string } | { error: string }, now: Date = new Date()): WatchCheck {
+/** How the clean-up call went: 'ok', 'failed', or 'unrunnable' (it could not even be called, as when a pick found nothing). Left out: the watch has none. */
+export type CleanupOutcome = 'ok' | 'failed' | 'unrunnable'
+
+export function reportToolWatch(db: Database, watchId: string, result: ({ text: string; note?: string } | { error: string }) & { cleanup?: CleanupOutcome }, now: Date = new Date()): WatchCheck {
   const watch = getWatch(db, watchId)
   if (!watch || watch.kind !== 'tool') throw new Error(`Tool watch ${watchId} not found`)
   db.prepare('UPDATE goal_watches SET asked_at = NULL WHERE id = ?').run(watchId)
-  if ('error' in result) return recordWatchLines(db, watchId, { error: result.error }, now)
-  const checked = recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  // Clean-up failures in a row: a good one clears them; one that could not run counts as all of them, since each check would leak a tab
+  let failures = watch.cleanup_failures
+  if (result.cleanup === 'ok') failures = 0
+  else if (result.cleanup) failures = result.cleanup === 'unrunnable' ? WATCH_CLEANUP_STOP_AFTER : failures + 1
+  if (failures !== watch.cleanup_failures) db.prepare('UPDATE goal_watches SET cleanup_failures = ? WHERE id = ?').run(failures, watchId)
+  const checked = 'error' in result ? recordWatchLines(db, watchId, { error: result.error }, now) : recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  if (watchStopped({ cleanup_failures: failures })) { db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(WATCH_CLEANUP_STOPPED, watchId); return { ...checked, error: WATCH_CLEANUP_STOPPED } }
+  if ('error' in result) return checked
   // A good read with a failed clean-up: the text counts, the note shows why (a tab left open), and it isn't a failed check
   if (result.note) db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(result.note.trim().slice(-500), watchId)
   return checked
