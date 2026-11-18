@@ -22,7 +22,7 @@ import {
   AddItemSchema,
   RememberSchema,
   RecallSchema,
-  ProposeCurationSchema,
+  ProposeCurationSchema, ProposeWatchSchema,
   ForgetSchema,
   EndRunSchema,
   RunGoalSchema,
@@ -62,7 +62,7 @@ import { provision_tasks } from './tools/provision_tasks.js'
 import { next_task } from './tools/next_task.js'
 import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
-import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from './tools/goals.js'
+import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, watch_report, run_progress,
@@ -184,6 +184,12 @@ const TOOLS = [
     description: "Save a fact, rule or preference to the goal's memory so future runs know it. Keep each one short and general.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember,
+  },
+  {
+    name: 'propose_watch',
+    description: "Propose a watch that starts a run when something happens (a command whose new output lines start one, or a read-only mcp__ tool call). It waits for the person under Needs you, who sees the exact command; nothing runs until they approve. Use it instead of asking how to watch for X when the trigger is clear.",
+    inputSchema: zodToJsonSchema(ProposeWatchSchema),
+    handler: propose_watch,
   },
   {
     name: 'propose_curation',

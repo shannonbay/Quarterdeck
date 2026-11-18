@@ -32,3 +32,4 @@ export function openDatabase(path: string = defaultDbPath()): Database {
   runMigrations(db)
   return db
 }
+export * from './watch-requests.js'

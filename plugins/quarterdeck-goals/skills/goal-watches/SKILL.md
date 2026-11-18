@@ -7,6 +7,8 @@ description: Use when a Quarterdeck goal should start a run because something ha
 
 A goal runs on a schedule. A **watch** also starts a run when something new appears. You set one with `update_goal` (`watches`); the person sees the whole command and confirms it.
 
+A goal run cannot set a watch itself. When it knows what should start its next run ("tell me when a buyer replies"), it calls `propose_watch` (same fields as a watch spec, plus a short `reason`) instead of asking how to watch for it: the request waits under Needs you with the exact command, and nothing runs until the person approves.
+
 ## How a watch works
 
 - A watch is a shell command (or, for a connector, a tool: see below), run every few minutes (`every_minutes`, default 5, at least 1) in the goal's working directory.

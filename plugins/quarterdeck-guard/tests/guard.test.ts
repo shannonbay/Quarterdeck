@@ -70,7 +70,7 @@ test('a run may recall memory and propose a curation, under either server prefix
   const { inputs } = world(on)
   const scopes: unknown[] = []
   for (const P of ['mcp__quarterdeck__', 'mcp__plugin_quarterdeck-goals_quarterdeck__']) {
-    for (const name of ['recall', 'propose_curation', 'remember']) {
+    for (const name of ['recall', 'propose_curation', 'propose_watch', 'remember']) {
       on('tool.call', { tool: `${P}${name}` as never }, (_, e) => {
         scopes.push((e as unknown as { run_scope?: unknown }).run_scope)
         return { result: '{"ok":true}' } as never
@@ -79,12 +79,12 @@ test('a run may recall memory and propose a curation, under either server prefix
   }
   await $.session.start(START)
   for (const P of ['mcp__quarterdeck__', 'mcp__plugin_quarterdeck-goals_quarterdeck__']) {
-    for (const name of ['recall', 'propose_curation', 'remember']) {
+    for (const name of ['recall', 'propose_curation', 'propose_watch', 'remember']) {
       const r = await $.tool.call(call({ tool: `${P}${name}`, agentId: 'run-agent' }))
       expect(said(r)).toBe('{"ok":true}')
     }
   }
-  expect(scopes).toEqual(Array(6).fill('run_abc123'))
+  expect(scopes).toEqual(Array(8).fill('run_abc123'))
   expect(inputs).toEqual([])
 })
 

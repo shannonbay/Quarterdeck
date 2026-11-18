@@ -1,11 +1,11 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
   listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, updateMemory, getRun, endRun, queueRun, countItems, touchPlan,
-  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration,
+  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
 } from '../db.js'
 import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
 import {
-  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, EndRunSchema, RunGoalSchema,
+  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema,
 } from '../schema.js'
 import { record } from '../history.js'
 
@@ -123,6 +123,17 @@ export async function remember(args: unknown) {
   const m = insertMemory({ plan_id: planId, kind: input.kind, text: input.text, source: 'agent', source_ref: input.source_ref ?? runId, untrusted_source: untrusted, untrusted_root: run?.untrusted_root ?? null })
   record(planId, planId, 'memory_added', { memory_id: m.id, kind: m.kind, text: m.text })
   return { memory: { id: m.id, kind: m.kind, text: m.text, ...(untrusted && { untrusted: true }) } }
+}
+
+/** A run proposes a watch: it waits under Needs you and nothing runs until the person approves it. */
+export async function propose_watch(args: unknown) {
+  const { name, reason, ...spec } = ProposeWatchSchema.parse(args)
+  const planId = requireOpenGoal()
+  const task = proposeWatch(planId, getOpenRun(), { name, reason, spec: spec as never })
+  touchPlan(planId)
+  record(planId, task.id, 'task_created', { goal: task.goal, status: task.status, external_ref: task.external_ref })
+  record(planId, task.id, 'approval_requested', { watch: name })
+  return { item: { id: task.id, goal: task.goal, awaiting_review: true }, message: 'Proposed: no watch exists until the person approves it. Carry on with what you can, then finish with end_run.' }
 }
 
 /** A memory curation run's one proposal: it waits under Needs you, and the server applies it on Approve. */

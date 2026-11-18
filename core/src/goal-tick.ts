@@ -18,6 +18,8 @@ import type { GoalRun, Task } from './types.js'
 import { getRunHold, type RunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { checkStatuses } from './status-check.js'
+import { applyWatchRequest, isWatchRequest, rejectWatchRequest } from './watch-requests.js'
+import type { Watch } from './types.js'
 import { applyCuration, curateModel, curationRunPrompt, isCurationRequest, queueCurationIfDue, rejectCuration, type CurationResult } from './curation.js'
 
 const LEASE_NAME = 'goals'
@@ -316,11 +318,22 @@ function clipText(text: string, max: number): string {
  */
 export function decideItem(
   db: Database, planId: string, taskId: string, input: { decision: 'approve' | 'reject' | 'answer'; feedback?: string },
-): { task: Task; queuedRun: GoalRun | null; curation?: CurationResult } {
+): { task: Task; queuedRun: GoalRun | null; curation?: CurationResult; watch?: Watch } {
   const task = getTask(db, planId, taskId)
   if (!task) throw new GoalError(`Item ${taskId} not found.`)
   let queuedRun: GoalRun | null = null
   const active = () => getGoal(db, planId)?.status === 'active'
+  if (isWatchRequest(task)) {
+    // A watch a run proposed: Approve sets exactly the spec the person saw and queues a run; Reject sets nothing
+    if (input.decision === 'answer') throw new GoalError(`Item ${taskId} is a request: approve or reject it.`)
+    if (input.decision === 'approve') {
+      const watch = applyWatchRequest(db, planId, taskId)
+      if (active()) queuedRun = queueRunAfterDecision(db, planId)
+      return { task: getTask(db, planId, taskId)!, queuedRun, watch }
+    }
+    rejectWatchRequest(db, planId, taskId, input.feedback ?? '')
+    return { task: getTask(db, planId, taskId)!, queuedRun: null }
+  }
   if (isCurationRequest(task)) {
     // A memory curation request: the server applies exactly what the person saw on Approve
     // (no run carries it out); Reject changes no memory. Either way it isn't proposed again for a week
