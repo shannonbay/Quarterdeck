@@ -85,6 +85,32 @@ export type Forge = {
   prRead: string
   /** How a goal reads a pull request's inline review comments, only from the people it trusts. */
   prInlineRead: string
+  /** The commands the repo templates' watches run, each printing one line per new thing (numbers, ids, shas and logins only). */
+  watches: ForgeWatches
+}
+
+/** A forge's watch commands: what each repo template watches for, in the host's own CLI. */
+export type ForgeWatches = {
+  /** Open pull requests that aren't drafts, by trusted authors or (trusted false) anyone else. */
+  pulls: (trusted: boolean) => string
+  /** Open issues not carrying any of `without`, by trusted authors or (trusted false) anyone else. */
+  issues: (trusted: boolean, without?: string[]) => string
+  /** Open issues labelled refined, not help wanted. */
+  refined: () => string
+  /** Open issues not yet triaged. */
+  triage: () => string
+  /** Open issues labelled needs-refinement, not yet refined or waiting on their reporter. */
+  needsRefinement: () => string
+  /** Replies by an issue's author after the goal's latest comment, on issues waiting on their reporter. */
+  clarifyReplies: () => string
+  /** Comments and reviews by trusted authors on the issue fixer's own open pull requests. */
+  prComments: () => string
+  /** Failed CI runs on a branch. */
+  branchFailures: (branch: string) => string
+  /** Failed CI runs on the issue fixer's own pull requests. */
+  fixFailures: () => string
+  /** The issue fixer's own open pull requests that no longer merge cleanly. */
+  fixConflicts: () => string
 }
 
 /** jq's list of the trusted author associations, for the read commands below. */
@@ -101,6 +127,18 @@ export const GITHUB: Forge = {
   issueRead: `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {author: .author.login, body}]}'`,
   prRead: `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`,
   prInlineRead: `gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {id, path, line, author: .user.login, body}]'`,
+  watches: {
+    pulls: (trusted) => pullWatch(trusted),
+    issues: (trusted, without) => issueWatch(trusted, without),
+    refined: () => refinedWatch(),
+    triage: () => triageWatch(),
+    needsRefinement: () => needsRefinementWatch(),
+    clarifyReplies: () => clarifyReplyWatch(),
+    prComments: () => prCommentWatch(),
+    branchFailures: (branch) => `gh run list --branch ${branchName(branch)} --status failure --limit 20 --json databaseId --jq ".[].databaseId"`,
+    fixFailures: () => `gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | .databaseId"`,
+    fixConflicts: () => `gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"`,
+  },
 }
 
 /** A forge's write subcommands, less `except`, as rules sending each to its write category. */
@@ -401,7 +439,7 @@ export const TEMPLATES: Template[] = [
     objective: "Keep this repo's CI green: when a CI run fails on the main branch, propose a pull request that fixes it",
     instructions: '', // set below: CI_FIX
     schedule: null,
-    watches: (branch) => ({ [`failed CI on ${branch}`]: { command: `gh run list --branch ${branchName(branch)} --status failure --limit 20 --json databaseId --jq ".[].databaseId"`, every_minutes: 5 } }),
+    watches: (branch) => ({ [`failed CI on ${branch}`]: { command: GITHUB.watches.branchFailures(branch), every_minutes: 5 } }),
     model: 'opus',
     modelReason: 'it works out why CI failed and writes the fix',
     autonomy: { 'code.pull_request': 'propose', 'code.merge': 'propose', 'github.write': 'off' },
@@ -420,7 +458,7 @@ export const TEMPLATES: Template[] = [
     objective: "When someone opens an issue on this repo's GitHub, propose labels for it (its kind, how urgent, whether it duplicates another), then let me pick which triaged issues go on to refinement",
     instructions: '', // set below: ISSUE_TRIAGE
     schedule: null,
-    watches: () => ({ [TRIAGE_WATCH]: { command: triageWatch(), every_minutes: 5 } }),
+    watches: () => ({ [TRIAGE_WATCH]: { command: GITHUB.watches.triage(), every_minutes: 5 } }),
     model: 'sonnet',
     modelReason: 'it sorts issues and you approve the labels',
     autonomy: { 'github.label': 'propose', 'github.schedule': 'propose', 'github.write': 'off' },
@@ -436,8 +474,8 @@ export const TEMPLATES: Template[] = [
     watches: (answer) => ({
       ...(answer.trim() === REFINE_EVERY
         ? { [REFINE_WATCH]: { command: refineWatch(true), every_minutes: 5 }, [REFINE_OTHERS_WATCH]: { command: refineWatch(false), every_minutes: 5 } }
-        : { [REFINE_PICKED_WATCH]: { command: needsRefinementWatch(), every_minutes: 5 } }),
-      [REFINE_REPLY_WATCH]: { command: clarifyReplyWatch(), every_minutes: 5 },
+        : { [REFINE_PICKED_WATCH]: { command: GITHUB.watches.needsRefinement(), every_minutes: 5 } }),
+      [REFINE_REPLY_WATCH]: { command: GITHUB.watches.clarifyReplies(), every_minutes: 5 },
     }),
     model: 'opus',
     modelReason: 'it writes a spec for whoever builds the issue',
@@ -464,11 +502,11 @@ export const TEMPLATES: Template[] = [
     schedule: null,
     watches: (answer) => ({
       ...(answer.trim() === ISSUE_FIX_EVERY
-        ? { 'new issues': { command: issueWatch(true), every_minutes: 5 }, [ISSUE_FIX_OTHERS_WATCH]: { command: issueWatch(false), every_minutes: 5 } }
-        : { [ISSUE_FIX_REFINED_WATCH]: { command: refinedWatch(), every_minutes: 5 } }),
-      [ISSUE_FIX_CI_WATCH]: { command: `gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | .databaseId"`, every_minutes: 5 },
-      [ISSUE_FIX_CONFLICT_WATCH]: { command: `gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"`, every_minutes: 5 },
-      [ISSUE_FIX_COMMENT_WATCH]: { command: prCommentWatch(), every_minutes: 5 },
+        ? { 'new issues': { command: GITHUB.watches.issues(true), every_minutes: 5 }, [ISSUE_FIX_OTHERS_WATCH]: { command: GITHUB.watches.issues(false), every_minutes: 5 } }
+        : { [ISSUE_FIX_REFINED_WATCH]: { command: GITHUB.watches.refined(), every_minutes: 5 } }),
+      [ISSUE_FIX_CI_WATCH]: { command: GITHUB.watches.fixFailures(), every_minutes: 5 },
+      [ISSUE_FIX_CONFLICT_WATCH]: { command: GITHUB.watches.fixConflicts(), every_minutes: 5 },
+      [ISSUE_FIX_COMMENT_WATCH]: { command: GITHUB.watches.prComments(), every_minutes: 5 },
     }),
     model: 'opus',
     modelReason: 'it writes fixes and features for you to review',
@@ -494,8 +532,8 @@ export const TEMPLATES: Template[] = [
     instructions: '', // set below: PR_REVIEW
     schedule: null,
     watches: () => ({
-      [PR_REVIEW_WATCH]: { command: pullWatch(true), every_minutes: 5 },
-      [PR_REVIEW_OTHERS_WATCH]: { command: pullWatch(false), every_minutes: 5 },
+      [PR_REVIEW_WATCH]: { command: GITHUB.watches.pulls(true), every_minutes: 5 },
+      [PR_REVIEW_OTHERS_WATCH]: { command: GITHUB.watches.pulls(false), every_minutes: 5 },
     }),
     model: 'opus',
     modelReason: "it judges code, and you see each review before it's posted",
@@ -539,8 +577,8 @@ const notLabelled = (label: string) => `(.labels | map(.name) | index(\\"${label
  * The issue refiner's issue watches: like the fixer's, leaving out issues
  * already refined, waiting on their reporter, or left for a person.
  */
-export function refineWatch(trusted: boolean): string {
-  return issueWatch(trusted, [REFINED_LABEL, CLARIFY_LABEL, 'help wanted'])
+export function refineWatch(trusted: boolean, forge: Forge = GITHUB): string {
+  return forge.watches.issues(trusted, [REFINED_LABEL, CLARIFY_LABEL, 'help wanted'])
 }
 
 /**
