@@ -6,7 +6,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { GoalCard } from '../types'
-import { addTodo, answerItem, approve, createGoal, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
+import { addTodo, answerItem, approve, createGoal, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
 import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
@@ -14,7 +14,7 @@ import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
 import { describeTodo, describeTodos, findTodo } from './todos'
 import { act, actFailure, refresh, refreshTodos } from './sync'
 import { phoneHint, readLastAlert, readLastPoll, readTrace } from './alerts'
-import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, MORE, NEEDS_REFINEMENT_LABEL, REFINED_LABEL, REPO_CI, REPO_GOALS, REPO_LABEL, TEMPLATES, type Template } from './templates'
+import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, FORGE_CHOICES, FORGE_QUESTION, FORGE_TEMPLATES, forgeAnswer, forgeDecision, MORE, NEEDS_REFINEMENT_LABEL, REFINED_LABEL, REPO_CI, REPO_GOALS, REPO_LABEL, TEMPLATES, type Template } from './templates'
 
 type Engine = EngineInterface
 
@@ -393,6 +393,10 @@ async function newFromTemplate($: Engine): Promise<string> {
   if (picked === REPO_LABEL) return newRepoGoals($)
   const template = TEMPLATES.find((t) => t.label === picked)
   if (!template) return picked.trim() && !/^cancel$/i.test(picked.trim()) ? newGoal($, picked) : 'No goal created.'
+  if (FORGE_TEMPLATES.includes(template.name)) {
+    const refused = await checkForge($, await $.session.root())
+    if (refused) return refused
+  }
   let instructions = template.instructions
   let answer = ''
   if (template.ask) {
@@ -434,6 +438,27 @@ async function newFromTemplate($: Engine): Promise<string> {
   return `Created the goal "${template.name}" in ${cwd}, ${when}; the first run starts within a minute.${checks}${newGoalModelText(template.model, template.modelReason)} It needs ${template.needs}. It asks before it acts: approve or reject its proposals under Needs you. Change anything by discussing the goal.${await phoneHint($)}`
 }
 
+/**
+ * Before a repo template: which git host the folder's repo is on (the server's
+ * detect_forge; asks when it can't tell). Answers why no goal is created, or
+ * null to go on with the GitHub adapter, the only one so far.
+ */
+async function checkForge($: Engine, cwd: string): Promise<string | null> {
+  let decision = forgeDecision(await detectForge($, cwd))
+  if (decision.kind === 'ask') {
+    let answer: string
+    try {
+      answer = await $.ui.ask(FORGE_QUESTION, FORGE_CHOICES)
+    } catch {
+      return 'No goal created.'
+    }
+    if (answer === 'GitHub') decision = forgeAnswer('github')
+    else if (answer === 'GitLab') decision = forgeAnswer('gitlab')
+    else return 'No goal created.'
+  }
+  return decision.kind === 'refuse' ? decision.message : null
+}
+
 /** A template's instructions with its question's answer before them ('' when it has none). Throws when the answer can't be used. */
 function templateInstructions(template: Template, answer: string): string {
   if (!template.ask) return template.instructions
@@ -464,6 +489,8 @@ function watchChecks(created: { watches?: { name: string; result: string }[] }):
  * skips any already in this folder.
  */
 async function newRepoGoals($: Engine): Promise<string> {
+  const refused = await checkForge($, await $.session.root())
+  if (refused) return refused
   const ci = TEMPLATES.find((t) => t.name === REPO_CI)!
   let branch: string
   try {

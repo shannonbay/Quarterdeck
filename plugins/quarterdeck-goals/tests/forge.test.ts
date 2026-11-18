@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CI_FIX, ciFix, CLARIFY_LABEL, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CI_FIX, FORGE_TEMPLATES, forgeAnswer, forgeDecision, ciFix, CLARIFY_LABEL, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -223,4 +223,16 @@ test("the CI fixer reads a failure with its forge's command (#44)", async () => 
   const text = ciFix(other)
   expect(text).toContain('read the failure with xx ci trace <id>.')
   expect(text).not.toContain('gh run view')
+})
+
+test('forgeDecision: an older server means GitHub, an unknown host asks, GitLab is refused for now (#44 step 2)', async () => {
+  expect(forgeDecision(null)).toEqual({ kind: 'use', forge: 'github' })
+  expect(forgeDecision({ forge: 'github', host: 'github.com' })).toEqual({ kind: 'use', forge: 'github' })
+  expect(forgeDecision({ forge: null, host: null })).toEqual({ kind: 'ask' })
+  expect(forgeDecision({ forge: null, host: 'codeberg.org' })).toEqual({ kind: 'ask' })
+  const gitlab = forgeDecision({ forge: 'gitlab', host: 'git.corp.example' })
+  expect(gitlab.kind).toBe('refuse')
+  expect(gitlab.kind === 'refuse' && gitlab.message).toContain('GitLab (git.corp.example)')
+  expect(forgeAnswer('github')).toEqual({ kind: 'use', forge: 'github' })
+  expect(FORGE_TEMPLATES).toEqual(['Issue Triage', 'Issue Refiner', 'Issue Fixer', 'PR Reviewer', 'CI Watch And Fix'])
 })

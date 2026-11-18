@@ -43,7 +43,7 @@ import {
   WatchReportSchema,
   RunProgressSchema,
   DeleteGoalSchema,
-  UnsubscribeOneClickSchema, ResolveReviewThreadSchema,
+  UnsubscribeOneClickSchema, ResolveReviewThreadSchema, DetectForgeSchema,
   TodoListSchema,
   TodoAddSchema,
   TodoSetSchema,
@@ -70,6 +70,7 @@ import {
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
 import { unsubscribe_one_click } from './tools/unsubscribe.js'
 import { resolve_review_thread } from './tools/resolve_review_thread.js'
+import { detect_forge } from './tools/detect_forge.js'
 import { handleListResources, handleReadResource } from './resources.js'
 import { getRun } from './db.js'
 import { withScope } from './session.js'
@@ -219,6 +220,12 @@ const TOOLS = [
     description: "Marks the review threads of a pull request resolved, given the ids of inline review comments in them, once you have pushed a change that answers those comments. Only threads started by the repo's owner, members or collaborators on an open pull request; it posts nothing. In a goal run, only as the goal's rules allow.",
     inputSchema: zodToJsonSchema(ResolveReviewThreadSchema),
     handler: resolve_review_thread,
+  },
+  {
+    name: 'detect_forge',
+    description: "Which git host a folder's repo is on (github, gitlab, or null when it has no origin remote or neither CLI knows the host), and whether that host's CLI (gh, glab) is installed and signed in. Read-only. For the quarterdeck-goals plugin's /goal-new.",
+    inputSchema: zodToJsonSchema(DetectForgeSchema),
+    handler: (args: unknown) => detect_forge(args),
   },
   {
     name: 'todo_list',
