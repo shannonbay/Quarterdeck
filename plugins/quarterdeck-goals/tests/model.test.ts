@@ -598,7 +598,7 @@ test('the issue triage goal may only add labels, once approved; adding needs-ref
     for (const r of ['gh label*', 'gh label list*']) expect(t.tool_map[`${tool}(${r})`]).toBeUndefined() // gh label list stays unmapped
   }
   expect(SCHEDULE_COMMAND).toBe('gh issue edit * --add-label needs-refinement')
-  // How these decide real commands is in core's guard tests
+  // How these decide real commands (quoted labels too) is in core's guard tests
 })
 
 test('the issue triage goal proposes one batch per run, never writes but labels, and asks once which issues to refine', () => {
@@ -618,7 +618,7 @@ test('the issue triage goal proposes one batch per run, never writes but labels,
   expect(ISSUE_TRIAGE).toContain('add_item with ask_person and an action (category github.schedule')
   expect(ISSUE_TRIAGE).toContain('external_ref github-issue-schedule:<numbers>, goal "Which of these should be refined?"')
   expect(ISSUE_TRIAGE).toContain('highest priority first')
-  expect(ISSUE_TRIAGE).toContain('gh issue edit <numbers> --add-label needs-refinement and nothing else in the command')
+  expect(ISSUE_TRIAGE).toContain('gh issue edit <numbers> --add-label needs-refinement exactly as written, unquoted, and nothing else in the command') // #94
   expect(ISSUE_TRIAGE).toContain("Don't ask again about the issues I didn't pick")
   expect(ISSUE_TRIAGE).toContain('how many open issues have no triaged label')
 })

@@ -201,7 +201,7 @@ test("the needs-refinement command is built from the forge's issue edit and add-
   expect(scheduleCommand(other)).toBe('xx issue update * --label needs-refinement')
   expect(scheduleWithFlags(other)).toBe('xx issue update *-* --label needs-refinement')
   const text = issueTriage(other)
-  expect(text).toContain('with xx issue update <numbers> --label needs-refinement and nothing else in the command (any other xx issue update needs its own proposal)')
+  expect(text).toContain('with xx issue update <numbers> --label needs-refinement exactly as written, unquoted, and nothing else in the command (any other xx issue update needs its own proposal)')
   expect(text).not.toContain('gh issue edit <numbers>')
 })
 
