@@ -47,6 +47,7 @@ export const listGoals = (status?: core.Goal['status']) => core.listGoals(db, st
 export const getGoal = (planId: string) => core.getGoal(db, planId)
 export const buildBrief = (planId: string, runId?: string) => core.buildBrief(db, planId, runId)
 export const buildCurationBrief = (planId: string, runId: string) => core.buildCurationBrief(db, planId, runId)
+export const proposeWatch = (planId: string, runId: string | null, input: Parameters<typeof core.proposeWatch>[3]) => core.proposeWatch(db, planId, runId, input)
 export const proposeCuration = (planId: string, runId: string | null, changes: core.CurationChange[]) => core.proposeCuration(db, planId, runId, changes)
 export const recallMemory =(planId: string, runId: string | null, ids: string[]) => core.recallMemory(db, planId, runId, ids)
 /**

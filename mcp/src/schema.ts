@@ -100,6 +100,18 @@ export const ForgetSchema = z.object({
 const MemoryKindSchema = z.enum(['fact', 'rule', 'preference'])
 const PinnedFlag = z.boolean().optional().describe('true when the memory changed is pinned: required for a pinned one, so the person sees it named')
 
+export const ProposeWatchSchema = z.object({
+  name: z.string().min(1).describe('A short name for the watch; an existing name means replacing that watch'),
+  command: z.string().optional().describe('A shell command whose output lines are what to watch (give this or tool)'),
+  tool: z.string().optional().describe('An mcp__ connector tool to call instead of a command (read-only)'),
+  input: z.record(z.unknown()).optional().describe("The tool's input"),
+  match: z.string().optional().describe("A regular expression: the tool's answer lines that count"),
+  every_minutes: z.number().int().min(1).optional().describe('How often to check'),
+  fires: z.enum(['new', 'change']).optional().describe('Run on new lines (default) or when the output changes'),
+  status: z.unknown().optional().describe('Optional status rules: {rules: [{match, status, tone?, run?}], default?}'),
+  reason: z.string().optional().describe('One short sentence: what this watch is for'),
+})
+
 export const ProposeCurationSchema = z.object({
   changes: z.array(z.discriminatedUnion('type', [
     z.object({ type: z.literal('merge'), from: z.array(z.string()).min(2).describe('Ids of the near-duplicates'), kind: MemoryKindSchema, text: z.string().min(1).describe('The one memory that replaces them'), pinned: PinnedFlag }),

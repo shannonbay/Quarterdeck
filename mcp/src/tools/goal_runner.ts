@@ -8,7 +8,7 @@ import {
   schedulerPass, releaseLease, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal,
-  listWatches, checkCommandWatch, getTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
+  listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
@@ -65,6 +65,12 @@ export async function decide_item(args: unknown) {
     if (r.curation) record(input.goal_id, input.goal_id, 'memory_curated', { item: input.item_id, ...r.curation }, human)
   } else {
     record(input.goal_id, input.item_id, 'review_rejected', { feedback: input.feedback }, human)
+  }
+  // An approved watch request was set by the server: its first check is the baseline, and the result goes in the item's notes
+  if (r.watch) {
+    const checks = (await firstChecks(input.goal_id)).filter((c) => c.name === r.watch!.name)
+    const first = checks[0] ? `First check: ${checks[0].result}` : null
+    if (first) updateTask(input.goal_id, input.item_id, { notes: [r.task.notes, first].filter(Boolean).join('\n\n') })
   }
   touchPlan(input.goal_id)
   return {

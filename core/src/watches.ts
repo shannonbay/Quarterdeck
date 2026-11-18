@@ -131,7 +131,7 @@ export function getWatch(db: Database, id: string): Watch | undefined {
  * Adds a goal's watch, or changes the one with that name. A new command
  * starts over: what the old one saw says nothing about the new one's lines.
  */
-export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
+export function validateWatchSpec(db: Database, planId: string, name: string, spec: WatchSpec) {
   const goal = getGoal(db, planId)
   if (!goal) throw new Error(`Goal ${planId} not found`)
   const label = name.trim()
@@ -170,6 +170,11 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
     what.command = command
   }
 
+  return { label, every, fires, statusRules, rulesText, what }
+}
+
+export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
+  const { label, every, fires, statusRules, rulesText, what } = validateWatchSpec(db, planId, name, spec)
   const existing = listWatches(db, planId).find((w) => w.name === label)
   if (!existing) {
     const id = newId('wch')
