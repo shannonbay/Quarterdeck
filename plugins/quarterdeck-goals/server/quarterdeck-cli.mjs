@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.28.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.29.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -1934,7 +1934,7 @@ function getWatch(db, id) {
   const r = db.prepare("SELECT * FROM goal_watches WHERE id = ?").get(id);
   return r ? deserializeWatch(r) : void 0;
 }
-function setWatch(db, planId, name, spec) {
+function validateWatchSpec(db, planId, name, spec) {
   const goal = getGoal(db, planId);
   if (!goal) throw new Error(`Goal ${planId} not found`);
   const label = name.trim();
@@ -1973,6 +1973,10 @@ function setWatch(db, planId, name, spec) {
     if (!command2) throw new Error(`The watch "${label}" needs a command.`);
     what.command = command2;
   }
+  return { label, every, fires, statusRules, rulesText, what };
+}
+function setWatch(db, planId, name, spec) {
+  const { label, every, fires, statusRules, rulesText, what } = validateWatchSpec(db, planId, name, spec);
   const existing = listWatches(db, planId).find((w) => w.name === label);
   if (!existing) {
     const id = newId("wch");
@@ -2870,6 +2874,94 @@ var init_goal_changes = __esm({
   }
 });
 
+// ../core/src/watch-requests.ts
+function specOf(w) {
+  const base = { every_minutes: w.every_minutes, fires: w.fires, status: w.status_rules };
+  return w.kind === "tool" ? { tool: w.tool, input: w.tool_input, ...w.match ? { match: w.match } : {}, ...base } : { command: w.command, ...base };
+}
+function describeSpec(spec) {
+  const s = spec;
+  const what = describeWatch({ kind: s.tool !== void 0 ? "tool" : "command", command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, match: s.match ?? null });
+  const rules = spec.status;
+  return [`${s.tool !== void 0 ? "Tool" : "Command"}: ${what}`, `Every ${s.every_minutes ?? "default"} min, fires on ${s.fires ?? "new"} lines`, ...rules ? [`Status: ${describeStatusRules(rules)}`] : []].join("\n");
+}
+function isWatchRequest(task) {
+  return Boolean(task.external_ref?.startsWith(WATCH_REF) && task.state?.watch);
+}
+function proposeWatch(db, planId, runId, input) {
+  const run = runId ? getRun(db, runId) : void 0;
+  if (!run || run.plan_id !== planId || run.status !== "running") throw new GoalError("propose_watch needs an open run of this goal.");
+  if (run.trigger === "curate") throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.");
+  const { label } = validateWatchSpec(db, planId, input.name, input.spec);
+  const waiting = getAllTasks(db, planId).find((t) => isWatchRequest(t) && t.state.watch.name === label && t.review_requested_at);
+  if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`);
+  const existing = listWatches(db, planId).find((w) => w.name === label);
+  const state = { name: label, spec: input.spec, reason: input.reason?.trim() || null, replaces: existing ? specOf(existing) : null, run_id: run.id };
+  const notes = [
+    ...state.replaces ? [`Now:
+${describeSpec(state.replaces)}`, `Proposed:
+${describeSpec(state.spec)}`] : [describeSpec(state.spec)],
+    ...state.reason ? [`Why: ${state.reason}`] : []
+  ].join("\n\n");
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const id = nextChildId(db, planId, null);
+  insertTask(db, {
+    id,
+    plan_id: planId,
+    goal: `${state.replaces ? "Replace" : "Add"} the watch "${label}"`,
+    result: null,
+    abandon_reason: null,
+    depends_on: null,
+    notes,
+    run_id: run.id,
+    external_ref: `${WATCH_REF}${label}:${run.id}:${id}`,
+    created_by: "agent",
+    created_at: now,
+    updated_at: now,
+    status: "active",
+    state: { watch: state },
+    requires_approval: true,
+    review_requested_at: now
+  });
+  return getTask(db, planId, id);
+}
+function applyWatchRequest(db, planId, taskId) {
+  const task = getTask(db, planId, taskId);
+  if (!task || !isWatchRequest(task)) throw new GoalError(`Item ${taskId} is not a watch request.`);
+  if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`);
+  const state = task.state.watch;
+  const now = listWatches(db, planId).find((w) => w.name === state.name);
+  if (JSON.stringify(now ? specOf(now) : null) !== JSON.stringify(state.replaces)) {
+    throw new GoalError(`The watch "${state.name}" changed since it was proposed: reject this request and ask for a new one.`);
+  }
+  return db.transaction(() => {
+    const watch = setWatch(db, planId, state.name, state.spec);
+    approveTask(db, planId, taskId);
+    updateTask(db, planId, taskId, { status: "completed", result: "Watch set", updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    return watch;
+  })();
+}
+function rejectWatchRequest(db, planId, taskId, feedback) {
+  const task = getTask(db, planId, taskId);
+  if (!task || !isWatchRequest(task)) throw new GoalError(`Item ${taskId} is not a watch request.`);
+  db.transaction(() => {
+    rejectTask(db, planId, taskId, feedback);
+    updateTask(db, planId, taskId, { status: "abandoned", abandon_reason: `Rejected: ${feedback.trim()}`, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+  })();
+}
+var WATCH_REF;
+var init_watch_requests = __esm({
+  "../core/src/watch-requests.ts"() {
+    "use strict";
+    init_queries();
+    init_gates();
+    init_goals();
+    init_goal_engine();
+    init_watches();
+    WATCH_REF = "watch:";
+  }
+});
+
 // ../core/src/curation.ts
 function curateModel(goalModel) {
   return goalModel && /fable/i.test(goalModel) ? "fable" : CURATE_MODEL;
@@ -3451,6 +3543,16 @@ function decideItem(db, planId, taskId, input) {
   if (!task) throw new GoalError(`Item ${taskId} not found.`);
   let queuedRun = null;
   const active = () => getGoal(db, planId)?.status === "active";
+  if (isWatchRequest(task)) {
+    if (input.decision === "answer") throw new GoalError(`Item ${taskId} is a request: approve or reject it.`);
+    if (input.decision === "approve") {
+      const watch = applyWatchRequest(db, planId, taskId);
+      if (active()) queuedRun = queueRunAfterDecision(db, planId);
+      return { task: getTask(db, planId, taskId), queuedRun, watch };
+    }
+    rejectWatchRequest(db, planId, taskId, input.feedback ?? "");
+    return { task: getTask(db, planId, taskId), queuedRun: null };
+  }
   if (isCurationRequest(task)) {
     if (input.decision === "approve") {
       const curation = applyCuration(db, planId, taskId);
@@ -3510,6 +3612,7 @@ var init_goal_tick = __esm({
     init_goal_changes();
     init_migrate();
     init_status_check();
+    init_watch_requests();
     init_curation();
     LEASE_NAME = "goals";
     LEASE_MS = 9e4;
@@ -3929,6 +4032,7 @@ __export(src_exports, {
   WATCH_MIN_MINUTES: () => WATCH_MIN_MINUTES,
   WATCH_NONE_LINE: () => WATCH_NONE_LINE,
   WATCH_OUTPUT_CHARS: () => WATCH_OUTPUT_CHARS,
+  WATCH_REF: () => WATCH_REF,
   WATCH_REPORT_GRACE_MS: () => WATCH_REPORT_GRACE_MS,
   WATCH_SEEN_MAX: () => WATCH_SEEN_MAX,
   WATCH_STATUS_CHARS: () => WATCH_STATUS_CHARS,
@@ -3940,6 +4044,7 @@ __export(src_exports, {
   applyCuration: () => applyCuration,
   applyGoalChanges: () => applyGoalChanges,
   applyInstructionEdits: () => applyInstructionEdits,
+  applyWatchRequest: () => applyWatchRequest,
   approveTask: () => approveTask,
   archiveResolved: () => archiveResolved,
   asksPerson: () => asksPerson,
@@ -4034,6 +4139,7 @@ __export(src_exports, {
   isCurationRequest: () => isCurationRequest,
   isProposal: () => isProposal,
   isUsageLimit: () => isUsageLimit,
+  isWatchRequest: () => isWatchRequest,
   itemView: () => itemView,
   knownCategories: () => knownCategories,
   leaseHolder: () => leaseHolder,
@@ -4067,6 +4173,7 @@ __export(src_exports, {
   parseHealthValue: () => parseHealthValue,
   parseLimitReset: () => parseLimitReset,
   proposeCuration: () => proposeCuration,
+  proposeWatch: () => proposeWatch,
   quarterdeckDataPaths: () => quarterdeckDataPaths,
   queueCurationIfDue: () => queueCurationIfDue,
   queueForWatchEvents: () => queueForWatchEvents,
@@ -4080,6 +4187,7 @@ __export(src_exports, {
   recordWatchLines: () => recordWatchLines,
   rejectCuration: () => rejectCuration,
   rejectTask: () => rejectTask,
+  rejectWatchRequest: () => rejectWatchRequest,
   releaseLease: () => releaseLease,
   releaseWatchEvents: () => releaseWatchEvents,
   removeWatch: () => removeWatch,
@@ -4124,6 +4232,7 @@ __export(src_exports, {
   validateStatusCheck: () => validateStatusCheck,
   validateStatusRules: () => validateStatusRules,
   validateStatusTone: () => validateStatusTone,
+  validateWatchSpec: () => validateWatchSpec,
   verifyEventSecret: () => verifyEventSecret,
   watchDue: () => watchDue,
   watchFailing: () => watchFailing,
@@ -4163,6 +4272,7 @@ var init_src = __esm({
     init_curation();
     init_paths();
     init_migrate();
+    init_watch_requests();
   }
 });
 

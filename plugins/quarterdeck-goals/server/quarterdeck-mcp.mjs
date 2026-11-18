@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.28.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.29.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -8632,7 +8632,7 @@ function getWatch(db2, id) {
   const r = db2.prepare("SELECT * FROM goal_watches WHERE id = ?").get(id);
   return r ? deserializeWatch(r) : void 0;
 }
-function setWatch(db2, planId, name, spec) {
+function validateWatchSpec(db2, planId, name, spec) {
   const goal = getGoal(db2, planId);
   if (!goal) throw new Error(`Goal ${planId} not found`);
   const label = name.trim();
@@ -8671,6 +8671,10 @@ function setWatch(db2, planId, name, spec) {
     if (!command) throw new Error(`The watch "${label}" needs a command.`);
     what.command = command;
   }
+  return { label, every, fires, statusRules, rulesText, what };
+}
+function setWatch(db2, planId, name, spec) {
+  const { label, every, fires, statusRules, rulesText, what } = validateWatchSpec(db2, planId, name, spec);
   const existing = listWatches(db2, planId).find((w) => w.name === label);
   if (!existing) {
     const id = newId("wch");
@@ -9555,6 +9559,94 @@ var init_goal_changes = __esm({
   }
 });
 
+// ../core/src/watch-requests.ts
+function specOf(w) {
+  const base = { every_minutes: w.every_minutes, fires: w.fires, status: w.status_rules };
+  return w.kind === "tool" ? { tool: w.tool, input: w.tool_input, ...w.match ? { match: w.match } : {}, ...base } : { command: w.command, ...base };
+}
+function describeSpec(spec) {
+  const s = spec;
+  const what = describeWatch({ kind: s.tool !== void 0 ? "tool" : "command", command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, match: s.match ?? null });
+  const rules = spec.status;
+  return [`${s.tool !== void 0 ? "Tool" : "Command"}: ${what}`, `Every ${s.every_minutes ?? "default"} min, fires on ${s.fires ?? "new"} lines`, ...rules ? [`Status: ${describeStatusRules(rules)}`] : []].join("\n");
+}
+function isWatchRequest(task) {
+  return Boolean(task.external_ref?.startsWith(WATCH_REF) && task.state?.watch);
+}
+function proposeWatch(db2, planId, runId, input) {
+  const run = runId ? getRun(db2, runId) : void 0;
+  if (!run || run.plan_id !== planId || run.status !== "running") throw new GoalError("propose_watch needs an open run of this goal.");
+  if (run.trigger === "curate") throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.");
+  const { label } = validateWatchSpec(db2, planId, input.name, input.spec);
+  const waiting = getAllTasks(db2, planId).find((t) => isWatchRequest(t) && t.state.watch.name === label && t.review_requested_at);
+  if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`);
+  const existing = listWatches(db2, planId).find((w) => w.name === label);
+  const state = { name: label, spec: input.spec, reason: input.reason?.trim() || null, replaces: existing ? specOf(existing) : null, run_id: run.id };
+  const notes = [
+    ...state.replaces ? [`Now:
+${describeSpec(state.replaces)}`, `Proposed:
+${describeSpec(state.spec)}`] : [describeSpec(state.spec)],
+    ...state.reason ? [`Why: ${state.reason}`] : []
+  ].join("\n\n");
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const id = nextChildId(db2, planId, null);
+  insertTask(db2, {
+    id,
+    plan_id: planId,
+    goal: `${state.replaces ? "Replace" : "Add"} the watch "${label}"`,
+    result: null,
+    abandon_reason: null,
+    depends_on: null,
+    notes,
+    run_id: run.id,
+    external_ref: `${WATCH_REF}${label}:${run.id}:${id}`,
+    created_by: "agent",
+    created_at: now,
+    updated_at: now,
+    status: "active",
+    state: { watch: state },
+    requires_approval: true,
+    review_requested_at: now
+  });
+  return getTask(db2, planId, id);
+}
+function applyWatchRequest(db2, planId, taskId) {
+  const task = getTask(db2, planId, taskId);
+  if (!task || !isWatchRequest(task)) throw new GoalError(`Item ${taskId} is not a watch request.`);
+  if (!task.review_requested_at) throw new GoalError(`Item ${taskId} is not waiting for review.`);
+  const state = task.state.watch;
+  const now = listWatches(db2, planId).find((w) => w.name === state.name);
+  if (JSON.stringify(now ? specOf(now) : null) !== JSON.stringify(state.replaces)) {
+    throw new GoalError(`The watch "${state.name}" changed since it was proposed: reject this request and ask for a new one.`);
+  }
+  return db2.transaction(() => {
+    const watch = setWatch(db2, planId, state.name, state.spec);
+    approveTask(db2, planId, taskId);
+    updateTask(db2, planId, taskId, { status: "completed", result: "Watch set", updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    return watch;
+  })();
+}
+function rejectWatchRequest(db2, planId, taskId, feedback) {
+  const task = getTask(db2, planId, taskId);
+  if (!task || !isWatchRequest(task)) throw new GoalError(`Item ${taskId} is not a watch request.`);
+  db2.transaction(() => {
+    rejectTask(db2, planId, taskId, feedback);
+    updateTask(db2, planId, taskId, { status: "abandoned", abandon_reason: `Rejected: ${feedback.trim()}`, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+  })();
+}
+var WATCH_REF;
+var init_watch_requests = __esm({
+  "../core/src/watch-requests.ts"() {
+    "use strict";
+    init_queries();
+    init_gates();
+    init_goals();
+    init_goal_engine();
+    init_watches();
+    WATCH_REF = "watch:";
+  }
+});
+
 // ../core/src/curation.ts
 function curateModel(goalModel) {
   return goalModel && /fable/i.test(goalModel) ? "fable" : CURATE_MODEL;
@@ -10136,6 +10228,16 @@ function decideItem(db2, planId, taskId, input) {
   if (!task) throw new GoalError(`Item ${taskId} not found.`);
   let queuedRun = null;
   const active = () => getGoal(db2, planId)?.status === "active";
+  if (isWatchRequest(task)) {
+    if (input.decision === "answer") throw new GoalError(`Item ${taskId} is a request: approve or reject it.`);
+    if (input.decision === "approve") {
+      const watch = applyWatchRequest(db2, planId, taskId);
+      if (active()) queuedRun = queueRunAfterDecision(db2, planId);
+      return { task: getTask(db2, planId, taskId), queuedRun, watch };
+    }
+    rejectWatchRequest(db2, planId, taskId, input.feedback ?? "");
+    return { task: getTask(db2, planId, taskId), queuedRun: null };
+  }
   if (isCurationRequest(task)) {
     if (input.decision === "approve") {
       const curation = applyCuration(db2, planId, taskId);
@@ -10195,6 +10297,7 @@ var init_goal_tick = __esm({
     init_goal_changes();
     init_migrate();
     init_status_check();
+    init_watch_requests();
     init_curation();
     LEASE_NAME = "goals";
     LEASE_MS = 9e4;
@@ -10584,6 +10687,7 @@ var init_src = __esm({
     init_curation();
     init_paths();
     init_migrate();
+    init_watch_requests();
   }
 });
 
@@ -23060,6 +23164,17 @@ var ForgetSchema = external_exports.object({
 });
 var MemoryKindSchema = external_exports.enum(["fact", "rule", "preference"]);
 var PinnedFlag = external_exports.boolean().optional().describe("true when the memory changed is pinned: required for a pinned one, so the person sees it named");
+var ProposeWatchSchema = external_exports.object({
+  name: external_exports.string().min(1).describe("A short name for the watch; an existing name means replacing that watch"),
+  command: external_exports.string().optional().describe("A shell command whose output lines are what to watch (give this or tool)"),
+  tool: external_exports.string().optional().describe("An mcp__ connector tool to call instead of a command (read-only)"),
+  input: external_exports.record(external_exports.unknown()).optional().describe("The tool's input"),
+  match: external_exports.string().optional().describe("A regular expression: the tool's answer lines that count"),
+  every_minutes: external_exports.number().int().min(1).optional().describe("How often to check"),
+  fires: external_exports.enum(["new", "change"]).optional().describe("Run on new lines (default) or when the output changes"),
+  status: external_exports.unknown().optional().describe("Optional status rules: {rules: [{match, status, tone?, run?}], default?}"),
+  reason: external_exports.string().optional().describe("One short sentence: what this watch is for")
+});
 var ProposeCurationSchema = external_exports.object({
   changes: external_exports.array(external_exports.discriminatedUnion("type", [
     external_exports.object({ type: external_exports.literal("merge"), from: external_exports.array(external_exports.string()).min(2).describe("Ids of the near-duplicates"), kind: MemoryKindSchema, text: external_exports.string().min(1).describe("The one memory that replaces them"), pinned: PinnedFlag }),
@@ -23341,6 +23456,7 @@ var listGoals2 = (status) => listGoals(db, status);
 var getGoal2 = (planId) => getGoal(db, planId);
 var buildBrief2 = (planId, runId) => buildBrief(db, planId, runId);
 var buildCurationBrief2 = (planId, runId) => buildCurationBrief(db, planId, runId);
+var proposeWatch2 = (planId, runId, input) => proposeWatch(db, planId, runId, input);
 var proposeCuration2 = (planId, runId, changes) => proposeCuration(db, planId, runId, changes);
 var recallMemory2 = (planId, runId, ids) => recallMemory(db, planId, runId, ids);
 function recordItemAttempt(planId, taskId, runId, count = true) {
@@ -24082,6 +24198,7 @@ async function get_goal_brief(args) {
       "Look for new work; add each piece with add_item (use external_ref so it is never duplicated).",
       "For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.",
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
+      "When the goal needs a watch it does not have (or a changed one), propose it with propose_watch for the person to approve, rather than asking them how to watch for it.",
       "Save anything worth knowing next time with remember. Finish with end_run and a short summary.",
       "memory holds what fits in the brief; memory_index lists the rest (memory_omitted counts them all) by id and how each starts. When one looks relevant to what you are doing, read it in full with recall (several ids in one call).",
       "When the status you set in end_run describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue), attach a status_check so it updates by itself."
@@ -24128,6 +24245,15 @@ async function remember(args) {
   const m = insertMemory2({ plan_id: planId, kind: input.kind, text: input.text, source: "agent", source_ref: input.source_ref ?? runId, untrusted_source: untrusted, untrusted_root: run?.untrusted_root ?? null });
   record3(planId, planId, "memory_added", { memory_id: m.id, kind: m.kind, text: m.text });
   return { memory: { id: m.id, kind: m.kind, text: m.text, ...untrusted && { untrusted: true } } };
+}
+async function propose_watch(args) {
+  const { name, reason, ...spec } = ProposeWatchSchema.parse(args);
+  const planId = requireOpenGoal();
+  const task = proposeWatch2(planId, getOpenRun2(), { name, reason, spec });
+  touchPlan2(planId);
+  record3(planId, task.id, "task_created", { goal: task.goal, status: task.status, external_ref: task.external_ref });
+  record3(planId, task.id, "approval_requested", { watch: name });
+  return { item: { id: task.id, goal: task.goal, awaiting_review: true }, message: "Proposed: no watch exists until the person approves it. Carry on with what you can, then finish with end_run." };
 }
 async function propose_curation(args) {
   const input = ProposeCurationSchema.parse(args);
@@ -24351,6 +24477,11 @@ async function decide_item(args) {
     if (r.curation) record3(input.goal_id, input.goal_id, "memory_curated", { item: input.item_id, ...r.curation }, human);
   } else {
     record3(input.goal_id, input.item_id, "review_rejected", { feedback: input.feedback }, human);
+  }
+  if (r.watch) {
+    const checks = (await firstChecks(input.goal_id)).filter((c) => c.name === r.watch.name);
+    const first = checks[0] ? `First check: ${checks[0].result}` : null;
+    if (first) updateTask2(input.goal_id, input.item_id, { notes: [r.task.notes, first].filter(Boolean).join("\n\n") });
   }
   touchPlan2(input.goal_id);
   return {
@@ -24870,6 +25001,12 @@ var TOOLS = [
     description: "Save a fact, rule or preference to the goal's memory so future runs know it. Keep each one short and general.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember
+  },
+  {
+    name: "propose_watch",
+    description: "Propose a watch that starts a run when something happens (a command whose new output lines start one, or a read-only mcp__ tool call). It waits for the person under Needs you, who sees the exact command; nothing runs until they approve. Use it instead of asking how to watch for X when the trigger is clear.",
+    inputSchema: zodToJsonSchema(ProposeWatchSchema),
+    handler: propose_watch
   },
   {
     name: "propose_curation",
