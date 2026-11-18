@@ -100,11 +100,20 @@ export const ForgetSchema = z.object({
 const MemoryKindSchema = z.enum(['fact', 'rule', 'preference'])
 const PinnedFlag = z.boolean().optional().describe('true when the memory changed is pinned: required for a pinned one, so the person sees it named')
 
+const StepsSchema = z.array(z.object({
+  tool: z.string().trim().min(1),
+  input: z.record(z.unknown()).optional().describe('May use {{name}} for a value an earlier step picked'),
+  pick: z.record(z.union([z.object({ regex: z.string() }), z.object({ json: z.string() })])).optional().describe('Name to {regex: "one group"} or {json: "a.b[0]"} over this step answer text, for later inputs as {{name}}'),
+})).min(1).max(4).describe('Instead of tool + input: up to 4 read-only calls in order (e.g. a browser navigate, then get_page_text with {{tabId}}); the last answer is read with match')
+const FinallySchema = z.object({ tool: z.string().trim().min(1), input: z.record(z.unknown()).optional() }).describe('With steps: a call that always runs after them, even after a failure (e.g. close the tab)')
+
 export const ProposeWatchSchema = z.object({
   name: z.string().min(1).describe('A short name for the watch; an existing name means replacing that watch'),
   command: z.string().optional().describe('A shell command whose output lines are what to watch (give this or tool)'),
   tool: z.string().optional().describe('An mcp__ connector tool to call instead of a command (read-only)'),
   input: z.record(z.unknown()).optional().describe("The tool's input"),
+  steps: StepsSchema.optional(),
+  finally: FinallySchema.optional(),
   match: z.string().optional().describe("A regular expression: the tool's answer lines that count"),
   every_minutes: z.number().int().min(1).optional().describe('How often to check'),
   fires: z.enum(['new', 'change']).optional().describe('Run on new lines (default) or when the output changes'),
@@ -242,6 +251,8 @@ const WatchSchema = z.object({
   command: z.string().trim().min(1).optional().describe('A shell command, run in the goal\'s directory, that prints one line per current item (an issue number, a feed entry\'s id). Lines not seen before start a run; the first check only records what is there. Must exit 0'),
   tool: z.string().trim().min(1).optional().describe('Instead of a command: a connector or MCP tool (mcp__…) that only reads, called by the session that runs goals, e.g. a mail search'),
   input: z.record(z.unknown()).optional().describe("The tool's arguments"),
+  steps: StepsSchema.optional(),
+  finally: FinallySchema.optional(),
   match: z.string().optional().describe('A regular expression over the tool\'s answer; each match (its first group) is one line. Left out: every "id" in a JSON answer'),
   every_minutes: z.number().int().min(1).optional().describe('How often to check (default 5)'),
   status: z.object({
@@ -254,7 +265,7 @@ const WatchSchema = z.object({
     default: z.object({ status: z.string().min(1).max(40), tone: z.enum(['ok', 'attention', 'problem']).optional(), run: z.boolean().optional() }).optional().describe('When no rule matches'),
   }).nullable().optional().describe("Sets the goal's status (and tone) from each check's lines with no agent run: for a goal that only reports a state. A run starts only when the matching rule says run: true. Best with fires: 'change'"),
   fires: z.enum(['new', 'change']).optional().describe("'new' (default): a line never seen before starts a run. 'change': for a state (a working tree, a health URL): a run starts when the output differs from the last check, with the lines that weren't in it ((none) when it became empty)"),
-}).refine((v) => (v.command === undefined) !== (v.tool === undefined), { message: 'A watch has a command or a tool, one of them.' })
+}).refine((v) => [v.command, v.tool, v.steps].filter((x) => x !== undefined).length === 1, { message: 'A watch has a command, a tool or steps, one of them.' })
 
 export const CreateGoalSchema = z.object({
   name: z.string().trim().min(1),

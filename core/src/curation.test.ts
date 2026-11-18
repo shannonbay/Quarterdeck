@@ -29,9 +29,9 @@ function curationRun(): string {
 }
 
 describe('schema', () => {
-  it('is version 14, with goals.curated_at', () => {
-    expect(SCHEMA_VERSION).toBe(14)
-    expect(dbSchemaVersion(db)).toBe(14)
+  it('is version 15, with goals.curated_at', () => {
+    expect(SCHEMA_VERSION).toBe(15)
+    expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
   })
 
@@ -40,7 +40,7 @@ describe('schema', () => {
     for (const table of ['goal_runs', 'goal_memory']) db.exec(`ALTER TABLE ${table} DROP COLUMN untrusted_root`)
     db.exec('PRAGMA user_version = 13')
     runMigrations(db)
-    expect(dbSchemaVersion(db)).toBe(14)
+    expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     for (const table of ['goal_runs', 'goal_memory']) {
       expect((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name)).toContain('untrusted_root')
     }

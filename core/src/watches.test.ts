@@ -8,7 +8,7 @@ import {
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, describeWatch, reportToolWatch, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
+  matchLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
 import { statusNote } from './goal-overview.js'
 
@@ -609,5 +609,67 @@ describe('status rules', () => {
     const second = startRun(db, queueRun(db, 'g1').id, null)
     endRun(db, second.id, 'Checked.', '')
     expect(getGoal(db, 'g1')).toMatchObject({ status_note: null, status_source: null })
+  })
+})
+
+describe('tool watches with steps', () => {
+  const NAV = 'mcp__claude-in-chrome__navigate'
+  const TEXT = 'mcp__claude-in-chrome__get_page_text'
+  const CLOSE = 'mcp__claude-in-chrome__tabs_close_mcp'
+  const steps = () => [
+    { tool: NAV, input: { url: 'https://example.com/inbox' }, pick: { tabId: { regex: 'tab (\d+)' } } },
+    { tool: TEXT, input: { tabId: '{{tabId}}' } },
+  ]
+
+  it('stores, shows and hands out the steps and the finally call', () => {
+    const w = setWatch(db, 'g1', 'inbox', { steps: steps(), finally: { tool: CLOSE, input: { tabId: '{{tabId}}' } }, match: '^(.+)$' })
+    expect(w).toMatchObject({ kind: 'tool', steps: steps(), finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(describeWatch(w)).toMatch(/1\. mcp__claude-in-chrome__navigate .* then 2\. .*; finally mcp__claude-in-chrome__tabs_close_mcp/)
+    expect(takeDueToolWatches(db, ['g1'])).toMatchObject([{ watch_id: w.id, steps: steps(), finally: { tool: CLOSE } }])
+  })
+
+  it('refuses a bad sequence', () => {
+    const t = (spec: object) => () => setWatch(db, 'g1', 'x', spec as never)
+    expect(t({ steps: [...steps(), ...steps(), ...steps()] })).toThrow(/at most 4/)
+    expect(t({ steps: steps(), tool: NAV })).toThrow(/tool and steps/)
+    expect(t({ steps: steps(), command: 'echo 1' })).toThrow(/command and steps/)
+    expect(t({ steps: [{ tool: 'Bash' }] })).toThrow(/mcp__/)
+    expect(t({ steps: [{ tool: 'mcp__quarterdeck__decide_item' }] })).toThrow(/own tools/)
+    expect(t({ steps: steps(), finally: { tool: 'mcp__quarterdeck__decide_item' } })).toThrow(/own tools/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: '(' } } }] })).toThrow(/regular expression/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: 'x' } } }] })).toThrow(/exactly one group, not 0/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: '(x)(y)' } } }] })).toThrow(/exactly one group, not 2/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'a..b' } } }] })).toThrow(/json path/)
+    expect(t({ steps: [{ tool: NAV, input: { id: '{{nope}}' } }] })).toThrow(/\{\{nope\}\}.*no earlier step/)
+    expect(t({ steps: [{ tool: NAV, input: { id: '{{a}}' }, pick: { a: { json: 'x' } } }] })).toThrow(/no earlier step/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'x' } } }, { tool: TEXT, pick: { a: { json: 'y' } } }] })).toThrow(/twice/)
+    expect(t({ tool: NAV, finally: { tool: CLOSE } })).toThrow(/without steps/)
+  })
+
+  it('refuses a step mapped to a category that is not auto', () => {
+    updateGoal(db, 'g1', { tool_map: { [TEXT]: 'browser.read' }, autonomy: { 'browser.read': 'propose' } })
+    expect(() => setWatch(db, 'g1', 'x', { steps: steps() })).toThrow(/"browser.read", which is propose/)
+  })
+
+  it('a changed sequence resets what was seen; an unchanged re-set does not', () => {
+    const w = setWatch(db, 'g1', 'inbox', { steps: steps(), match: '^(.+)$' })
+    reportToolWatch(db, w.id, { text: 'one' })
+    expect(getWatch(db, w.id)!.seen).toEqual(['one'])
+    setWatch(db, 'g1', 'inbox', { steps: steps(), match: '^(.+)$', every_minutes: 9 })
+    expect(getWatch(db, w.id)!.seen).toEqual(['one'])
+    setWatch(db, 'g1', 'inbox', { steps: steps(), finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(getWatch(db, w.id)!.seen).toEqual([])
+  })
+})
+
+describe('schema version 15', () => {
+  it('adds the steps and finally_call columns to a database from version 14', () => {
+    const old = openDatabase(':memory:')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN steps')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN finally_call')
+    old.exec('PRAGMA user_version = 14')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toEqual(expect.arrayContaining(['steps', 'finally_call']))
   })
 })

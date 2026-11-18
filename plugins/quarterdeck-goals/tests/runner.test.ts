@@ -220,3 +220,53 @@ test('while plan mode refuses the tick the pane says so instead of "Offline", an
   expect(await after.find({ type: 'Text', text: /^Plan mode is on/ })).toBeFalsy()
   await after.unmount()
 })
+
+test('a steps watch passes a picked value to the next call, reads the last answer, and always runs its finally call', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const calls: Record<string, unknown>[] = []
+  const seen = (tool: string, result: string, isError = false) => on('tool.call', { tool: tool as never }, (_, e) => {
+    const { tool_use_id: _u, agentId: _a, ...rest } = e as unknown as Record<string, unknown>
+    calls.push(rest)
+    return { result, isError } as never
+  })
+  seen('mcp__chrome__navigate', 'Opened tab 42')
+  seen('mcp__chrome__get_page_text', 'Anna: hi')
+  seen('mcp__chrome__tabs_close', 'closed')
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: { url: 'https://example.com/inbox' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(calls.map((c) => [c.tool, c.tabId])).toEqual([['mcp__chrome__navigate', undefined], ['mcp__chrome__get_page_text', '42'], ['mcp__chrome__tabs_close', '42']])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi' }])
+})
+
+test('a steps watch whose pick finds nothing reports an error naming the step, and still runs finally', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'no tab here' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: {} },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'step 1 (mcp__chrome__navigate) found nothing for its pick "tabId"' }])
+  expect(closed).toHaveLength(1)
+})

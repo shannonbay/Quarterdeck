@@ -129,6 +129,24 @@ New mail in the inbox (Gmail connector):
 
 Keep the search narrow and recent (`newer_than:2d`, a sender, a label), so a thread that scrolls off the first page and comes back isn't taken for new. The run is told thread ids; say in the goal's instructions to read each with the connector's `get_thread`.
 
+## A tool watch with steps (reading a page in the browser)
+
+Some sources need two calls, and the second needs a value from the first (Claude in Chrome: `navigate` opens a tab, `get_page_text` reads it by tab id). Give `steps` (up to 4) instead of `tool`, and `finally` for a clean-up call that always runs:
+
+```json
+{ "steps": [
+    { "tool": "mcp__claude-in-chrome__navigate", "input": { "url": "https://example.com/inbox" }, "pick": { "tabId": { "regex": "tab id (\d+)" } } },
+    { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" } } ],
+  "finally": { "tool": "mcp__claude-in-chrome__tabs_close_mcp", "input": { "tabId": "{{tabId}}" } },
+  "match": "^(.+)$", "every_minutes": 15 }
+```
+
+- Try the calls yourself first and read the answers: the pick's regex needs exactly one group (or use `json`: `a.b[0]`).
+- Page text changes (timestamps such as "2 m", "5 m"): make `match` pick only stable parts (a name, a message's first words), or `fires: new` will start runs that find nothing new. Test `match` against two reads a few minutes apart.
+- Reading can change what the site does: opening an inbox may mark messages seen and stop the site's own emails or pushes.
+- The extension not connected, or a site-permission prompt nobody can answer, is a failed check, never "nothing new".
+- Each check opens a tab in the person's real browser: always give a `finally` that closes it.
+
 ## When not to use a watch
 
 - **The source can call out** (a service with webhooks, a CI job): use the goal's webhook, `/api/goals/<id>/trigger` on the Quarterdeck web app. It needs the web app running and reachable from the sender.
