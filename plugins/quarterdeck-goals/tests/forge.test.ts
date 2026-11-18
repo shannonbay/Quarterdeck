@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -129,4 +129,16 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
     expect(gh[`Bash(${k})`]).toBeDefined()
   }
   expect(triageRules()['Bash(gh issue list*)']).toBe('untrusted')
+})
+
+test("the triage text names the forge's commands, GitHub's by default (#44)", async () => {
+  expect(issueTriage()).toBe(ISSUE_TRIAGE)
+  const other: Forge = { ...GITHUB, triage: {
+    read: 'X-READ', labels: 'X-LABELS', labelCreate: 'X-LABEL-CREATE', duplicates: 'X-DUPLICATES',
+    addLabels: (labels) => `X-ADD <${labels}>`, untriaged: 'X-UNTRIAGED',
+  } }
+  const text = issueTriage(other)
+  for (const s of ['X-READ', 'X-LABELS', 'X-LABEL-CREATE', 'X-DUPLICATES', 'X-ADD <<label>,<label>,triaged>', 'X-UNTRIAGED']) expect(text).toContain(s)
+  // Only the needs-refinement schedule command is still gh's; it moves with the schedule rules.
+  expect(text.replace(/gh issue edit[^,]*needs-refinement[^)]*\)?/g, '').replace('any other gh issue edit', '')).not.toMatch(/gh (issue|label) /)
 })
