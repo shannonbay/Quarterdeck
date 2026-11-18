@@ -151,6 +151,16 @@ export type ForgeRules = {
   labelWrites: string[]
   /** The flag of `issueEdit` that adds a label, as in the triage goal's needs-refinement command. */
   addLabel: string
+  /** Reads a pull request, its diff, and checks it out: the PR reviewer's reads of outside text. */
+  prView: string
+  prDiff: string
+  prCheckout: string
+  /** Posts a pull request review, the PR reviewer's one write. */
+  reviewPost: string
+  /** Reads a pull request's inline review comments, the Issue Fixer's one API read. */
+  inlineRead: string
+  /** Forms of `inlineRead` that would make it a write (a method, field or input flag), each longer so it wins. */
+  inlineWrites: string[]
 }
 
 /** The commands the issue refiner runs besides its issue reads and watches, in the host's own CLI. */
@@ -267,6 +277,14 @@ export const GITHUB: Forge = {
     labelCreate: 'gh label create',
     labelWrites: ['gh label delete', 'gh label edit', 'gh label clone'],
     addLabel: '--add-label',
+    prView: 'gh pr view',
+    prDiff: 'gh pr diff',
+    prCheckout: 'gh pr checkout',
+    reviewPost: 'gh api repos/*/pulls/*/reviews',
+    inlineRead: 'gh api repos/*/pulls/*/comments',
+    // A flag after the path, or any flag before it with the path text later (a field value, a --jq argument). A repo path has
+    // no spaces, so the space keeps a `-f` or `-x` inside an owner or repo name (data-fetch, my-xorg) from counting.
+    inlineWrites: [...['--method', '-X', '-f', '--input'].map((flag) => `gh api repos/*/pulls/*/comments*${flag}`), 'gh api repos/* -*/pulls/*/comments'],
   },
   triage: {
     read: 'gh issue view <number> --json number,title,body,labels,author,url',
@@ -303,7 +321,7 @@ function writeRules(forge: Forge, except: string[] = []): Record<string, string>
  * writes to GitHub, gh api, and reading gh's token is off. Reading an issue
  * marks the run untrusted. Name matching only (a script gets past it).
  */
-function githubRules(merge: string, forge: Forge = GITHUB): Record<string, string> {
+export function githubRules(merge: string, forge: Forge = GITHUB): Record<string, string> {
   return shell({
     'git push*': 'code.pull_request',
     'git -C * push*': 'code.pull_request',
@@ -311,27 +329,21 @@ function githubRules(merge: string, forge: Forge = GITHUB): Record<string, strin
     [`${forge.rules.prMerge}*`]: merge,
     ...writeRules(forge),
     [`${forge.rules.issueView}*`]: 'untrusted',
-    ...inlineReadRules(),
+    ...inlineReadRules(forge),
   })
 }
 
 /**
- * The one `gh api` read the Issue Fixer may make: a pull request's inline review
+ * The one API read the Issue Fixer may make: a pull request's inline review
  * comments (the jq filter in its instructions keeps only trusted authors'). It
  * reads outside text, so it is `untrusted`, and longer than `gh api*` so it wins.
  * A `*` matches flags too, so still longer rules send any method, field or input
- * flag (which would make it a write) back to `github.write`, wherever it stands.
+ * flag (which would make it a write) back to the forge's write category, wherever it stands.
  */
-const INLINE_READ = 'gh api repos/*/pulls/*/comments*'
-const INLINE_WRITE_FLAGS = ['--method', '-X', '-f', '--input']
-const INLINE_FLAG_BEFORE = 'gh api repos/* -*/pulls/*/comments*'
-function inlineReadRules(): Record<string, string> {
+function inlineReadRules(forge: Forge): Record<string, string> {
   return {
-    [INLINE_READ]: 'untrusted',
-    ...Object.fromEntries(INLINE_WRITE_FLAGS.map((flag) => [`${INLINE_READ}${flag}*`, 'github.write'])), // a flag after the path
-    // Any flag before it, with the path text later (a field value, a --jq argument). A repo path has no spaces, so the space keeps
-    // a `-f` or `-x` inside an owner or repo name (data-fetch, my-xorg) from counting.
-    [INLINE_FLAG_BEFORE]: 'github.write',
+    [`${forge.rules.inlineRead}*`]: 'untrusted',
+    ...Object.fromEntries(forge.rules.inlineWrites.map((w) => [`${w}*`, forge.write])),
   }
 }
 
@@ -357,10 +369,10 @@ export function reviewRules(forge: Forge = GITHUB): Record<string, string> {
     'git -C * push*': 'github.write',
     [`${forge.rules.prCreate}*`]: 'github.write',
     [`${forge.rules.prMerge}*`]: 'github.write',
-    'gh api repos/*/pulls/*/reviews*': 'github.review',
-    'gh pr view*': 'untrusted',
-    'gh pr diff*': 'untrusted',
-    'gh pr checkout*': 'untrusted',
+    [`${forge.rules.reviewPost}*`]: 'github.review',
+    [`${forge.rules.prView}*`]: 'untrusted',
+    [`${forge.rules.prDiff}*`]: 'untrusted',
+    [`${forge.rules.prCheckout}*`]: 'untrusted',
     [`${forge.rules.issueView}*`]: 'untrusted',
   })
 }

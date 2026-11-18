@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -124,6 +124,8 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
   const other: Forge = { ...GITHUB, cli: 'xx', writes: ['issue comment', 'issue edit', 'label', 'api'], write: 'xx.write', rules: {
     prCreate: 'xx mr create', prMerge: 'xx mr merge', issueView: 'xx issue view', issueList: 'xx issue list',
     issueComment: 'xx issue note', issueEdit: 'xx issue update', labelCreate: 'xx label new', labelWrites: ['xx label rm'], addLabel: '--label',
+    prView: 'xx mr view', prDiff: 'xx mr diff', prCheckout: 'xx mr checkout', reviewPost: 'xx mr note',
+    inlineRead: 'xx mr discussions', inlineWrites: ['xx mr discussions *--post'],
   } }
   const refine = refineRules(other)
   expect(Object.keys(refine).filter((k) => k.includes('gh '))).toEqual([])
@@ -139,7 +141,26 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
   expect(triage['Bash(xx issue update * --label needs-refinement)']).toBe('github.schedule')
   expect(triage['PowerShell(xx issue update *-* --label needs-refinement)']).toBe('github.label')
   expect(triage['Bash(xx issue list*)']).toBe('untrusted')
-  expect(reviewRules(other)['Bash(xx mr create*)']).toBe('github.write')
+  const review = reviewRules(other)
+  expect(review['Bash(xx mr create*)']).toBe('github.write')
+  // The reviewer's reads and its one write are the forge's too.
+  expect(Object.keys(review).filter((k) => k.includes('gh '))).toEqual([])
+  expect(review['Bash(xx mr note*)']).toBe('github.review')
+  for (const k of ['xx mr view*', 'xx mr diff*', 'xx mr checkout*']) expect(review[`PowerShell(${k})`]).toBe('untrusted')
+  // The fixer's inline comment read, and the forms of it that write.
+  const fixer = githubRules('code.merge', other)
+  expect(Object.keys(fixer).filter((k) => k.includes('gh '))).toEqual([])
+  expect(fixer['Bash(xx mr discussions*)']).toBe('untrusted')
+  expect(fixer['Bash(xx mr discussions *--post*)']).toBe('xx.write')
+  // GitHub's keep their gh commands.
+  const ghFixer = githubRules('code.merge')
+  expect(ghFixer['Bash(gh api repos/*/pulls/*/comments*)']).toBe('untrusted')
+  for (const k of ['gh api repos/*/pulls/*/comments*--method*', 'gh api repos/*/pulls/*/comments*-X*', 'gh api repos/*/pulls/*/comments*-f*', 'gh api repos/*/pulls/*/comments*--input*', 'gh api repos/* -*/pulls/*/comments*']) {
+    expect(ghFixer[`Bash(${k})`]).toBe('github.write')
+  }
+  const ghReview = reviewRules()
+  expect(ghReview['Bash(gh api repos/*/pulls/*/reviews*)']).toBe('github.review')
+  for (const k of ['gh pr view*', 'gh pr diff*', 'gh pr checkout*']) expect(ghReview[`Bash(${k})`]).toBe('untrusted')
   // GitHub's rules keep their gh commands.
   const gh = refineRules()
   for (const k of ['gh issue comment*', 'gh issue edit*', 'gh label create*', 'gh label delete*', 'gh label edit*', 'gh label clone*', 'gh pr create*', 'gh pr merge*', 'gh issue view*']) {
