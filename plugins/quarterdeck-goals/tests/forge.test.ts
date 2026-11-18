@@ -35,6 +35,16 @@ test("the issue fixer's instructions read issues and pull requests through its f
   expect(ISSUE_FIX_WORK).toContain('status_check (kind github_pr,')
 })
 
+test("the issue fixer's other commands come from its forge (#44)", async () => {
+  const other: Forge = { ...GITHUB, fixer: { runBranch: 'X-RUN-BRANCH', runLog: 'X-RUN-LOG', prBase: 'X-PR-BASE', openIssues: 'X-OPEN-ISSUES', labelledIssues: (label) => `X-LABELLED ${label}`, allPulls: 'X-ALL-PULLS' } }
+  const text = `${issueFixRefinedIntake(other)} ${issueFixWork(other)}`
+  for (const command of ['find its branch with X-RUN-BRANCH.', 'read the failure with X-RUN-LOG,', 'find the base with X-PR-BASE:', '(X-OPEN-ISSUES, not their titles', `with X-LABELLED ${REFINED_LABEL} (not their text)`, 'a pull request from one (X-ALL-PULLS)']) expect(text).toContain(command)
+  expect(text).not.toMatch(/\bgh (run|pr list|pr view <number> --json baseRefName|issue list)/)
+  // The GitHub goal keeps the gh commands it had.
+  const github = `${ISSUE_FIX_REFINED_INTAKE} ${ISSUE_FIX_WORK}`
+  for (const command of ['gh run view <id> --json headBranch', 'gh run view <id> --log-failed', 'gh pr view <number> --json baseRefName', 'gh issue list --json number,author', `gh issue list --state open --label ${REFINED_LABEL} --limit 1000 --json number,labels`, 'gh pr list --state all --limit 1000 --json number,headRefName']) expect(github).toContain(command)
+})
+
 test('the refiner watches issues through its forge (#44)', async () => {
   const other: Forge = { ...GITHUB, watches: { ...GITHUB.watches, issues: (trusted, without = []) => `glab issue list ${trusted} ${without.join(',')}` } }
   expect(refineWatch(true, other)).toMatch(/^glab issue list true /)

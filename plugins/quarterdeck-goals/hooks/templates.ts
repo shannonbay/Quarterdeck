@@ -87,6 +87,24 @@ export type Forge = {
   prInlineRead: string
   /** The commands the repo templates' watches run, each printing one line per new thing (numbers, ids, shas and logins only). */
   watches: ForgeWatches
+  /** The other commands the issue fixer's instructions name. */
+  fixer: ForgeFixer
+}
+
+/** The commands the issue fixer runs besides its reads and watches, in the host's own CLI. */
+export type ForgeFixer = {
+  /** A CI run's branch, given <id>. */
+  runBranch: string
+  /** A failed CI run's failing log, given <id>. */
+  runLog: string
+  /** A pull request's base branch, given <number>. */
+  prBase: string
+  /** The open issues' numbers and authors only (no text), for the first run's summary. */
+  openIssues: string
+  /** The open issues carrying a label, numbers and labels only (no text), for a catch-up run. */
+  labelledIssues: (label: string) => string
+  /** Every pull request's number and head branch, open or not, to tell which issues already have one. */
+  allPulls: string
 }
 
 /** A forge's watch commands: what each repo template watches for, in the host's own CLI. */
@@ -138,6 +156,14 @@ export const GITHUB: Forge = {
     branchFailures: (branch) => `gh run list --branch ${branchName(branch)} --status failure --limit 20 --json databaseId --jq ".[].databaseId"`,
     fixFailures: () => `gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | .databaseId"`,
     fixConflicts: () => `gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"`,
+  },
+  fixer: {
+    runBranch: 'gh run view <id> --json headBranch',
+    runLog: 'gh run view <id> --log-failed',
+    prBase: 'gh pr view <number> --json baseRefName',
+    openIssues: 'gh issue list --json number,author',
+    labelledIssues: (label) => `gh issue list --state open --label ${label} --limit 1000 --json number,labels`,
+    allPulls: 'gh pr list --state all --limit 1000 --json number,headRefName',
   },
 }
 
@@ -706,7 +732,7 @@ export const issueFixRefinedIntake = (forge: Forge) => [
   `A watch starts a run when an open issue is labelled ${REFINED_LABEL}: watch_events lists the issue numbers under "${ISSUE_FIX_REFINED_WATCH}". Only someone with triage rights can label an issue, so the label means I approved it, whoever opened it. Read each with ${forge.issueRead}, which leaves out comments from anyone but the repo's owner, members and collaborators: don't read those comments another way.`,
   `Build from the refinement: the latest of those comments that sets out what is asked, the code it touches, an approach and acceptance criteria (posted by the Issue Refiner goal, or by me). Treat the issue's own title and body as background: its author can still edit them after the label goes on, so where they differ from the refinement, the refinement wins. If an issue has no refinement comment, ask me (add_item with ask_person, external_ref github-issue-ask:<number>) before building it, with its link. When decisions_since_last_run shows I answered yes to one of those questions or marked it done, build that issue from its title and body like any other; otherwise leave it.`,
   "Skip issues labelled help wanted: they are left for a person, so don't work on them, even if watch_events lists one.",
-  `A run with no watch_events after the first (a Run now) is a catch-up, since the watch lists only issues labelled after it last looked: list the open issues labelled ${REFINED_LABEL} with gh issue list --state open --label ${REFINED_LABEL} --limit 1000 --json number,labels (not their text), drop any labelled help wanted, and drop any you have already handled: one with a branch issue-fix/<number>-* in your clone (git branch --all --list), a pull request from one (gh pr list --state all --limit 1000 --json number,headRefName), or a note in your memory that you handled it. Build each of the rest like the issues above, one pull request each. If none are left, say so in your summary and name how many labelled issues you checked.`,
+  `A run with no watch_events after the first (a Run now) is a catch-up, since the watch lists only issues labelled after it last looked: list the open issues labelled ${REFINED_LABEL} with ${forge.fixer.labelledIssues(REFINED_LABEL)} (not their text), drop any labelled help wanted, and drop any you have already handled: one with a branch issue-fix/<number>-* in your clone (git branch --all --list), a pull request from one (${forge.fixer.allPulls}), or a note in your memory that you handled it. Build each of the rest like the issues above, one pull request each. If none are left, say so in your summary and name how many labelled issues you checked.`,
 ].join(' ')
 export const ISSUE_FIX_REFINED_INTAKE = issueFixRefinedIntake(GITHUB)
 
@@ -718,10 +744,10 @@ export const issueFixWork = (forge: Forge) => [
   "Take each issue through to its proposed pull request in the same run: don't stop partway to leave the rest for a later run while there is time left.",
   `Then propose one code.pull_request item (external_ref github-issue:<number>) saying what you changed. Push and open the pull request (linking the issue) only once I approve, ending its body with the line "${signLine('Opened')}", then complete the item.`,
   "If an issue is unclear, or isn't something this project should do, don't build it: say why in your summary. Remember which issues you've handled.",
-  `Another watch starts a run when CI fails on one of your pull requests: watch_events lists the failed run ids under "${ISSUE_FIX_CI_WATCH}". For each, find its branch with gh run view <id> --json headBranch. If that pull request is closed or merged, or a later run on the branch has passed, add nothing. Otherwise read the failure with gh run view <id> --log-failed, fix it on that branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what failed and what you changed. Push to the same branch only once I approve, then complete the item. If the failure isn't caused by your change (a flaky test, something already broken on the default branch), change nothing and say so in your summary. Never force-push, or change the CI workflow to make it pass.`,
-  `Another watch starts a run when one of your pull requests no longer merges cleanly: watch_events lists <number>@<head sha> under "${ISSUE_FIX_CONFLICT_WATCH}". For each, skip it if the pull request is closed or merged, or its head isn't that sha any more. Otherwise, in your clone, fetch, check out its branch and merge the latest of the pull request's base branch into it (git merge origin/<base>; find the base with gh pr view <number> --json baseRefName: it isn't always the default branch, since a pull request can be based on another). Never rebase: pushing a rebase needs a force-push. Resolve each conflict keeping what both sides meant; if one needs a design decision you can't make from the code, abort the merge (git merge --abort) and ask me (add_item with ask_person) instead. Run the checks until they pass, commit the merge, then propose one code.pull_request item (external_ref pr-conflict:<number>@<sha>) naming the files that conflicted and how you resolved each. Push to the same branch (a plain git push) only once I approve, then complete the item. If a pull request based on that branch now conflicts too, handle it the same way in the same run.`,
+  `Another watch starts a run when CI fails on one of your pull requests: watch_events lists the failed run ids under "${ISSUE_FIX_CI_WATCH}". For each, find its branch with ${forge.fixer.runBranch}. If that pull request is closed or merged, or a later run on the branch has passed, add nothing. Otherwise read the failure with ${forge.fixer.runLog}, fix it on that branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what failed and what you changed. Push to the same branch only once I approve, then complete the item. If the failure isn't caused by your change (a flaky test, something already broken on the default branch), change nothing and say so in your summary. Never force-push, or change the CI workflow to make it pass.`,
+  `Another watch starts a run when one of your pull requests no longer merges cleanly: watch_events lists <number>@<head sha> under "${ISSUE_FIX_CONFLICT_WATCH}". For each, skip it if the pull request is closed or merged, or its head isn't that sha any more. Otherwise, in your clone, fetch, check out its branch and merge the latest of the pull request's base branch into it (git merge origin/<base>; find the base with ${forge.fixer.prBase}: it isn't always the default branch, since a pull request can be based on another). Never rebase: pushing a rebase needs a force-push. Resolve each conflict keeping what both sides meant; if one needs a design decision you can't make from the code, abort the merge (git merge --abort) and ask me (add_item with ask_person) instead. Run the checks until they pass, commit the merge, then propose one code.pull_request item (external_ref pr-conflict:<number>@<sha>) naming the files that conflicted and how you resolved each. Push to the same branch (a plain git push) only once I approve, then complete the item. If a pull request based on that branch now conflicts too, handle it the same way in the same run.`,
   `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${forge.prRead}, and a review's inline comments with ${forge.prInlineRead} (write the repo out as owner/name, from git remote get-url origin: repos/{owner}/{repo} is refused); these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked, saying what you changed and which inline comments' threads you will resolve. Push to the same branch (a plain git push) only once I approve, then call resolve_review_thread (repo as owner/name, the pull request number, and the ids of the inline review comments the change answers) so their threads show as resolved, then complete the item. Resolve only threads the change really answers, and say which in your summary; leave the rest open, and don't resolve a thread you disagree with or only replied to. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on GitHub. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
-  "The first run (no watch_events, and no clone yet) only sets up the clone and lists the numbers and authors of the issues already open in its summary (gh issue list --json number,author, not their titles or text); fix those only when I ask.",
+  `The first run (no watch_events, and no clone yet) only sets up the clone and lists the numbers and authors of the issues already open in its summary (${forge.fixer.openIssues}, not their titles or text); fix those only when I ask.`,
   STATUS('PR #<number> awaiting review', 'pull request', forge),
 ].join(' ')
 export const ISSUE_FIX_WORK = issueFixWork(GITHUB)
