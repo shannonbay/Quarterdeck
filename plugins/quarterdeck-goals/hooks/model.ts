@@ -125,14 +125,23 @@ export function permissionWhere(mine: boolean, standing: boolean): string {
  * there is no suggestion. The pane draws such a goal as one line until it is expanded.
  */
 export function isQuiet(g: GoalCard): boolean {
+  return !needsAttention(g) && !g.openRun
+}
+
+/**
+ * Something here may need the person: something waits for them, the last run
+ * failed, the health check or a watch is failing, or there is a suggestion.
+ * The reasons isQuiet checks, less a run in progress: the pane lists these
+ * goals first, and a run starting or ending mustn't move a goal (or its number).
+ */
+export function needsAttention(g: GoalCard): boolean {
   const run = lastRun(g)
-  return g.needsYou.length === 0
-    && g.needsYouCount === 0
-    && !g.openRun
-    && !(run && isFailed(run.status))
-    && !(g.health && !g.health.passed)
-    && !g.watchFailing
-    && g.suggestions.length === 0
+  return g.needsYou.length > 0
+    || g.needsYouCount > 0
+    || !!(run && isFailed(run.status))
+    || !!(g.health && !g.health.passed)
+    || g.watchFailing
+    || g.suggestions.length > 0
 }
 
 /** The frames of the spinner a goal's title shows while its run is working (Claude Code's own kind). */
