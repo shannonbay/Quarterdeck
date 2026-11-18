@@ -73,16 +73,21 @@ function globRegExp(pattern: string, flags = ''): RegExp {
 const COMMAND_RULE = /^(\w+)\(([\s\S]+)\)$/
 /** A leading variable assignment (`GIT_SSH=x git push`). */
 const ENV_PREFIX = /^(\w+=("[^"]*"|'[^']*'|\S*)\s+)+/
+/** A whole word in one pair of matching quotes, with no whitespace or quote inside. */
+const QUOTED_WORD = /(^|\s)(["'])([^\s"']+)\2(?=\s|$)/g
 
 /**
  * A shell command's simple commands, each as it starts: split at `&&`, `||`,
  * `;`, `|`, `&`, new lines, `$(`, `(` and backticks, without leading variable
- * assignments. Rough on purpose: a rule matching a part that isn't really a
+ * assignments. A word wholly wrapped in one pair of matching quotes, with no
+ * whitespace or quote inside (`"needs-refinement"`, `'bug'`), is unwrapped,
+ * since the shell runs it the same as the bare word; any other quoting is
+ * left as written. Rough on purpose: a rule matching a part that isn't really a
  * command only refuses a call, which is the safe way to be wrong.
  */
 export function commandParts(command: string): string[] {
   return command.split(/&&|\|\||\$\(|[;|&\n`(){}]/)
-    .map((s) => s.trim().replace(ENV_PREFIX, '').trim())
+    .map((s) => s.trim().replace(ENV_PREFIX, '').trim().replace(QUOTED_WORD, '$1$3'))
     .filter(Boolean)
 }
 

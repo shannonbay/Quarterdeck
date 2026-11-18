@@ -7,7 +7,7 @@ import {
   parseCron, cronNext, getSchedule, setSchedule, nextScheduledRun, decideTick,
   enableEventTrigger, disableEventTrigger, verifyEventSecret,
   runHealthCheck, listHealth, healthDue, parseHealthValue, buildBrief,
-  matchToolCategory, guardToolCallForRun, listToolCalls, standingAllowRules, usableAsAllowRule, readsUntrusted, getRun,
+  matchToolCategory, commandParts, guardToolCallForRun, listToolCalls, standingAllowRules, usableAsAllowRule, readsUntrusted, getRun,
   insertMemory, updateMemory, markRunUntrusted, updateRun, MEMORY_BRIEF_CHARS,
   touchesQuarterdeckData, quarterdeckDataPaths, QUARTERDECK_DATA_CATEGORY,
 } from './index.js'
@@ -224,6 +224,23 @@ describe('goal guard', () => {
     expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/{owner}/{repo}/pulls/3/reviews --method POST --input r.json' })).toBe('github.write')
     expect(matchToolCategory(map, 'Bash', { command: 'gh api repos/octo/app/pulls/3/merge -X PUT' })).toBe('github.write')
     expect(matchToolCategory(map, 'Bash', { command: 'gh pr review 3 --approve' })).toBe('github.write')
+  })
+
+  it('matches a wholly quoted word as if unquoted, and leaves any other quoting as written (#94)', () => {
+    expect(commandParts(`gh issue edit 92 --add-label "needs-refinement"`)).toEqual(['gh issue edit 92 --add-label needs-refinement'])
+    expect(commandParts(`git commit -m 'fix' && echo "a b" 'c'`)).toEqual(['git commit -m fix', 'echo "a b" c'])
+    for (const c of [`echo "a b"`, `echo "a'b"`, `echo x"y"`, `echo "y"x`, `echo "y'`, `echo ""`]) expect(commandParts(c)).toEqual([c])
+    // the Issue Triage rules (triageRules in the goals plugin)
+    const map = triageRules() as Record<string, string>
+    for (const c of [
+      'gh issue edit 92 --add-label needs-refinement', `gh issue edit 92 --add-label "needs-refinement"`,
+      `gh issue edit 92 --add-label 'needs-refinement'`, `gh issue edit 92 93 --add-label "needs-refinement"`,
+    ]) expect([c, matchToolCategory(map, 'Bash', { command: c })]).toEqual([c, 'github.schedule'])
+    for (const c of [
+      `gh issue edit 92 --add-label "needs-refinement,bug"`, `gh issue edit 92 --add-label "bug"`,
+      `gh issue edit 92 --body "x" --add-label "needs-refinement"`, `gh issue edit 92 --add-label "needs-refinement --body x"`,
+      `gh issue edit 92 --add-label "needs-refinement"x`, `gh issue edit 92 --add-label "needs-refinement'`,
+    ]) expect([c, matchToolCategory(map, 'Bash', { command: c })]).toEqual([c, 'github.label'])
   })
 
   it("holds the issue refiner's comments and labels until approved, reads labels, and refuses every other GitHub write (refineRules in the goals plugin)", () => {
