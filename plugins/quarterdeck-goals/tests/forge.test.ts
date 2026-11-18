@@ -1,13 +1,36 @@
 import { expect, test } from 'claude-code/testing'
 
-import { GITHUB, STATUS, refineRules, reviewRules, triageRules, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, REFINED_LABEL, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+
+test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
+  expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
+  expect(GITHUB.watches.issues(false)).toBe(issueWatch(false))
+  expect(GITHUB.watches.refined()).toBe(refinedWatch())
+  expect(GITHUB.watches.triage()).toBe(triageWatch())
+  expect(GITHUB.watches.needsRefinement()).toBe(needsRefinementWatch())
+  expect(GITHUB.watches.clarifyReplies()).toBe(clarifyReplyWatch())
+  expect(GITHUB.watches.prComments()).toBe(prCommentWatch())
+  expect(GITHUB.watches.branchFailures('main')).toBe('gh run list --branch main --status failure --limit 20 --json databaseId --jq ".[].databaseId"')
+  const fixer = TEMPLATES.find((t) => t.name === 'Issue Fixer')!
+  const commands = Object.values(fixer.watches!('anything')).map((w) => w.command)
+  expect(commands).toContain(GITHUB.watches.fixFailures())
+  expect(commands).toContain(GITHUB.watches.fixConflicts())
+  expect(GITHUB.watches.fixFailures()).toContain('gh run list --event pull_request --status failure')
+  expect(GITHUB.watches.fixConflicts()).toContain('CONFLICTING')
+})
+
+test('the refiner watches issues through its forge (#44)', async () => {
+  const other: Forge = { ...GITHUB, watches: { ...GITHUB.watches, issues: (trusted, without = []) => `glab issue list ${trusted} ${without.join(',')}` } }
+  expect(refineWatch(true, other)).toMatch(/^glab issue list true /)
+  expect(refineWatch(true)).toBe(issueWatch(true, [REFINED_LABEL, CLARIFY_LABEL, 'help wanted']))
+})
 
 test('the repo templates take their write rules from a forge, GitHub by default (#44)', async () => {
   for (const rules of [reviewRules, refineRules, triageRules]) expect(rules(GITHUB)).toEqual(rules())
 })
 
 test('another forge brings its own CLI, writes and category, and none of GitHub\'s', async () => {
-  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments' }
+  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches }
   expect(reviewRules(other)['Bash(glab mr merge*)']).toBe('forge.write')
   expect(reviewRules(other)['PowerShell(glab label*)']).toBe('forge.write')
   // The refiner names label writes one by one, so the blanket rule is left out
@@ -19,7 +42,7 @@ test('another forge brings its own CLI, writes and category, and none of GitHub\
 test('a fixer status names its forge\'s pull request check, github_pr by default (#44)', async () => {
   expect(STATUS('PR #<number> awaiting review', 'pull request')).toBe(STATUS('PR #<number> awaiting review', 'pull request', GITHUB))
   expect(STATUS('open', 'pull request')).toContain('kind github_pr,')
-  const other: Forge = { cli: 'glab', writes: [], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments' }
+  const other: Forge = { cli: 'glab', writes: [], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches }
   const status = STATUS('open', 'merge request', other)
   expect(status).toContain('kind gitlab_mr,')
   expect(status).not.toContain('github_pr')
