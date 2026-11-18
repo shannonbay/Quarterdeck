@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -129,6 +129,17 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
     expect(gh[`Bash(${k})`]).toBeDefined()
   }
   expect(triageRules()['Bash(gh issue list*)']).toBe('untrusted')
+})
+
+test("the PR reviewer text names the forge's commands, GitHub's by default (#44)", async () => {
+  expect(prReview()).toBe(PR_REVIEW)
+  const other: Forge = { ...GITHUB, issueRead: 'X-ISSUE-READ', reviewer: {
+    closingIssues: 'X-CLOSING', headBranch: 'X-HEAD', body: 'X-BODY', checkout: 'X-CHECKOUT', postReview: 'X-POST', openPulls: 'X-OPEN-PULLS',
+  } }
+  const text = prReview(other)
+  for (const s of ['X-ISSUE-READ', 'X-CLOSING', 'X-HEAD', 'X-BODY', 'X-CHECKOUT', 'X-POST', 'X-OPEN-PULLS']) expect(text).toContain(s)
+  // Only the "(gh repo is refused)" note still names gh; it goes with the GitHub wording.
+  expect(text.replace('(gh repo is refused)', '')).not.toMatch(/\bgh (pr|api|issue) /)
 })
 
 test("the triage text names the forge's commands, GitHub's by default (#44)", async () => {
