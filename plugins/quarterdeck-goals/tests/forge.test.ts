@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -107,7 +107,7 @@ test('the GitHub forge carries the read commands, unchanged and trusting only th
 test("the refiner's and triage's tool rules name the forge's commands, not gh's (#44)", async () => {
   const other: Forge = { ...GITHUB, cli: 'xx', writes: ['issue comment', 'issue edit', 'label', 'api'], write: 'xx.write', rules: {
     prCreate: 'xx mr create', prMerge: 'xx mr merge', issueView: 'xx issue view', issueList: 'xx issue list',
-    issueComment: 'xx issue note', issueEdit: 'xx issue update', labelCreate: 'xx label new', labelWrites: ['xx label rm'],
+    issueComment: 'xx issue note', issueEdit: 'xx issue update', labelCreate: 'xx label new', labelWrites: ['xx label rm'], addLabel: '--label',
   } }
   const refine = refineRules(other)
   expect(Object.keys(refine).filter((k) => k.includes('gh '))).toEqual([])
@@ -118,9 +118,10 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
   expect(refine['Bash(xx mr merge*)']).toBe('github.write')
   expect(refine['Bash(xx issue view*)']).toBe('untrusted')
   const triage = triageRules(other)
-  // Only the needs-refinement schedule rules are still written for gh; they move with the triage text.
-  expect(Object.keys(triage).filter((k) => k.includes('gh ') && !k.includes(NEEDS_REFINEMENT_LABEL))).toEqual([])
+  expect(Object.keys(triage).filter((k) => k.includes('gh '))).toEqual([])
   expect(triage['Bash(xx issue update*)']).toBe('github.label')
+  expect(triage['Bash(xx issue update * --label needs-refinement)']).toBe('github.schedule')
+  expect(triage['PowerShell(xx issue update *-* --label needs-refinement)']).toBe('github.label')
   expect(triage['Bash(xx issue list*)']).toBe('untrusted')
   expect(reviewRules(other)['Bash(xx mr create*)']).toBe('github.write')
   // GitHub's rules keep their gh commands.
@@ -150,6 +151,18 @@ test("the triage text names the forge's commands, GitHub's by default (#44)", as
   } }
   const text = issueTriage(other)
   for (const s of ['X-READ', 'X-LABELS', 'X-LABEL-CREATE', 'X-DUPLICATES', 'X-ADD <<label>,<label>,triaged>', 'X-UNTRIAGED']) expect(text).toContain(s)
-  // Only the needs-refinement schedule command is still gh's; it moves with the schedule rules.
+  // The needs-refinement command still comes from the forge's rules, which this forge keeps as GitHub's.
   expect(text.replace(/gh issue edit[^,]*needs-refinement[^)]*\)?/g, '').replace('any other gh issue edit', '')).not.toMatch(/gh (issue|label) /)
+})
+
+test("the needs-refinement command is built from the forge's issue edit and add-label flag (#44)", async () => {
+  expect(SCHEDULE_COMMAND).toBe('gh issue edit * --add-label needs-refinement')
+  expect(SCHEDULE_WITH_FLAGS).toBe('gh issue edit *-* --add-label needs-refinement')
+  expect(scheduleCommand()).toBe(SCHEDULE_COMMAND)
+  const other: Forge = { ...GITHUB, rules: { ...GITHUB.rules, issueEdit: 'xx issue update', addLabel: '--label' } }
+  expect(scheduleCommand(other)).toBe('xx issue update * --label needs-refinement')
+  expect(scheduleWithFlags(other)).toBe('xx issue update *-* --label needs-refinement')
+  const text = issueTriage(other)
+  expect(text).toContain('with xx issue update <numbers> --label needs-refinement and nothing else in the command (any other xx issue update needs its own proposal)')
+  expect(text).not.toContain('gh issue edit <numbers>')
 })
