@@ -845,7 +845,7 @@ export const STATUS = (open: string, pr: string, forge: Forge = GITHUB) =>
 /** The CI fixer's standing instructions on a forge, after which branch. */
 export const ciFix = (forge: Forge) => [
   'A watch starts a run when a CI run on that branch fails: watch_events lists the new failed run ids.',
-  'For each, read the failure with gh run view <id> --log-failed. If a later run on the branch has already passed, it is fixed: say so and add nothing.',
+  `For each, read the failure with ${forge.fixer.runLog}. If a later run on the branch has already passed, it is fixed: say so and add nothing.`,
   OWN_CLONE('ci-fix', forge),
   'Otherwise fix it on a new branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what broke and how you fixed it. Push and open the pull request only once I approve, then complete that item and propose merging it as a separate code.merge item; merge only once I approve that too.',
   "The first run (no watch_events) only sets up the clone and checks the newest run on the branch; if it failed, handle it as above.",
