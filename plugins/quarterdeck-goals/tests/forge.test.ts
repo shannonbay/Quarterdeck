@@ -80,7 +80,7 @@ test('the repo templates take their write rules from a forge, GitHub by default 
 })
 
 test('another forge brings its own CLI, writes and category, and none of GitHub\'s', async () => {
-  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches }
+  const other: Forge = { cli: 'glab', writes: ['mr merge', 'label'], write: 'forge.write', prCheck: 'gitlab_mr', issueRead: 'glab issue view <number>', prRead: 'glab mr view <number>', prInlineRead: 'glab mr view <number> --comments', watches: GITHUB.watches, fixer: GITHUB.fixer, refiner: GITHUB.refiner, rules: GITHUB.rules }
   expect(reviewRules(other)['Bash(glab mr merge*)']).toBe('forge.write')
   expect(reviewRules(other)['PowerShell(glab label*)']).toBe('forge.write')
   // The refiner names label writes one by one, so the blanket rule is left out
@@ -102,4 +102,31 @@ test('the GitHub forge carries the read commands, unchanged and trusting only th
   expect(GITHUB.issueRead).toBe(`gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {author: .author.login, body}]}'`)
   expect(GITHUB.prRead).toBe(`gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, author: .author.login, state, body}]}'`)
   expect(GITHUB.prInlineRead).toBe(`gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, path, line, author: .user.login, body}]'`)
+})
+
+test("the refiner's and triage's tool rules name the forge's commands, not gh's (#44)", async () => {
+  const other: Forge = { ...GITHUB, cli: 'xx', writes: ['issue comment', 'issue edit', 'label', 'api'], write: 'xx.write', rules: {
+    prCreate: 'xx mr create', prMerge: 'xx mr merge', issueView: 'xx issue view', issueList: 'xx issue list',
+    issueComment: 'xx issue note', issueEdit: 'xx issue update', labelCreate: 'xx label new', labelWrites: ['xx label rm'],
+  } }
+  const refine = refineRules(other)
+  expect(Object.keys(refine).filter((k) => k.includes('gh '))).toEqual([])
+  expect(refine['Bash(xx issue note*)']).toBe('github.issue')
+  expect(refine['PowerShell(xx issue update*)']).toBe('github.issue')
+  expect(refine['Bash(xx label new*)']).toBe('github.issue')
+  expect(refine['Bash(xx label rm*)']).toBe('xx.write')
+  expect(refine['Bash(xx mr merge*)']).toBe('github.write')
+  expect(refine['Bash(xx issue view*)']).toBe('untrusted')
+  const triage = triageRules(other)
+  // Only the needs-refinement schedule rules are still written for gh; they move with the triage text.
+  expect(Object.keys(triage).filter((k) => k.includes('gh ') && !k.includes(NEEDS_REFINEMENT_LABEL))).toEqual([])
+  expect(triage['Bash(xx issue update*)']).toBe('github.label')
+  expect(triage['Bash(xx issue list*)']).toBe('untrusted')
+  expect(reviewRules(other)['Bash(xx mr create*)']).toBe('github.write')
+  // GitHub's rules keep their gh commands.
+  const gh = refineRules()
+  for (const k of ['gh issue comment*', 'gh issue edit*', 'gh label create*', 'gh label delete*', 'gh label edit*', 'gh label clone*', 'gh pr create*', 'gh pr merge*', 'gh issue view*']) {
+    expect(gh[`Bash(${k})`]).toBeDefined()
+  }
+  expect(triageRules()['Bash(gh issue list*)']).toBe('untrusted')
 })
