@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, REFINED_LABEL, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -17,6 +17,22 @@ test('the repo templates take their watch commands from the GitHub forge, unchan
   expect(commands).toContain(GITHUB.watches.fixConflicts())
   expect(GITHUB.watches.fixFailures()).toContain('gh run list --event pull_request --status failure')
   expect(GITHUB.watches.fixConflicts()).toContain('CONFLICTING')
+})
+
+test("the issue fixer's instructions read issues and pull requests through its forge (#44)", async () => {
+  const other: Forge = { ...GITHUB, issueRead: 'OTHER-ISSUE-READ', prRead: 'OTHER-PR-READ', prInlineRead: 'OTHER-INLINE-READ', prCheck: 'other_pr' }
+  for (const text of [issueFixIntake(other), issueFixRefinedIntake(other)]) {
+    expect(text).toContain('Read each with OTHER-ISSUE-READ,')
+    expect(text).not.toContain(GITHUB.issueRead)
+  }
+  const work = issueFixWork(other)
+  expect(work).toContain("read its feedback with OTHER-PR-READ, and a review's inline comments with OTHER-INLINE-READ ")
+  expect(work).toContain('status_check (kind other_pr,')
+  for (const github of [GITHUB.prRead, GITHUB.prInlineRead, 'kind github_pr']) expect(work).not.toContain(github)
+  // The GitHub goal keeps the gh commands it had.
+  expect(ISSUE_FIX_REFINED_INTAKE).toContain('Read each with gh issue view <number> --json title,body,comments --jq ')
+  expect(ISSUE_FIX_WORK).toContain('read its feedback with gh pr view <number> --json comments,reviews --jq ')
+  expect(ISSUE_FIX_WORK).toContain('status_check (kind github_pr,')
 })
 
 test('the refiner watches issues through its forge (#44)', async () => {
