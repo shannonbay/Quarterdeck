@@ -463,6 +463,13 @@ describe('the overview and deleting', () => {
     expect(card).toMatchObject({ watch_count: 1, watch_failing: true, watches: [] })
   })
 
+  it('shows a note on a watch that is not failing', () => {
+    const w = setWatch(db, 'g1', 'x', { tool: 'mcp__claude_ai_Gmail__search_threads', input: { query: 'a' } })
+    reportToolWatch(db, w.id, { text: 'Anna: hi', note: 'finally tabs_close failed: no such tab' } as never)
+    const [full] = buildOverview(db, 'all').goals
+    expect(full!.watches[0]).toMatchObject({ failing: false, error: 'finally tabs_close failed: no such tab' })
+  })
+
   it('deleting a goal deletes its watches and their events', () => {
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
     recordWatchLines(db, w.id, { lines: [] })

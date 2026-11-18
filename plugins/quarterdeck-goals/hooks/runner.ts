@@ -221,7 +221,7 @@ export const WATCH_FINALLY_MS = 10_000
 export function substitute(input: unknown, values: Record<string, string>): unknown {
   if (typeof input === 'string') {
     const only = /^\{\{\s*([^}]*?)\s*\}\}$/.exec(input)
-    if (only && only[1] in values && /^-?\d+(\.\d+)?$/.test(values[only[1]])) return Number(values[only[1]])
+    if (only && only[1] in values && /^-?\d+(\.\d+)?$/.test(values[only[1]]) && String(Number(values[only[1]])) === values[only[1]]) return Number(values[only[1]])
     return input.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_m, name: string) => {
       if (!(name in values)) throw new Error(`{{${name}}} was never picked`)
       return values[name]

@@ -251,6 +251,26 @@ test('a steps watch passes a picked value to the next call, reads the last answe
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi' }])
 })
 
+test('a steps watch keeps a picked number that would change as a string', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const calls: Record<string, unknown>[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'id 1234567890123456789 or 00123' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, (_, e) => { calls.push(e as never); return { result: 'Anna: hi' } as never })
+  fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: {}, pick: { big: { regex: 'id ([0-9]+)' }, padded: { regex: 'or ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { big: '{{big}}', padded: '{{padded}}' } },
+      ],
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(calls.map((c) => [c.big, c.padded])).toEqual([['1234567890123456789', '00123']])
+})
+
 test('a steps watch whose pick finds nothing reports an error naming the step, and still runs finally', async ($, on) => {
   const { clock } = engine(on)
   settle = () => clock.settle()
