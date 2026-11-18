@@ -70,9 +70,7 @@ export async function decide_item(args: unknown) {
   if (r.watch) {
     const checks = (await firstChecks(input.goal_id)).filter((c) => c.name === r.watch!.name)
     const first = checks[0] ? `First check: ${checks[0].result}` : null
-    if (first) updateTask(input.goal_id, input.item_id, { notes: [r.task.notes, first].filter(Boolean).join('
-
-') })
+    if (first) updateTask(input.goal_id, input.item_id, { notes: [r.task.notes, first].filter(Boolean).join('\n\n') })
   }
   touchPlan(input.goal_id)
   return {
