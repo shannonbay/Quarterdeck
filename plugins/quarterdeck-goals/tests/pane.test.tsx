@@ -734,27 +734,60 @@ test('a goal with nothing for you is one line; one that needs you keeps its card
     const ui = await $.ui.mount({ ...PANE, surface })
     // Quiet: the name, what its last run used and when it runs next, and nothing else
     expect((await ui.find({ key: 'toggle-g1' }))?.props.label).toBe('▸ Inbox')
-    expect((await ui.find({ key: 'toggle-g1' }))?.props.hotkey).toBe('1')
+    // after the two cards that need you
+    expect((await ui.find({ key: 'toggle-g1' }))?.props.hotkey).toBe('3')
     expect(await ui.find({ type: 'Text', text: /^ · 48k tokens · next in 25m$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^ · ran 58m ago · next in 25m$/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /^Last run: Checked/ })).toBeUndefined()
     expect(await ui.find({ key: 'pause-g1' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /^ · paused · no runs yet$/ })).toBeDefined()
     expect(await ui.find({ key: 'resume-g3' })).toBeUndefined()
-    // A failed run or a failing health check keeps the card, in the same place in the list
-    expect((await ui.find({ key: 'toggle-g2' }))?.props.hotkey).toBe('2')
+    // A failed run or a failing health check keeps the card, listed first with the first numbers
+    expect((await ui.find({ key: 'toggle-g2' }))?.props.hotkey).toBe('1')
+    expect((await ui.find({ key: 'toggle-g4' }))?.props.hotkey).toBe('2')
+    expect((await ui.find({ key: 'toggle-g3' }))?.props.hotkey).toBe('4')
+    expect((await ui.find({ key: 'toggle-g5' }))?.props.hotkey).toBe('5')
     expect(await ui.find({ key: 'discuss-g2' })).toBeDefined()
     expect((await ui.find({ key: 'run-g2' }))?.props.hotkey).toBe('n')
     expect(await ui.find({ key: 'pause-g4' })).toBeDefined()
 
-    // Expanded, a quiet goal is the full card
+    // Expanded, a quiet goal is the full card, still in the one-line group: n stays on the first card
     await ui.press({ key: 'toggle-g1' })
     expect(await ui.find({ type: 'Text', text: /^Last run: Checked/ })).toBeDefined()
-    expect((await ui.find({ key: 'run-g1' }))?.props.hotkey).toBe('n')
+    expect((await ui.find({ key: 'toggle-g1' }))?.props.hotkey).toBe('3')
+    expect((await ui.find({ key: 'run-g1' }))?.props.hotkey).toBeUndefined()
+    expect((await ui.find({ key: 'run-g2' }))?.props.hotkey).toBe('n')
     expect(await ui.find({ key: 'pause-g1' })).toBeDefined()
     await ui.press({ key: 'toggle-g1' }) // collapse again for the next surface
     await ui.unmount()
   }
+})
+
+test('goals that need you list first and take the first numbers; a run in progress moves nothing', async ($, on) => {
+  engine(on)
+  const failed = [{ id: 'r-f', status: 'failed', trigger: 'schedule', summary: 'Broke', started_at: '2026-11-07T07:00:00Z', ended_at: '2026-11-07T07:02:00Z' }]
+  fakeQuarterdeck(on, [
+    goal({ id: 'a', name: 'A' }),
+    goal({ id: 'b', name: 'B', needs_you: [proposal('11', 'Reply to Alice')] }),
+    goal({ id: 'c', name: 'C', open_run: { id: 'r1', status: 'running' } }),
+    goal({ id: 'd', name: 'D', runs: failed, needs_you: [proposal('12', 'Send invoice')] }),
+    goal({ id: 'e', name: 'E', status: 'retired' }),
+  ])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // B and D first, then A and C (C's run draws a card but keeps its alphabetical place)
+  expect((await ui.find({ key: 'toggle-b' }))?.props.hotkey).toBe('1')
+  expect((await ui.find({ key: 'toggle-d' }))?.props.hotkey).toBe('2')
+  expect((await ui.find({ key: 'toggle-a' }))?.props.hotkey).toBe('3')
+  expect((await ui.find({ key: 'toggle-c' }))?.props.hotkey).toBe('4')
+  expect(await ui.find({ key: 'cancel-run-c' })).toBeDefined()
+  // a / r act on the first proposal in display order
+  expect((await ui.find({ key: 'approve-b/11' }))?.props.hotkey).toBe('a')
+  expect((await ui.find({ key: 'approve-d/12' }))?.props.hotkey).toBeUndefined()
+  // The retired one-off still lists in its own section, not among the numbered goals
+  expect(await ui.find({ key: 'toggle-e' })).toBeUndefined()
+  expect((await ui.find({ key: 'done-toggle' }))?.props.label).toBe('▸ Done (1)')
+  await ui.unmount()
 })
 
 test("Add… beside an allow rule opens /permissions, or says what to type when there's none", async ($, on) => {

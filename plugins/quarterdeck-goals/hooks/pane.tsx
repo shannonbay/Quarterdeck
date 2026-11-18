@@ -4,6 +4,12 @@
  * items, recent runs and memory. A goal with nothing for the person (isQuiet)
  * is one line until it is expanded.
  *
+ * Goals that may need the person (needsAttention: something waiting, a failed
+ * run, a failing check or watch, a suggestion) come first, then the rest, each
+ * group alphabetical; numbers and hotkeys follow that order. A run in progress
+ * draws a card but doesn't move the goal, so numbers don't shift as runs come
+ * and go. Done one-offs list at the bottom.
+ *
  * Hotkeys while the pane has focus: a / r approve or reject the first
  * proposal, n runs the first goal that shows Run now, g refreshes, 1–9 expand
  * a goal.
@@ -14,7 +20,7 @@ import type { Confirm, GoalCard, TodoItem, Todos, Update } from '../types'
 import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, reject, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
-import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
+import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
 import { connectRemote, markActive } from './alerts'
 import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
@@ -169,8 +175,11 @@ export async function renderPane($: Engine, e: E) {
     )
   }
 
-  // Done one-offs (retired) go in their own section at the bottom
-  const current = s.goals.filter((g) => g.status !== 'retired')
+  // Goals that may need the person first, then the rest, each group in the server's
+  // (alphabetical) order, so the first hotkeys go to them; every index below follows
+  // this order. Done one-offs (retired) go in their own section at the bottom
+  const active = s.goals.filter((g) => g.status !== 'retired')
+  const current = [...active.filter(needsAttention), ...active.filter((g) => !needsAttention(g))]
   const done = s.goals.filter((g) => g.status === 'retired')
   const firstWithProposal = current.find((g) => g.needsYou.length > 0)
   const shown = await getExpanded($)

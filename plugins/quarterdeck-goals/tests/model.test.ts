@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
@@ -199,6 +199,18 @@ test('a goal whose watch cannot check is not quiet, and an older server without 
   expect(isQuiet(card({ id: 'g1', name: 'Issues', watches: [watch(false)] }))).toBe(true)
   expect(isQuiet(card({ id: 'g1', name: 'Issues', watches: [watch(true)] }))).toBe(false)
   expect(card({ id: 'g1', name: 'Issues' })).toMatchObject({ watches: [], watchCount: 0, watchFailing: false })
+})
+
+test('needsAttention: what isQuiet checks, less a run in progress', () => {
+  const failed = [{ id: 'r1', status: 'failed', trigger: 'schedule', summary: '', started_at: '2026-11-07T07:00:00Z', ended_at: '2026-11-07T07:02:00Z' }]
+  expect(needsAttention(card({ id: 'g1', name: 'Quiet' }))).toBe(false)
+  expect(needsAttention(card({ id: 'g1', name: 'Waiting', needs_you: [proposal('11', 'Reply')] }))).toBe(true)
+  expect(needsAttention(card({ id: 'g1', name: 'Failed', runs: failed }))).toBe(true)
+  expect(needsAttention(card({ id: 'g1', name: 'Health', health: [{ passed: false, value: 7 }] }))).toBe(true)
+  // A run in progress draws a card but isn't a reason to move the goal up
+  const running = card({ id: 'g1', name: 'Running', open_run: { id: 'r1', status: 'running' } })
+  expect(isQuiet(running)).toBe(false)
+  expect(needsAttention(running)).toBe(false)
 })
 
 test("allowRules lists a Claude Code allow rule for each of a goal's auto tool rules, and what can't be one", async () => {
