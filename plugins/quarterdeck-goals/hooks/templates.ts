@@ -62,19 +62,48 @@ function shell(rules: Record<string, string>): Record<string, string> {
 }
 
 /**
+ * What is host-specific about a repo goal's tool rules (#44): the CLI, the
+ * subcommands that write to the host (off unless a rule maps them to a
+ * proposal), and the category those writes fall to. The templates take one, so
+ * another host (GitLab through glab) is another object, not another template.
+ */
+export type Forge = {
+  /** The host's CLI as commands start with it, e.g. `gh`. */
+  cli: string
+  /** Its subcommands that write to the host or reach its token. */
+  writes: string[]
+  /** The category those writes fall to (off in every repo template). */
+  write: string
+}
+
+/** GitHub through gh: what the repo templates were written for. */
+export const GITHUB: Forge = {
+  cli: 'gh',
+  writes: ['pr comment', 'pr close', 'pr edit', 'pr review', 'pr reopen', 'pr ready',
+    'issue comment', 'issue close', 'issue create', 'issue delete', 'issue edit', 'issue lock', 'issue reopen', 'issue transfer', 'issue pin', 'issue develop',
+    'api', 'auth', 'repo', 'release', 'secret', 'variable', 'workflow', 'gist', 'ssh-key', 'gpg-key', 'label'],
+  write: 'github.write',
+}
+
+/** A forge's write subcommands, less `except`, as rules sending each to its write category. */
+function writeRules(forge: Forge, except: string[] = []): Record<string, string> {
+  return Object.fromEntries(forge.writes.filter((w) => !except.includes(w)).map((w) => [`${forge.cli} ${w}*`, forge.write]))
+}
+
+/**
  * The GitHub fixers' command rules, so the guard (not only the instructions)
  * holds a push or a pull request until its proposal is approved: pushing and
  * opening one is `code.pull_request`; merging is `merge`; anything else that
  * writes to GitHub, gh api, and reading gh's token is off. Reading an issue
  * marks the run untrusted. Name matching only (a script gets past it).
  */
-function githubRules(merge: string): Record<string, string> {
+function githubRules(merge: string, forge: Forge = GITHUB): Record<string, string> {
   return shell({
     'git push*': 'code.pull_request',
     'git -C * push*': 'code.pull_request',
     'gh pr create*': 'code.pull_request',
     'gh pr merge*': merge,
-    ...Object.fromEntries(GITHUB_WRITES.map((w) => [`gh ${w}*`, 'github.write'])),
+    ...writeRules(forge),
     'gh issue view*': 'untrusted',
     ...inlineReadRules(),
   })
@@ -107,11 +136,6 @@ function inlineReadRules(): Record<string, string> {
  */
 export const RESOLVE_THREAD_TOOL = 'mcp__quarterdeck__resolve_review_thread'
 
-/** gh subcommands that write to GitHub (or reach its token), off for the GitHub templates. */
-const GITHUB_WRITES = ['pr comment', 'pr close', 'pr edit', 'pr review', 'pr reopen', 'pr ready',
-  'issue comment', 'issue close', 'issue create', 'issue delete', 'issue edit', 'issue lock', 'issue reopen', 'issue transfer', 'issue pin', 'issue develop',
-  'api', 'auth', 'repo', 'release', 'secret', 'variable', 'workflow', 'gist', 'ssh-key', 'gpg-key', 'label']
-
 /**
  * The PR reviewer's command rules: posting a review through the reviews
  * endpoint is `github.review` (longer than `gh api*`, so it wins); pushing,
@@ -120,9 +144,9 @@ const GITHUB_WRITES = ['pr comment', 'pr close', 'pr edit', 'pr review', 'pr reo
  * untrusted. commandParts splits at `{` and `}`, so the run must write the repo
  * out (repos/<owner>/<name>/...): `repos/{owner}/{repo}` would fall to `gh api*`.
  */
-export function reviewRules(): Record<string, string> {
+export function reviewRules(forge: Forge = GITHUB): Record<string, string> {
   return shell({
-    ...Object.fromEntries(GITHUB_WRITES.map((w) => [`gh ${w}*`, 'github.write'])),
+    ...writeRules(forge),
     'git push*': 'github.write',
     'git -C * push*': 'github.write',
     'gh pr create*': 'github.write',
@@ -157,9 +181,9 @@ export const ISSUE_FIX_EVERY = 'Start on every new issue'
  * than `gh label*`, so `gh label list` stays unmapped: allowed, and it doesn't
  * mark the first run (or the memory it writes) as having read outside text.
  */
-export function refineRules(): Record<string, string> {
+export function refineRules(forge: Forge = GITHUB): Record<string, string> {
   return shell({
-    ...Object.fromEntries(GITHUB_WRITES.filter((w) => w !== 'label').map((w) => [`gh ${w}*`, 'github.write'])),
+    ...writeRules(forge, ['label']),
     'gh label delete*': 'github.write',
     'gh label edit*': 'github.write',
     'gh label clone*': 'github.write',
@@ -205,9 +229,9 @@ export const SCHEDULE_WITH_FLAGS = `gh issue edit *-* --add-label ${NEEDS_REFINE
  * off. Reading an issue, or the open issues' titles (to spot duplicates), is
  * `untrusted`; `gh label list` stays unmapped, as for the refiner.
  */
-export function triageRules(): Record<string, string> {
+export function triageRules(forge: Forge = GITHUB): Record<string, string> {
   return shell({
-    ...Object.fromEntries(GITHUB_WRITES.filter((w) => w !== 'label' && w !== 'issue edit').map((w) => [`gh ${w}*`, 'github.write'])),
+    ...writeRules(forge, ['label', 'issue edit']),
     'gh label delete*': 'github.write',
     'gh label edit*': 'github.write',
     'gh label clone*': 'github.write',
