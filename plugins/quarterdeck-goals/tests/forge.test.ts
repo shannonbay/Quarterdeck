@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -43,6 +43,16 @@ test("the issue fixer's other commands come from its forge (#44)", async () => {
   // The GitHub goal keeps the gh commands it had.
   const github = `${ISSUE_FIX_REFINED_INTAKE} ${ISSUE_FIX_WORK}`
   for (const command of ['gh run view <id> --json headBranch', 'gh run view <id> --log-failed', 'gh pr view <number> --json baseRefName', 'gh issue list --json number,author', `gh issue list --state open --label ${REFINED_LABEL} --limit 1000 --json number,labels`, 'gh pr list --state all --limit 1000 --json number,headRefName']) expect(github).toContain(command)
+})
+
+test("the refiner's intake reads issues through its forge (#44)", async () => {
+  const other: Forge = { ...GITHUB, issueRead: 'OTHER-ISSUE-READ' }
+  for (const text of [refineIntake(other), refinePickedIntake(other)]) {
+    expect(text).toContain('Read each with OTHER-ISSUE-READ,')
+    expect(text).not.toContain(GITHUB.issueRead)
+  }
+  // The GitHub goal keeps the gh command it had.
+  for (const text of [REFINE_INTAKE, REFINE_PICKED_INTAKE]) expect(text).toContain('Read each with gh issue view <number> --json title,body,comments --jq ')
 })
 
 test('the refiner watches issues through its forge (#44)', async () => {
