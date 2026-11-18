@@ -135,11 +135,11 @@ Some sources need two calls, and the second needs a value from the first (Claude
 
 ```json
 { "steps": [
-    { "tool": "mcp__claude-in-chrome__tabs_create_mcp", "pick": { "tabId": { "regex": "Tab ID: (\d+)" } } },
+    { "tool": "mcp__claude-in-chrome__tabs_create_mcp", "pick": { "tabId": { "regex": "Tab ID: ([0-9]+)" } } },
     { "tool": "mcp__claude-in-chrome__navigate", "input": { "tabId": "{{tabId}}", "url": "https://example.com/inbox" } },
     { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" } } ],
   "finally": { "tool": "mcp__claude-in-chrome__tabs_close_mcp", "input": { "tabId": "{{tabId}}" } },
-  "match": "^(.+)$", "every_minutes": 15 }
+  "match": "(.+)", "every_minutes": 15 }
 ```
 
 - Try the calls yourself first and read the answers: the pick's regex needs exactly one group (or use `json`: `a.b[0]`).

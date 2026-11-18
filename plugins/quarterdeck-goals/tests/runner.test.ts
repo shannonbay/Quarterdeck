@@ -272,3 +272,22 @@ test('a steps watch whose pick finds nothing reports an error naming the step, a
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'step 1 (mcp__chrome__navigate) found nothing for its pick "tabId"' }])
   expect(closed).toHaveLength(1)
 })
+
+test('a steps watch whose call throws names the step, and a failed finally after a good read adds a note to the text', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => { throw new Error('extension not connected') })
+  on('tool.call', { tool: 'mcp__chrome__read' as never }, () => ({ result: 'Anna: hi' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'no such tab', isError: true }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [
+      { watch_id: 'w-1', goal_id: 'g1', name: 'a', tool: 'mcp__chrome__navigate', input: {}, steps: [{ tool: 'mcp__chrome__read', input: {} }, { tool: 'mcp__chrome__navigate', input: {} }] },
+      { watch_id: 'w-2', goal_id: 'g1', name: 'b', tool: 'mcp__chrome__read', input: {}, steps: [{ tool: 'mcp__chrome__read', input: {} }], finally: { tool: 'mcp__chrome__tabs_close', input: {} } },
+    ],
+  })
+  await $.session.start(START)
+  await settle()
+  const reports = fake.of('watch_report').map((c) => c.input as Record<string, unknown>)
+  expect(reports.find((r) => r.watch_id === 'w-1')).toEqual({ watch_id: 'w-1', error: expect.stringMatching(/step 2, mcp__chrome__navigate[)]$/) })
+  expect(reports.find((r) => r.watch_id === 'w-2')).toEqual({ watch_id: 'w-2', text: 'Anna: hi', note: 'finally mcp__chrome__tabs_close failed: no such tab' })
+})

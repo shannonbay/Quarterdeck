@@ -453,12 +453,15 @@ export function takeDueToolWatches(db: Database, planIds: string[], now: Date = 
 }
 
 /** Records what a tool watch's call answered: its text, read into lines, or why it failed. */
-export function reportToolWatch(db: Database, watchId: string, result: { text: string } | { error: string }, now: Date = new Date()): WatchCheck {
+export function reportToolWatch(db: Database, watchId: string, result: { text: string; note?: string } | { error: string }, now: Date = new Date()): WatchCheck {
   const watch = getWatch(db, watchId)
   if (!watch || watch.kind !== 'tool') throw new Error(`Tool watch ${watchId} not found`)
   db.prepare('UPDATE goal_watches SET asked_at = NULL WHERE id = ?').run(watchId)
   if ('error' in result) return recordWatchLines(db, watchId, { error: result.error }, now)
-  return recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  const checked = recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  // A good read with a failed clean-up: the text counts, the note shows why (a tab left open), and it isn't a failed check
+  if (result.note) db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(result.note.trim().slice(-500), watchId)
+  return checked
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────

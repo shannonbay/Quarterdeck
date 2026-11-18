@@ -264,7 +264,7 @@ export async function watch_report(args: unknown) {
   const input = WatchReportSchema.parse(args)
   const watch = getWatch(input.watch_id)
   if (!watch) throw new Error(`Watch ${input.watch_id} not found.`)
-  const r = reportToolWatch(watch.id, input.error !== undefined ? { error: input.error } : { text: input.text ?? '' })
+  const r = reportToolWatch(watch.id, input.error !== undefined ? { error: input.error } : { text: input.text ?? '', ...(input.note ? { note: input.note } : {}) })
   const goal = getGoal(watch.plan_id)
   const queued = r.fresh.length && goal?.status === 'active' ? queueForWatchEvents(watch.plan_id) : null
   return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...(r.error && { error: r.error }), queued_run: queued ? queued.id : null }

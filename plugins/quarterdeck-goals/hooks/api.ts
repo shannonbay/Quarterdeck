@@ -226,7 +226,7 @@ export async function tick($: Engine, holder: string, trackedRunIds: string[], t
 }
 
 /** What a tool watch's call answered; `queued_run` is set when something new queued a run. */
-export async function reportWatch($: Engine, watchId: string, report: { text: string } | { error: string }): Promise<{ queued_run: string | null }> {
+export async function reportWatch($: Engine, watchId: string, report: { text: string; note?: string } | { error: string }): Promise<{ queued_run: string | null }> {
   return call($, 'watch_report', { watch_id: watchId, ...report })
 }
 

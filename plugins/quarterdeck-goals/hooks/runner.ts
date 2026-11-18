@@ -161,12 +161,14 @@ const WATCH_TEXT_MAX = 60_000
 async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   const steps: WatchStep[] = watch.steps ?? [{ tool: watch.tool, input: watch.input }]
   const values: Record<string, string> = {}
-  let report: { text: string } | { error: string }
+  let report: { text: string; note?: string } | { error: string }
   let timedOut = false
+  let at = 0
   const run = async (): Promise<{ text: string } | { error: string }> => {
     let last = ''
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]
+      at = i
       const where = watch.steps ? ` (step ${i + 1}, ${step.tool})` : ''
       let input: Record<string, unknown>
       try { input = substitute(step.input ?? {}, values) as Record<string, unknown> } catch (err) { return { error: `${err instanceof Error ? err.message : String(err)}${where}` } }
@@ -185,10 +187,10 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   }
   try {
     const answer = await Promise.race([run(), $.clock.sleep(WATCH_CALL_MS).then(() => 'timeout' as const)])
-    if (answer === 'timeout') { timedOut = true; report = { error: `${watch.steps ? 'the steps' : watch.tool} didn't finish within ${WATCH_CALL_MS / 1000} s` } }
+    if (answer === 'timeout') { timedOut = true; report = { error: `${watch.steps ? `step ${at + 1} (${steps[at].tool})` : watch.tool} didn't finish within ${WATCH_CALL_MS / 1000} s` } }
     else report = answer
   } catch (err) {
-    report = { error: err instanceof Error ? err.message : String(err) }
+    report = { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${at + 1}, ${steps[at].tool})` : ''}` }
   }
   // The clean-up call always runs (a tab the steps opened), with a limit of its own; its failure is noted, not the result
   if (watch.finally) {
@@ -206,7 +208,8 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       note = `finally ${watch.finally.tool} didn't run: ${err instanceof Error ? err.message : String(err)}`
     }
     if (note && 'error' in report) report = { error: `${report.error}; ${note}` }
-    // A clean-up failure after a good read doesn't replace the text; the next check tries again
+    // A clean-up failure after a good read keeps the text and adds the note; the next check tries again
+    else if (note) report = { ...report, note }
   }
   return reportWatch($, watch.watch_id, report).then((r) => r.queued_run !== null).catch(() => false)
 }
