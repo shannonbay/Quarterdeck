@@ -157,6 +157,32 @@ async function guardCheck($: Engine, runId: string, tool: string, input: Record<
 /** A final message that may mean the run was stopped (Quarterdeck decides which, in report_run_end). */
 const STOPPED = /limit|rate|quota|credits|overloaded|api error/i
 
+const WINDOW_NAMES: Record<string, string> = { five_hour: '5-hour', seven_day: 'weekly' }
+
+/** "8:10pm", local time, as Claude Code's own limit message words it (the server reads it back). */
+function clockTime(at: Date): string {
+  const h = at.getHours()
+  return `${h % 12 || 12}:${String(at.getMinutes()).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
+}
+
+/**
+ * A turn that died on an API error carries no answer: Claude Code's "You've hit
+ * your 5-hour limit" message isn't the model's, so `e.answer` is "" (seen Nov
+ * 2026: runs failed with "no message" right after a successful Gmail send). The
+ * session's rate-limit windows say whether that error was the limit; this words
+ * it the way Claude Code does, so Quarterdeck holds runs until the reset.
+ */
+export async function limitMessage($: Engine): Promise<string> {
+  const { rateLimits } = await $.session.usage()
+  const full = rateLimits.find((w) => w.percentUsed >= 100)
+  if (!full) return ''
+  const name = WINDOW_NAMES[full.kind] ?? full.kind.replace(/_/g, ' ')
+  const resets = full.resetsAt ? new Date(full.resetsAt) : null
+  return resets && !Number.isNaN(resets.getTime())
+    ? `You've hit your ${name} limit · resets ${clockTime(resets)} (${resets.toISOString()})`
+    : `You've hit your ${name} limit`
+}
+
 async function reportRunEnd($: Engine, runId: string, answer: string, reason: string, usage?: unknown): Promise<void> {
   guardCallsInFlight++
   try {
@@ -205,7 +231,7 @@ function reportProgress($: Engine, runId: string, event: 'tool' | 'waiting' | 's
  * Quarterdeck tools with an effect outside the computer: a run may use them only
  * as the goal's guard allows (its tool rules map them to an action category).
  */
-const GUARDED_QUARTERDECK = new Set(['unsubscribe_one_click'])
+const GUARDED_QUARTERDECK = new Set(['unsubscribe_one_click', 'resolve_review_thread'])
 const isGuardedQuarterdeck = (tool: string) => GUARDED_QUARTERDECK.has(serverTool(tool) ?? '')
 
 /**
@@ -328,7 +354,10 @@ export const register: Register = (on) => {
       lastAnswers.set(e.agentId, e.answer)
       // Every turn's end goes to Quarterdeck: its tokens count toward the run, and a stop by
       // the usage limit or an error skips (and holds runs) or fails it with the reason
-      if (e.usage || e.reason === 'error' || STOPPED.test(e.answer)) await reportRunEnd($, runId, e.answer, e.reason, e.usage).catch(() => {})
+      if (e.usage || e.reason === 'error' || STOPPED.test(e.answer)) {
+        const answer = e.reason === 'error' && !e.answer.trim() ? await limitMessage($).catch(() => '') : e.answer
+        await reportRunEnd($, runId, answer, e.reason, e.usage).catch(() => {})
+      }
     }
     return r
   }).catch(($, e, next) => next(e))
