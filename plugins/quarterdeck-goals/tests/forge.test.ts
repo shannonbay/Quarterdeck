@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CLARIFY_LABEL, GITHUB, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CLARIFY_LABEL, GITHUB, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -53,6 +53,20 @@ test("the refiner's intake reads issues through its forge (#44)", async () => {
   }
   // The GitHub goal keeps the gh command it had.
   for (const text of [REFINE_INTAKE, REFINE_PICKED_INTAKE]) expect(text).toContain('Read each with gh issue view <number> --json title,body,comments --jq ')
+})
+
+test("the refiner's other commands come from its forge (#44)", async () => {
+  const other: Forge = { ...GITHUB, refiner: {
+    replyRead: 'X-REPLY-READ', comment: 'X-COMMENT', labelEdit: 'X-LABEL-EDIT',
+    relabel: (add, remove) => `X-RELABEL +${add}${remove ? ` -${remove}` : ''}`, removeLabel: (label) => `X-REMOVE ${label}`,
+    labelList: 'X-LABEL-LIST', labelCreate: 'X-LABEL-CREATE', openIssues: 'X-OPEN-ISSUES',
+  } }
+  const text = `${refinePickedIntake(other)} ${issueRefineWork(other)}`
+  for (const command of [`add X-REMOVE ${NEEDS_REFINEMENT_LABEL} to its X-LABEL-EDIT.`, 'post it with X-COMMENT, then add the label with X-RELABEL +<label>, and', 'Read the reply with X-REPLY-READ,', `(X-RELABEL +${REFINED_LABEL} -${CLARIFY_LABEL})`, 'labels exist with X-LABEL-LIST (', 'the exact X-LABEL-CREATE commands', '(X-OPEN-ISSUES, not their titles']) expect(text).toContain(command)
+  expect(text).not.toMatch(/\bgh (issue (comment|edit|list)|label)|--(add|remove)-label/)
+  // The GitHub goal keeps the gh commands it had.
+  const github = `${REFINE_PICKED_INTAKE} ${ISSUE_REFINE_WORK}`
+  for (const command of [`add --remove-label ${NEEDS_REFINEMENT_LABEL} to its gh issue edit.`, 'gh issue comment <number> --body-file <file>', 'gh issue edit <number> --add-label <label>', `gh issue edit <number> --add-label ${REFINED_LABEL} --remove-label ${CLARIFY_LABEL}`, `gh issue view <number> --json comments --jq '.comments[] | select(.id == "<comment id>")`, 'gh label list --limit 1000 --json name', 'exact gh label create commands', 'gh issue list --json number,author,labels']) expect(github).toContain(command)
 })
 
 test('the refiner watches issues through its forge (#44)', async () => {
