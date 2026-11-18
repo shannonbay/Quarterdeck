@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.28.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.28.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -1683,7 +1683,7 @@ function globRegExp(pattern, flags = "") {
   return new RegExp("^" + pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", flags);
 }
 function commandParts(command2) {
-  return command2.split(/&&|\|\||\$\(|[;|&\n`(){}]/).map((s) => s.trim().replace(ENV_PREFIX, "").trim()).filter(Boolean);
+  return command2.split(/&&|\|\||\$\(|[;|&\n`(){}]/).map((s) => s.trim().replace(ENV_PREFIX, "").trim().replace(QUOTED_WORD, "$1$3")).filter(Boolean);
 }
 function matchToolCategory(rawMap, rawName, input) {
   return matchToolRule(rawMap, rawName, input)?.category ?? null;
@@ -1836,7 +1836,7 @@ function standingAllowRules(db) {
 function listToolCalls(db, planId, limit = 50) {
   return db.prepare("SELECT * FROM goal_tool_calls WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(planId, limit);
 }
-var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE;
+var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE;
 var init_guard = __esm({
   "../core/src/guard.ts"() {
     "use strict";
@@ -1847,6 +1847,7 @@ var init_guard = __esm({
     PLUGIN_QUARTERDECK_TOOL_PREFIX = "mcp__plugin_quarterdeck-goals_quarterdeck__";
     COMMAND_RULE = /^(\w+)\(([\s\S]+)\)$/;
     ENV_PREFIX = /^(\w+=("[^"]*"|'[^']*'|\S*)\s+)+/;
+    QUOTED_WORD = /(^|\s)(["'])([^\s"']+)\2(?=\s|$)/g;
     UNTRUSTED_CATEGORY = "untrusted";
     BUILTIN_UNTRUSTED = [
       "WebFetch",

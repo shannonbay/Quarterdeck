@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.28.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.28.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -1726,12 +1726,12 @@ var require_code2 = __commonJS({
       });
     }
     exports.checkReportMissingProp = checkReportMissingProp;
-    function checkMissingProp({ gen, data, it: { opts } }, properties, missing) {
-      return (0, codegen_1.or)(...properties.map((prop) => (0, codegen_1.and)(noPropertyInData(gen, data, prop, opts.ownProperties), (0, codegen_1._)`${missing} = ${prop}`)));
+    function checkMissingProp({ gen, data, it: { opts } }, properties, missing2) {
+      return (0, codegen_1.or)(...properties.map((prop) => (0, codegen_1.and)(noPropertyInData(gen, data, prop, opts.ownProperties), (0, codegen_1._)`${missing2} = ${prop}`)));
     }
     exports.checkMissingProp = checkMissingProp;
-    function reportMissingProp(cxt, missing) {
-      cxt.setParams({ missingProperty: missing }, true);
+    function reportMissingProp(cxt, missing2) {
+      cxt.setParams({ missingProperty: missing2 }, true);
       cxt.error();
     }
     exports.reportMissingProp = reportMissingProp;
@@ -4840,14 +4840,14 @@ var require_required = __commonJS({
           }
         }
         function exitOnErrorMode() {
-          const missing = gen.let("missing");
+          const missing2 = gen.let("missing");
           if (useLoop || $data) {
             const valid = gen.let("valid", true);
-            cxt.block$data(valid, () => loopUntilMissing(missing, valid));
+            cxt.block$data(valid, () => loopUntilMissing(missing2, valid));
             cxt.ok(valid);
           } else {
-            gen.if((0, code_1.checkMissingProp)(cxt, schema, missing));
-            (0, code_1.reportMissingProp)(cxt, missing);
+            gen.if((0, code_1.checkMissingProp)(cxt, schema, missing2));
+            (0, code_1.reportMissingProp)(cxt, missing2);
             gen.else();
           }
         }
@@ -4857,10 +4857,10 @@ var require_required = __commonJS({
             gen.if((0, code_1.noPropertyInData)(gen, data, prop, opts.ownProperties), () => cxt.error());
           });
         }
-        function loopUntilMissing(missing, valid) {
-          cxt.setParams({ missingProperty: missing });
-          gen.forOf(missing, schemaCode, () => {
-            gen.assign(valid, (0, code_1.propertyInData)(gen, data, missing, opts.ownProperties));
+        function loopUntilMissing(missing2, valid) {
+          cxt.setParams({ missingProperty: missing2 });
+          gen.forOf(missing2, schemaCode, () => {
+            gen.assign(valid, (0, code_1.propertyInData)(gen, data, missing2, opts.ownProperties));
             gen.if((0, codegen_1.not)(valid), () => {
               cxt.error();
               gen.break();
@@ -5398,7 +5398,7 @@ var require_dependencies = __commonJS({
       const { gen, data, it } = cxt;
       if (Object.keys(propertyDeps).length === 0)
         return;
-      const missing = gen.let("missing");
+      const missing2 = gen.let("missing");
       for (const prop in propertyDeps) {
         const deps = propertyDeps[prop];
         if (deps.length === 0)
@@ -5416,8 +5416,8 @@ var require_dependencies = __commonJS({
             }
           });
         } else {
-          gen.if((0, codegen_1._)`${hasProperty} && (${(0, code_1.checkMissingProp)(cxt, deps, missing)})`);
-          (0, code_1.reportMissingProp)(cxt, missing);
+          gen.if((0, codegen_1._)`${hasProperty} && (${(0, code_1.checkMissingProp)(cxt, deps, missing2)})`);
+          (0, code_1.reportMissingProp)(cxt, missing2);
           gen.else();
         }
       }
@@ -7985,13 +7985,13 @@ async function checkCompletion(db2, plan, task, input) {
   const criteria = task.acceptance_criteria ?? [];
   if (actor === "agent" && criteria.length > 0) {
     const evidence = input.evidence ?? [];
-    const missing = criteria.filter((_, i) => !evidence[i]?.trim());
-    if (missing.length > 0 || evidence.length > criteria.length) {
+    const missing2 = criteria.filter((_, i) => !evidence[i]?.trim());
+    if (missing2.length > 0 || evidence.length > criteria.length) {
       return {
         outcome: "blocked",
         blockers: [{
           gate: "criteria",
-          message: evidence.length > criteria.length ? `Got ${evidence.length} evidence entries for ${criteria.length} criteria. Give exactly one per criterion, in order.` : `Missing evidence for ${missing.length} of ${criteria.length} acceptance criteria: ${missing.map((c) => `"${c}"`).join("; ")}. Pass \`evidence\` with one entry per criterion, in order, saying how it is met.`
+          message: evidence.length > criteria.length ? `Got ${evidence.length} evidence entries for ${criteria.length} criteria. Give exactly one per criterion, in order.` : `Missing evidence for ${missing2.length} of ${criteria.length} acceptance criteria: ${missing2.map((c) => `"${c}"`).join("; ")}. Pass \`evidence\` with one entry per criterion, in order, saying how it is met.`
         }]
       };
     }
@@ -8408,7 +8408,7 @@ function globRegExp(pattern, flags = "") {
   return new RegExp("^" + pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$", flags);
 }
 function commandParts(command) {
-  return command.split(/&&|\|\||\$\(|[;|&\n`(){}]/).map((s) => s.trim().replace(ENV_PREFIX, "").trim()).filter(Boolean);
+  return command.split(/&&|\|\||\$\(|[;|&\n`(){}]/).map((s) => s.trim().replace(ENV_PREFIX, "").trim().replace(QUOTED_WORD, "$1$3")).filter(Boolean);
 }
 function matchToolCategory(rawMap, rawName, input) {
   return matchToolRule(rawMap, rawName, input)?.category ?? null;
@@ -8534,7 +8534,7 @@ function guardRun(db2, run, toolName, input, paths) {
   record2(db2, run, toolName, category, "deny", reason);
   return { decision: "deny", category, run_id: run.id, reason };
 }
-var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE;
+var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE;
 var init_guard = __esm({
   "../core/src/guard.ts"() {
     "use strict";
@@ -8545,6 +8545,7 @@ var init_guard = __esm({
     PLUGIN_QUARTERDECK_TOOL_PREFIX = "mcp__plugin_quarterdeck-goals_quarterdeck__";
     COMMAND_RULE = /^(\w+)\(([\s\S]+)\)$/;
     ENV_PREFIX = /^(\w+=("[^"]*"|'[^']*'|\S*)\s+)+/;
+    QUOTED_WORD = /(^|\s)(["'])([^\s"']+)\2(?=\s|$)/g;
     UNTRUSTED_CATEGORY = "untrusted";
     BUILTIN_UNTRUSTED = [
       "WebFetch",
@@ -23050,7 +23051,7 @@ var AddItemSchema = external_exports.object({
   notes: external_exports.string().optional()
 });
 var RememberSchema = external_exports.object({
-  kind: external_exports.enum(["fact", "rule", "preference"]).describe('fact: "Alice is my manager"; rule: "Never archive mail from the bank"; preference: "Keep drafts short"'),
+  kind: external_exports.enum(["fact", "rule", "preference"]).default("fact").describe('fact: "Alice is my manager"; rule: "Never archive mail from the bank"; preference: "Keep drafts short" (default fact)'),
   text: external_exports.string().min(1).describe("One clear statement"),
   source_ref: external_exports.string().optional().describe("Item or run this came from")
 });
@@ -23129,6 +23130,9 @@ var ResolveReviewThreadSchema = external_exports.object({
   repo: external_exports.string().regex(/^[\w.-]+\/[\w.-]+$/).describe("The repo as owner/name (from git remote get-url origin)"),
   pr: external_exports.number().int().positive().describe("The pull request number"),
   comment_ids: external_exports.array(external_exports.number().int().positive()).min(1).max(50).describe("Ids of inline review comments you read and addressed with a change you pushed; the thread each belongs to is resolved")
+});
+var DetectForgeSchema = external_exports.object({
+  working_dir: external_exports.string().min(1).describe("The repo's folder (absolute path)")
 });
 var DeleteGoalSchema = external_exports.object({
   goal_id: external_exports.string()
@@ -24623,6 +24627,51 @@ async function resolve_review_thread(args, run = defaultRunFile) {
   return { resolved: resolved.length, threads: resolved, already_resolved: already, skipped };
 }
 
+// src/tools/detect_forge.ts
+init_src();
+var FORGE_CLI = { github: "gh", gitlab: "glab" };
+var KNOWN_HOSTS = { "github.com": "github", "gitlab.com": "gitlab" };
+function remoteHost(url) {
+  const u = url.trim();
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:?#]+)/i.exec(u);
+  if (scheme) return u.toLowerCase().startsWith("file:") ? null : scheme[1].toLowerCase();
+  const scp = /^(?:[^@/\s]+@)?([^/:\s]+):(?!\/\/)/.exec(u);
+  if (scp && !/^[a-z]$/i.test(scp[1])) return scp[1].toLowerCase();
+  return null;
+}
+function missing(err) {
+  return err?.code === "ENOENT";
+}
+async function authStatus(run, cli, host) {
+  try {
+    await run(cli, ["auth", "status", "--hostname", host]);
+    return { installed: true, signed_in: true };
+  } catch (err) {
+    return { installed: !missing(err), signed_in: false };
+  }
+}
+async function detect_forge(args, run = defaultRunFile) {
+  const { working_dir } = DetectForgeSchema.parse(args);
+  let url;
+  try {
+    url = await run("git", ["-C", working_dir, "remote", "get-url", "origin"]);
+  } catch {
+    return { forge: null, host: null, cli: null, cli_installed: false, signed_in: false };
+  }
+  const host = remoteHost(url);
+  if (!host) return { forge: null, host: null, cli: null, cli_installed: false, signed_in: false };
+  const known = KNOWN_HOSTS[host];
+  if (known) {
+    const status = await authStatus(run, FORGE_CLI[known], host);
+    return { forge: known, host, cli: FORGE_CLI[known], cli_installed: status.installed, signed_in: status.signed_in };
+  }
+  for (const forge of ["github", "gitlab"]) {
+    const status = await authStatus(run, FORGE_CLI[forge], host);
+    if (status.signed_in) return { forge, host, cli: FORGE_CLI[forge], cli_installed: true, signed_in: true };
+  }
+  return { forge: null, host, cli: null, cli_installed: false, signed_in: false };
+}
+
 // src/resources.ts
 function attachChildren(planId, task) {
   const children = getChildren2(planId, task.id);
@@ -24857,6 +24906,12 @@ var TOOLS = [
     description: "Marks the review threads of a pull request resolved, given the ids of inline review comments in them, once you have pushed a change that answers those comments. Only threads started by the repo's owner, members or collaborators on an open pull request; it posts nothing. In a goal run, only as the goal's rules allow.",
     inputSchema: zodToJsonSchema(ResolveReviewThreadSchema),
     handler: resolve_review_thread
+  },
+  {
+    name: "detect_forge",
+    description: "Which git host a folder's repo is on (github, gitlab, or null when it has no origin remote or neither CLI knows the host), and whether that host's CLI (gh, glab) is installed and signed in. Read-only. For the quarterdeck-goals plugin's /goal-new.",
+    inputSchema: zodToJsonSchema(DetectForgeSchema),
+    handler: (args) => detect_forge(args)
   },
   {
     name: "todo_list",

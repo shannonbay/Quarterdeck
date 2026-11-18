@@ -70,6 +70,13 @@ async function fetchOverview($, etag, detail = [], fullInstructions = false) {
   if (!res.changed) return { changed: false };
   return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null };
 }
+async function detectForge($, workingDir) {
+  try {
+    return await call($, "detect_forge", { working_dir: workingDir });
+  } catch {
+    return null;
+  }
+}
 async function updateGoal($, goalId, changes) {
   const r = await call($, "update_goal", { goal_id: goalId, ...changes });
   return { changed: r.changed, watches: r.watches ?? [] };
@@ -201,8 +208,11 @@ function permissionWhere(mine, standing) {
   return "Answer it in the window running this goal (or the Claude app), or Cancel run.";
 }
 function isQuiet(g) {
+  return !needsAttention(g) && !g.openRun;
+}
+function needsAttention(g) {
   const run = lastRun(g);
-  return g.needsYou.length === 0 && g.needsYouCount === 0 && !g.openRun && !(run && isFailed(run.status)) && !(g.health && !g.health.passed) && !g.watchFailing && g.suggestions.length === 0;
+  return g.needsYou.length > 0 || g.needsYouCount > 0 || !!(run && isFailed(run.status)) || !!(g.health && !g.health.passed) || g.watchFailing || g.suggestions.length > 0;
 }
 var SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 var SPINNER_MS = 120;
@@ -1657,7 +1667,8 @@ async function renderPane($, e) {
         <Button key="retry" label="Retry" hotkey="g" onPress={() => void refresh($)} />
       </Box>;
   }
-  const current = s.goals.filter((g) => g.status !== "retired");
+  const active = s.goals.filter((g) => g.status !== "retired");
+  const current = [...active.filter(needsAttention), ...active.filter((g) => !needsAttention(g))];
   const done = s.goals.filter((g) => g.status === "retired");
   const firstWithProposal = current.find((g) => g.needsYou.length > 0);
   const shown = await getExpanded($);
@@ -2853,7 +2864,7 @@ function issueTriage(forge = GITHUB) {
     `Once I approve, add the labels to each issue with ${t.addLabels(`<label>,<label>,${TRIAGED_LABEL}`)}, then complete the item. If I reject it, my feedback is in memory: abandon that item and propose the batch again with what I said, adding :2, :3 to its external_ref.`,
     `Only ever add labels. Never comment, close, reopen, assign, remove a label, or change an issue's title or body, and never touch a pull request.`,
     `Once a batch is labelled, if any of its issues are ready to refine, ask me one question in the same run: add_item with ask_person and an action (category github.schedule, summary "Label the issues I pick ${NEEDS_REFINEMENT_LABEL}"), external_ref github-issue-schedule:<numbers>, goal "Which of these should be refined?", and in its notes each of those issues with its number, link, priority and one-line summary, highest priority first, then "Answer with the numbers, all, or none." My answer approves that one action.`,
-    `When decisions_since_last_run carries my answer and the item shows approved_to_execute, add ${NEEDS_REFINEMENT_LABEL} to exactly the issues I named (all: every issue in the question; none, or Done with no answer: no issue), with ${scheduleCommand(forge).replace("*", "<numbers>")} and nothing else in the command (any other ${forge.rules.issueEdit} needs its own proposal), then complete the item. Don't ask again about the issues I didn't pick; I can label them on ${forge.name} later.`,
+    `When decisions_since_last_run carries my answer and the item shows approved_to_execute, add ${NEEDS_REFINEMENT_LABEL} to exactly the issues I named (all: every issue in the question; none, or Done with no answer: no issue), with ${scheduleCommand(forge).replace("*", "<numbers>")} exactly as written, unquoted, and nothing else in the command (any other ${forge.rules.issueEdit} needs its own proposal), then complete the item. Don't ask again about the issues I didn't pick; I can label them on ${forge.name} later.`,
     `The first run (no watch_events) checks the labels as above and says in its summary how many open issues have no ${TRIAGED_LABEL} label (${t.untriaged}); it triages those only when I ask, in a rule in my memory or feedback.`,
     "Remember which issues you have triaged and which you asked about, so you never propose the same issue twice."
   ].join(" ");
@@ -2908,6 +2919,20 @@ var REPO_GOALS = [
   { name: "PR Reviewer", answer: "" },
   { name: REPO_CI, answer: null }
 ];
+var FORGE_TEMPLATES = REPO_GOALS.map((g) => g.name);
+var FORGE_QUESTION = "Which git host is this folder's repo on? (I couldn't tell from its origin remote.)";
+var FORGE_CHOICES = ["GitHub", "GitLab", "Cancel"];
+var SUPPORTED_FORGES = ["github"];
+function forgeDecision(detected) {
+  if (!detected || typeof detected !== "object" || !("forge" in detected)) return { kind: "use", forge: "github" };
+  if (!detected.forge) return { kind: "ask" };
+  return forgeAnswer(detected.forge, detected.host);
+}
+function forgeAnswer(forge, host = null) {
+  if (SUPPORTED_FORGES.includes(forge)) return { kind: "use", forge };
+  const name = forge === "gitlab" ? "GitLab" : forge;
+  return { kind: "refuse", message: `No goal created: this folder's repo is on ${name}${host ? ` (${host})` : ""}, and these goals work only with GitHub for now.` };
+}
 var GITHUB_PROFILE = [
   "Each run, check my recent public activity with gh (my repos sorted by last push, and my public events) since the last run.",
   "When something notable happened in one of my own projects (a release, a new project, a big feature), propose one profile.readme_edit item with the exact new text for the README; once approved, edit the README, commit and push it, and complete the item.",
@@ -3290,6 +3315,10 @@ async function newFromTemplate($) {
   if (picked === REPO_LABEL) return newRepoGoals($);
   const template = TEMPLATES.find((t) => t.label === picked);
   if (!template) return picked.trim() && !/^cancel$/i.test(picked.trim()) ? newGoal($, picked) : "No goal created.";
+  if (FORGE_TEMPLATES.includes(template.name)) {
+    const refused = await checkForge($, await $.session.root());
+    if (refused) return refused;
+  }
   let instructions = template.instructions;
   let answer = "";
   if (template.ask) {
@@ -3327,6 +3356,21 @@ async function newFromTemplate($) {
   const when = template.schedule ? `running ${scheduleLabel(template.schedule)}` : `with no schedule: a run starts when its watch sees ${orList((created.watches ?? []).map((w) => w.name)) || "something new"}`;
   return `Created the goal "${template.name}" in ${cwd}, ${when}; the first run starts within a minute.${checks}${newGoalModelText(template.model, template.modelReason)} It needs ${template.needs}. It asks before it acts: approve or reject its proposals under Needs you. Change anything by discussing the goal.${await phoneHint($)}`;
 }
+async function checkForge($, cwd) {
+  let decision = forgeDecision(await detectForge($, cwd));
+  if (decision.kind === "ask") {
+    let answer;
+    try {
+      answer = await $.ui.ask(FORGE_QUESTION, FORGE_CHOICES);
+    } catch {
+      return "No goal created.";
+    }
+    if (answer === "GitHub") decision = forgeAnswer("github");
+    else if (answer === "GitLab") decision = forgeAnswer("gitlab");
+    else return "No goal created.";
+  }
+  return decision.kind === "refuse" ? decision.message : null;
+}
 function templateInstructions(template, answer) {
   if (!template.ask) return template.instructions;
   const first = answer === template.ask.later ? template.ask.laterText : template.ask.fill(answer.trim());
@@ -3352,6 +3396,8 @@ function watchChecks(created) {
   return (created.watches ?? []).map((w) => ` Watch "${w.name}": ${w.result}.`).join("");
 }
 async function newRepoGoals($) {
+  const refused = await checkForge($, await $.session.root());
+  if (refused) return refused;
   const ci2 = TEMPLATES.find((t) => t.name === REPO_CI);
   let branch;
   try {
