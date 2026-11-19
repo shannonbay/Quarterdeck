@@ -200,8 +200,9 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
     let cleanup: 'ok' | 'failed' | 'unrunnable' = 'ok'
     let input: Record<string, unknown> | null = null
     try { input = substitute(watch.finally.input ?? {}, values) as Record<string, unknown> } catch (err) {
-      // Only a pick that found nothing may have left a tab open. If an earlier step failed, nothing was opened: no note, and it doesn't count
-      if (pickMissed) {
+      // Only a pick that found nothing, or a step that ran past the limit (its tab may open after all), may have left a tab open.
+      // If an earlier step failed, nothing was opened: no note, and it doesn't count
+      if (pickMissed || timedOut) {
         cleanup = 'unrunnable'
         note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
       }

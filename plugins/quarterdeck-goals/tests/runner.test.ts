@@ -335,6 +335,32 @@ test('a steps watch whose finally needs a picked tab that was never picked repor
   expect(closed).toHaveLength(0)
 })
 
+test('a steps watch whose tab-opening step runs past the limit reports the clean-up as unrunnable, since its tab may still open', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  let answer: ((v: unknown) => void) | null = null
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => new Promise((resolve) => { answer = resolve }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__tabs_create', input: {},
+      steps: [
+        { tool: 'mcp__chrome__tabs_create', input: {}, pick: { tabId: { regex: 'Tab ID: ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await clock.advance(30_000)
+  answer?.({ result: 'Tab ID: 7' }) // too late to be picked
+  await settle()
+  const reports = fake.of('watch_report').map((c) => c.input)
+  expect(reports[0]).toEqual({ watch_id: 'w-1', error: expect.stringMatching(/didn't finish within 30 s.*a tab may have been left open/), cleanup: 'unrunnable' })
+  expect(closed).toHaveLength(0)
+})
+
 test('a steps watch whose first step failed opened no tab: its clean-up is not unrunnable and adds no note', async ($, on) => {
   const { clock } = engine(on)
   settle = () => clock.settle()
