@@ -23,6 +23,16 @@ test('a queued run starts in a background subagent of the runner type, and the b
   await band.unmount()
 })
 
+test('the run agent leaves out Artifact and Agent, whose definitions cost a run about 15k tokens', async ($, on) => {
+  const { registered, clock } = engine(on)
+  fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  await clock.settle()
+
+  const runner = registered.find((a) => a.name === 'goal-runner')
+  expect(runner?.disallowedTools).toEqual(expect.arrayContaining(['Artifact', 'Agent']))
+})
+
 test("a goal's model goes to its run's agent; without one the agent takes the session's", async ($, on) => {
   const { spawned, clock } = engine(on)
   fakeQuarterdeck(on, [

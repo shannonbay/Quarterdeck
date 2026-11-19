@@ -66,6 +66,9 @@ export async function registerRunnerAgent($: Engine): Promise<void> {
     prompt: RUNNER_PROMPT,
     // guard_check stays callable: the plugin calls it inside the run's loop (the guard refuses it to the agent)
     disallowedTools: [
+      // A run never publishes a page or starts agents of its own, and their definitions
+      // (with Agent's list of agent types) were about 15k of a run's 50k tokens (Nov 2026)
+      'Artifact', 'Agent',
       ...RUN_AGENT_DENIED_TOOLS.filter((t) => !t.endsWith('__guard_check')),
       'mcp__quarterdeck-goals__approve_item', 'mcp__quarterdeck-goals__reject_item', 'mcp__quarterdeck-goals__answer_item', 'mcp__quarterdeck-goals__run_goal', 'mcp__quarterdeck-goals__set_schedule', 'mcp__quarterdeck-goals__update_goal',
     ],
