@@ -100,13 +100,13 @@ The tools for building plans by hand (`create_plan`, `provision_tasks`, `next_ta
 | `list_goals` | Persistent goals with open items and items waiting for review |
 | `get_goal_brief` | Start of a run: everything a fresh agent needs, in one call |
 | `add_item` | Add a work item (deduplicated by `external_ref`); actions are proposed, recorded or refused per the goal's autonomy |
-| `remember` / `forget` | Add a fact, rule or preference to the goal's memory; deactivate one an agent added |
+| `remember` / `forget` | Add a fact, rule or preference to the goal's memory; forget one an agent added (it stays as inactive memory, which you can restore) |
 | `recall` | Read in full the memories the brief only lists (`memory_index`) |
 | `propose_curation` | A memory curation run's one proposal (merge, reword, retire, unpin, add), which the server applies if you approve it |
 | `end_run` | Finish a run with a summary for the next one |
 | `run_goal` | Queue a run now |
 
-The plugins also use `goals_overview`, `goals_tick` (one scheduler pass), `decide_item`, `cancel_run`, `set_goal_status`, `create_goal`, `delete_memory`, `restore_goal`, `purge_goal`, `attach_agent`, `fail_run` and `guard_check`. The guard plugin refuses the person's actions among them (approving, cancelling, pausing...) to agents and to Claude.
+The plugins also use `goals_overview`, `goals_tick` (one scheduler pass), `decide_item`, `cancel_run`, `set_goal_status`, `create_goal`, `delete_memory`, `restore_memory`, `restore_goal`, `purge_goal`, `attach_agent`, `fail_run` and `guard_check`. The guard plugin refuses the person's actions among them (approving, cancelling, pausing...) to agents and to Claude.
 
 **Goal items**
 
