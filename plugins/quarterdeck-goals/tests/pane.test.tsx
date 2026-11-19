@@ -551,7 +551,7 @@ test('a run\'s question waits under Needs you with Answer and Done', async ($, o
   await ui.unmount()
 })
 
-test('Delete asks first, then deletes the goal; not while a run is going', async ($, on) => {
+test('Delete asks first, says the goal can be restored, then deletes it; not while a run is going', async ($, on) => {
   engine(on)
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Jobs' }), goal({ id: 'g2', name: 'Inbox', open_run: { id: 'r1', status: 'running' } })])
   await $.session.start(START)
@@ -559,7 +559,7 @@ test('Delete asks first, then deletes the goal; not while a run is going', async
   await ui.press({ key: 'toggle-g1' }) // a quiet goal is one line: its controls show once expanded
   expect(await ui.find({ key: 'delete-g2' })).toBeUndefined()
   await ui.press({ key: 'delete-g1' })
-  expect(await ui.find({ type: 'Text', text: /Delete "Jobs" for good/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Delete "Jobs"? It stops running and is hidden; you can restore it/ })).toBeDefined()
   await ui.press({ key: 'delete-no-g1' })
   expect(fake.of('delete_goal')).toEqual([])
   await ui.press({ key: 'delete-g1' })
