@@ -293,6 +293,30 @@ test('pause and resume, and cancel a run only after confirming', async ($, on) =
   await ui.unmount()
 })
 
+test("a paused goal's name is dimmed, collapsed and expanded, and back to normal once it resumes", async ($, on) => {
+  engine(on)
+  const goals = [goal({ id: 'g1', name: 'Reports', status: 'paused', next_run_at: null })]
+  fakeQuarterdeck(on, goals)
+  await $.session.start(START)
+
+  for (const surface of SURFACES) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // Collapsed: one line
+    expect((await ui.find({ type: 'Text', text: /^▸ Reports$/ }))?.props.dimColor).toBe(true)
+    // Expanded: the card
+    await ui.press({ key: 'toggle-g1' })
+    expect((await ui.find({ type: 'Text', text: /^▾ Reports$/ }))?.props.dimColor).toBe(true)
+    await ui.press({ key: 'resume-g1' })
+    expect(goals[0]!.status).toBe('active')
+    expect(await ui.find({ type: 'Text', text: /^. Reports$/ })).toBeUndefined()
+    expect((await ui.find({ key: 'toggle-g1' }))?.props.label).toBe('▾ Reports')
+    await ui.press({ key: 'pause-g1' })
+    expect((await ui.find({ type: 'Text', text: /^▾ Reports$/ }))?.props.dimColor).toBe(true)
+    await ui.press({ key: 'toggle-g1' })
+    await ui.unmount()
+  }
+})
+
 test('an unchanged overview is asked for with its etag and answers changed: false', async ($, on) => {
   const { clock } = engine(on)
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
