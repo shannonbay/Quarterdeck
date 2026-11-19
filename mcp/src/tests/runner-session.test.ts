@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { defaultDbPath } from '@quarterdeck/core'
 import {
-  ensure, install, runnerCommand, start, startArgs, startByTask, status, statusText, stop, systemdUnits, taskXml, transcriptPath, uninstall, waitingOn,
+  ensure, install, recordCliPath, runnerCommand, runnerDir, start, startArgs, startByTask, status, statusText, stop, systemdUnits, taskXml, transcriptPath, uninstall, waitingOn,
   RESUME_MAX_BYTES, SESSION_NAME, TASK_NAME, UNIT_NAME, type InstallDeps, type RunnerState,
 } from '../runner-session.js'
 import { checkRunner } from '../doctor.js'
@@ -390,6 +391,52 @@ describe('the standing session', () => {
       expect(await checkRunner(o, deps)).toMatchObject({ level: 'warn', fix: expect.stringMatching(/runner attach/) })
     } finally {
       rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('recordCliPath', () => {
+  /** A home with a standing session's launch.mjs, and a server folder with its CLI. */
+  function setup() {
+    const root = mkdtempSync(join(tmpdir(), 'qd-clipath-'))
+    const home = join(root, 'home')
+    const dir = runnerDir(home)
+    const serverDir = join(root, 'server')
+    mkdirSync(dir, { recursive: true })
+    mkdirSync(serverDir)
+    writeFileSync(join(dir, 'launch.mjs'), '')
+    writeFileSync(join(serverDir, 'quarterdeck-cli.mjs'), '')
+    const cliPath = () => (existsSync(join(dir, 'cli-path')) ? readFileSync(join(dir, 'cli-path'), 'utf8') : null)
+    return { root, home, dir, serverDir, cliPath, cli: join(serverDir, 'quarterdeck-cli.mjs') }
+  }
+
+  it("records the CLI when the server uses the database the launcher's CLI opens", () => {
+    const t = setup()
+    try {
+      recordCliPath(t.serverDir, t.dir, {})
+      expect(t.cliPath()).toBe(t.cli)
+    } finally { rmSync(t.root, { recursive: true, force: true }) }
+  })
+
+  it('records it too when QUARTERDECK_DB names that same database', () => {
+    const t = setup()
+    try {
+      recordCliPath(t.serverDir, t.dir, { QUARTERDECK_DB: defaultDbPath({}, t.home) })
+      expect(t.cliPath()).toBe(t.cli)
+    } finally { rmSync(t.root, { recursive: true, force: true }) }
+  })
+
+  it("leaves cli-path alone when the server uses another database (a test's), so the launcher never runs that build on the person's database", () => {
+    for (const name of ['QUARTERDECK_DB', 'CONDUCTOR_DB']) {
+      const t = setup()
+      try {
+        writeFileSync(join(t.dir, 'cli-path'), 'C:/released/quarterdeck-cli.mjs')
+        recordCliPath(t.serverDir, t.dir, { [name]: join(t.root, 'test.sqlite') })
+        expect(t.cliPath()).toBe('C:/released/quarterdeck-cli.mjs')
+        rmSync(join(t.dir, 'cli-path'))
+        recordCliPath(t.serverDir, t.dir, { [name]: join(t.root, 'test.sqlite') })
+        expect(t.cliPath()).toBeNull()
+      } finally { rmSync(t.root, { recursive: true, force: true }) }
     }
   })
 })

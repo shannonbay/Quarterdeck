@@ -7,7 +7,8 @@
  * Everything is in a folder of its own under the system's temp folder: the database, the goals'
  * working directories, and the server's home folder. The home folder matters: at start-up the
  * server tells the standing session where its CLI is (`recordCliPath`, in `~/.quarterdeck/runner`),
- * and a test must never repoint a real standing session at a test build.
+ * and a test must never repoint a real standing session at a test build. recordCliPath already skips
+ * a server whose database isn't its home's; the home folder of its own is a second guard.
  */
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -49,7 +50,7 @@ export async function startLiveServer(): Promise<LiveServer> {
   const root = mkdtempSync(join(tmpdir(), 'quarterdeck-live-'))
   const home = join(root, 'home')
   const dbPath = join(root, 'tasks.db')
-  // A standing session's launch.mjs (never run), so recordCliPath writes its cli-path here at start-up
+  // A standing session's launch.mjs (never run), so recordCliPath would write its cli-path here at start-up if it didn't skip a test database
   const runner = join(home, '.quarterdeck', 'runner')
   mkdirSync(runner, { recursive: true })
   writeFileSync(join(runner, 'launch.mjs'), '// live test: never run\n')

@@ -238,7 +238,10 @@ async function firstChecks(goalId: string): Promise<{ name: string; result: stri
     if (w.last_checked_at !== null) continue
     if (w.kind === 'tool') {
       // Only a Claude Code session can call a connector: the one running goals makes the first call at its next pass
-      results.push({ name: w.name, result: `set; the session running goals calls ${w.tool} within a minute, and goal_detail says if that fails` })
+      const calls = w.steps
+        ? `runs ${w.steps.length} step${w.steps.length === 1 ? '' : 's'} (${w.steps.map((s) => s.tool.replace(/^mcp__.+__/, '')).join(', ')})`
+        : `calls ${w.tool}`
+      results.push({ name: w.name, result: `set; the session running goals ${calls} within a minute, and goal_detail says if that fails` })
       continue
     }
     const r = await checkCommandWatch(w.id)

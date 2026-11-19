@@ -331,6 +331,15 @@ describe('tool watches', () => {
   const SEARCH = 'mcp__claude_ai_Gmail__search_threads'
   const answer = (...ids: string[]) => JSON.stringify({ threads: ids.map((id) => ({ id })) })
 
+  it("names every step of a steps watch in the set-up answer, not only the first step's tool", async () => {
+    const steps = [
+      { tool: 'mcp__claude-in-chrome__tabs_create_mcp', pick: { tabId: { regex: 'Tab ID: (\\d+)' } } },
+      { tool: 'mcp__claude-in-chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+    ]
+    const r = await create_goal({ name: 'Page', objective: 'Watch a page', working_dir: tmpdir(), watches: { page: { steps, finally: { tool: 'mcp__claude-in-chrome__tabs_close_mcp', input: { tabId: '{{tabId}}' } } } } })
+    expect(r.watches).toEqual([{ name: 'page', result: 'set; the session running goals runs 2 steps (tabs_create_mcp, get_page_text) within a minute, and goal_detail says if that fails' }])
+  })
+
   it('goals_tick hands a due tool watch to the plugin, and watch_report queues a run for what is new', async () => {
     const { id } = await create_goal({ name: 'Mail', objective: 'Answer new mail', working_dir: tmpdir() })
     const r = await update_goal({ goal_id: id, watches: { mail: { tool: SEARCH, input: { query: 'is:unread' }, every_minutes: 1 } } })
