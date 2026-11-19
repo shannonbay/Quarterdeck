@@ -38,6 +38,8 @@ describe('memory index and recall', () => {
     const { brief } = await startRun(id)
     expect(brief.memory_index).toEqual([{ id: left.id, kind: 'fact', source: 'agent', start: expect.stringContaining('Alice is my manager') }])
     expect(brief.how_to_work.join('\n')).toMatch(/memory_index.*recall/)
+    // Memory is for what later runs need, not a log of this run (Flipper, Nov 2026: one skip list per run)
+    expect(brief.how_to_work.join('\n')).toMatch(/Don't remember what you checked, skipped or did this run/)
     const events = (await get_history({})).events.length
     const r = await recall({ memory_ids: [left.id] })
     expect(r.memory).toEqual([expect.objectContaining({ id: left.id, text: 'Alice is my manager, and she prefers short replies.' })])

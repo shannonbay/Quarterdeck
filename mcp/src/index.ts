@@ -181,7 +181,7 @@ const TOOLS = [
   },
   {
     name: 'remember',
-    description: "Save a fact, rule or preference to the goal's memory so future runs know it. Keep each one short and general.",
+    description: "Save a fact, rule or preference to the goal's memory so future runs know it: only what a later run needs and can find nowhere else, never a log of what this run checked or skipped (the end_run summary keeps that). Keep each one short and general, and forget the entry it replaces.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember,
   },
