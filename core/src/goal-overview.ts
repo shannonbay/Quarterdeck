@@ -8,7 +8,7 @@ import { createHash } from 'crypto'
 import type { Database } from './sqlite.js'
 import { compareTaskIds, deserializeTask, getEvents } from './queries.js'
 import { isProposal, asksPerson } from './gates.js'
-import { getOpenRun, getGoal, listGoals, listMemory, listRuns } from './goals.js'
+import { getOpenRun, getGoal, listGoals, listMemory, listRuns, purgeDate } from './goals.js'
 import { autonomyFor, isAttemptBlocked } from './goal-engine.js'
 import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
@@ -328,7 +328,14 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
       }
     })
   const standing = standingSession !== null && leaseHolder(db) === standingSession
-  return { goals, hold: getRunHold(db), ...(schemaOutdated(db) ? { outdated: true as const } : {}), ...(standing ? { standing: true as const } : {}) }
+  // Deleted goals, newest first, for the pane's "Recently deleted" (Restore / Delete permanently)
+  const deleted = listGoals(db, { deleted: 'only' })
+    .sort((a, b) => (b.goal.deleted_at ?? '').localeCompare(a.goal.deleted_at ?? ''))
+    .map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at!, purge_at: purgeDate(goal) }))
+  return {
+    goals, hold: getRunHold(db), ...(deleted.length ? { deleted } : {}),
+    ...(schemaOutdated(db) ? { outdated: true as const } : {}), ...(standing ? { standing: true as const } : {}),
+  }
 }
 
 export type Overview = ReturnType<typeof buildOverview>
