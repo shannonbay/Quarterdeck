@@ -376,9 +376,10 @@ export function decideItem(
     if ((isProposal(task) || asksPerson(task)) && active()) queuedRun = queueRunAfterDecision(db, planId)
   } else {
     rejectTask(db, planId, taskId, input.feedback ?? '')
-    // A one-off has no schedule to bring the next run: queue one to revise or drop the proposal
-    const goal = getGoal(db, planId)
-    if (isProposal(task) && goal?.one_off && goal.status === 'active') queuedRun = queueRun(db, planId)
+    // A rejected proposal queues a run so the feedback is acted on soon (redo the proposal or
+    // drop it), on every goal: a recurring one may have no schedule or watch event to bring the
+    // next run. It waits behind a running run, which has already read its brief
+    if (isProposal(task) && active()) queuedRun = queueRunAfterDecision(db, planId)
   }
   return { task: getTask(db, planId, taskId)!, queuedRun }
 }

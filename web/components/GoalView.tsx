@@ -260,7 +260,7 @@ function NeedsYou({ items, goalId, busy, call }: { items: Item[]; goalId: string
             {rejecting === i.id ? (
               <div className="space-y-2">
                 <textarea autoFocus value={feedback} onChange={(e) => setFeedback(e.target.value)} rows={2}
-                  placeholder="What should change? This becomes memory, so later runs learn from it."
+                  placeholder="What should change? This becomes memory, and the goal runs again to redo it."
                   className="w-full border border-amber-200 rounded-md px-2 py-1.5 text-sm bg-white resize-none focus:outline-none focus:ring-1 focus:ring-amber-400" />
                 <div className="flex gap-2">
                   <button disabled={busy !== null || !feedback.trim()} className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"

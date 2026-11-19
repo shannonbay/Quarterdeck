@@ -42,7 +42,7 @@ export const TOOLS = [
   },
   {
     name: 'reject_item',
-    description: "Rejects a Quarterdeck proposal with feedback; the feedback is saved to the goal's memory so later runs learn from it. The person is asked to confirm first.",
+    description: "Rejects a Quarterdeck proposal with feedback; the feedback is saved to the goal's memory and a run is queued to act on it (redo the proposal or drop it). The person is asked to confirm first.",
     inputSchema: { type: 'object', properties: { goal: GOAL, item_id: ITEM, feedback: { type: 'string', description: 'What should change.' } }, required: ['goal', 'item_id', 'feedback'] },
   },
   {
