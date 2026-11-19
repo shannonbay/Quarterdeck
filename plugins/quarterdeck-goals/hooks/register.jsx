@@ -1090,6 +1090,10 @@ async function registerRunnerAgent($) {
     prompt: RUNNER_PROMPT,
     // guard_check stays callable: the plugin calls it inside the run's loop (the guard refuses it to the agent)
     disallowedTools: [
+      // A run never publishes a page or starts agents of its own, and their definitions
+      // (with Agent's list of agent types) were about 15k of a run's 50k tokens (Nov 2026)
+      "Artifact",
+      "Agent",
       ...RUN_AGENT_DENIED_TOOLS.filter((t) => !t.endsWith("__guard_check")),
       "mcp__quarterdeck-goals__approve_item",
       "mcp__quarterdeck-goals__reject_item",
@@ -1424,18 +1428,18 @@ async function readSchedule($, text) {
   }
   return strict;
 }
-async function askSchedule($, goalName, suggestion, offerWatch = false) {
-  return await pickSchedule($, goalName, suggestion, { offerWatch });
+async function askSchedule($, goalName2, suggestion, offerWatch = false) {
+  return await pickSchedule($, goalName2, suggestion, { offerWatch });
 }
-async function pickSchedule($, goalName, suggestion, opts = {}) {
+async function pickSchedule($, goalName2, suggestion, opts = {}) {
   const watch = Boolean(opts.offerWatch) && offersWatch(suggestion);
   const suggested = SCHEDULE_CHOICES.find((c) => c.key === (watch ? "watch" : suggestion.choice));
-  const read2 = await ask($, goalName, suggestion, null, watch, opts.intro);
+  const read2 = await ask($, goalName2, suggestion, null, watch, opts.intro);
   if (!read2 && opts.cancelable) return null;
   if (read2 && "error" in read2) $.ui.toast(`Couldn't read "${read2.answer}", so it runs ${suggested.label.toLowerCase()}. ${read2.error} Change it with Reschedule.`);
   return read2 && "choice" in read2 ? read2.choice : suggested;
 }
-async function ask($, goalName, suggestion, current, watch = false, intro = "") {
+async function ask($, goalName2, suggestion, current, watch = false, intro = "") {
   const suggested = SCHEDULE_CHOICES.find((c) => c.key === suggestion.choice);
   const now = current ? `Now: ${scheduleLabel(current)}. ` : "";
   const what = suggestion.watch && suggestion.watch !== WATCH_FALLBACK ? ` (${suggestion.watch})` : "";
@@ -1443,7 +1447,7 @@ async function ask($, goalName, suggestion, current, watch = false, intro = "") 
   let answer = null;
   try {
     answer = await $.ui.ask(
-      `${intro}${now}How often should "${goalName}" run? ${why} Or type your own: 12h, 30d, weekly, cron 0 9 * * 1-5, or off.`,
+      `${intro}${now}How often should "${goalName2}" run? ${why} Or type your own: 12h, 30d, weekly, cron 0 9 * * 1-5, or off.`,
       choiceOptions(suggestion.choice, watch)
     );
   } catch {
@@ -1955,10 +1959,16 @@ function quietLine($, e, view, g, index, gap) {
   const showNote = note !== null && room >= noteWidth;
   const factsRoom = room - (showNote ? noteWidth : 0);
   return <Box key={g.id} marginBottom={gap}>
-      <Button key={`toggle-${g.id}`} plain label={`▸ ${g.name}`} hotkey={index < 9 ? String(index + 1) : void 0} onPress={() => void toggleExpanded($, g.id).then(() => refresh($))} />
+      {goalName($, e, g, `▸ ${g.name}`, index, () => void toggleExpanded($, g.id).then(() => refresh($)))}
       {showNote && statusNoteText($, e, `note-${g.id}`, note, `[${note.text}]`, " ")}
       {factsRoom >= 8 && <Text dimColor>{clip(facts, factsRoom)}</Text>}
     </Box>;
+}
+function goalName($, e, g, label, index, onPress) {
+  const { Button, Text } = parts($, e);
+  return <Button key={`toggle-${g.id}`} plain label={label} hotkey={index < 9 ? String(index + 1) : void 0} onPress={onPress}>
+      {g.status === "paused" ? <Text dimColor>{label}</Text> : void 0}
+    </Button>;
 }
 function statusNoteText($, e, key, note, text, lead = "") {
   const { Text } = parts($, e);
@@ -1981,7 +1991,7 @@ function goalCard($, e, view, g, index) {
     <Button key={`toggle-${g.id}`} plain label={`${isOpen ? "▾" : "▸"} ${g.name}`} hotkey={index < 9 ? String(index + 1) : void 0} onPress={toggle}>
               <Text color="cyan">{SPINNER_FRAMES[view.frame % SPINNER_FRAMES.length]} {g.name}</Text>
             </Button>
-  ) : <Button key={`toggle-${g.id}`} plain label={`${isOpen ? "▾" : "▸"} ${g.name}`} hotkey={index < 9 ? String(index + 1) : void 0} onPress={toggle} />}
+  ) : goalName($, e, g, `${isOpen ? "▾" : "▸"} ${g.name}`, index, toggle)}
         <Text dimColor> {g.status}</Text>
         {g.openRun && <Text color="cyan"> · run {g.openRun.status}</Text>}
       </Box>

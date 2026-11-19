@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.30.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.30.2, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -24535,7 +24535,7 @@ async function get_goal_brief(args) {
       "For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.",
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
       "When the goal needs a watch it does not have (or a changed one), propose it with propose_watch for the person to approve, rather than asking them how to watch for it.",
-      "Save anything worth knowing next time with remember. Finish with end_run and a short summary.",
+      "Remember only what a later run needs and can find nowhere else: the person's answers and preferences, lasting facts and rules, and the state of work still in progress. Keep one entry per thing: when it changes (a running total, a deal's state), forget the old entry in the same run. Don't remember what you checked, skipped or did this run (your end_run summary keeps that), nor what a watch already tracks (it never shows the same line twice). Every memory is read by every later run. Finish with end_run and a short summary.",
       "memory holds what fits in the brief; memory_index lists the rest (memory_omitted counts them all) by id and how each starts. When one looks relevant to what you are doing, read it in full with recall (several ids in one call).",
       "When the status you set in end_run describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue), attach a status_check so it updates by itself."
     ]
@@ -25358,7 +25358,7 @@ var TOOLS = [
   },
   {
     name: "remember",
-    description: "Save a fact, rule or preference to the goal's memory so future runs know it. Keep each one short and general.",
+    description: "Save a fact, rule or preference to the goal's memory so future runs know it: only what a later run needs and can find nowhere else, never a log of what this run checked or skipped (the end_run summary keeps that). Keep each one short and general, and forget the entry it replaces.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember
   },
