@@ -130,7 +130,8 @@ describe('goals API', () => {
     const data = await (await GETGoal(req('GET'), p(id))).json()
     expect(data.memory[0]).toMatchObject({ pinned: true, text: 'Never archive mail from the bank.' })
     await DELETEMemory(req('DELETE'), p(id, { memoryId: memory.id }))
-    expect((await (await GETGoal(req('GET'), p(id))).json()).memory).toEqual([])
+    // Forgetting keeps the memory, inactive, so it can be restored (#105)
+    expect((await (await GETGoal(req('GET'), p(id))).json()).memory).toMatchObject([{ id: memory.id, active: false, inactive_reason: 'forgotten' }])
     expect((await POSTMemory(req('POST', { kind: 'rule', text: ' ' }), p(id))).status).toBe(400)
   })
 
