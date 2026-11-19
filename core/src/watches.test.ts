@@ -663,6 +663,12 @@ describe('tool watches with steps', () => {
     expect(setWatch(db, 'g1', 'inbox2', { steps: s })).toMatchObject({ steps: s })
   })
 
+  it('keeps a step retry, shows it, and drops a retry of 1', () => {
+    const w = setWatch(db, 'g1', 'inbox3', { steps: [{ tool: NAV, retry: 1 }, { tool: TEXT, expect: 'Inbox', retry: 3 }] })
+    expect(w.steps).toEqual([{ tool: NAV }, { tool: TEXT, expect: 'Inbox', retry: 3 }])
+    expect(describeWatch(w)).toMatch(/expecting \/Inbox\/ \(up to 3 tries\)/)
+  })
+
   it('refuses a bad sequence', () => {
     const t = (spec: object) => () => setWatch(db, 'g1', 'x', spec as never)
     expect(t({ steps: [...steps(), ...steps(), ...steps()] })).toThrow(/at most 4/)
@@ -677,6 +683,9 @@ describe('tool watches with steps', () => {
     expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'a..b' } } }] })).toThrow(/json path/)
     expect(t({ steps: [{ tool: NAV, expect: '(' }] })).toThrow(/expect .* isn't a regular expression/)
     expect(t({ steps: [{ tool: NAV, expect: '' }] })).toThrow(/needs a regular expression/)
+    expect(t({ steps: [{ tool: NAV, retry: 0 }] })).toThrow(/whole number from 1 to 5/)
+    expect(t({ steps: [{ tool: NAV, retry: 6 }] })).toThrow(/whole number from 1 to 5/)
+    expect(t({ steps: [{ tool: NAV, retry: 2.5 }] })).toThrow(/whole number from 1 to 5/)
     expect(t({ steps: [{ tool: NAV, input: { id: '{{nope}}' } }] })).toThrow(/\{\{nope\}\}.*no earlier step/)
     expect(t({ steps: [{ tool: NAV, input: { id: '{{a}}' }, pick: { a: { json: 'x' } } }] })).toThrow(/no earlier step/)
     expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'x' } } }, { tool: TEXT, pick: { a: { json: 'y' } } }] })).toThrow(/twice/)

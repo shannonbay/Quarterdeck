@@ -23,6 +23,8 @@ import type { Watch, WatchCall, WatchEvent, WatchSpec, WatchStatusOutcome, Watch
 
 /** Calls in a watch's sequence. */
 export const WATCH_MAX_STEPS = 4
+/** The most tries a watch step may give with retry. */
+export const WATCH_MAX_TRIES = 5
 
 export const WATCH_TIMEOUT_S = 30
 /** Lines read from one check; more are ignored. */
@@ -196,6 +198,10 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
         try { new RegExp(s.expect) } catch { throw new Error(`The watch "${label}" has an expect in ${where} that isn't a regular expression: ${s.expect}`) }
         step.expect = s.expect
       }
+      if (s.retry !== undefined) {
+        if (!Number.isInteger(s.retry) || s.retry < 1 || s.retry > WATCH_MAX_TRIES) throw new Error(`The retry in ${where} of the watch "${label}" needs a whole number from 1 to ${WATCH_MAX_TRIES}.`)
+        if (s.retry > 1) step.retry = s.retry
+      }
       if (s.pick && Object.keys(s.pick).length) {
         step.pick = {}
         for (const [pname, how] of Object.entries(s.pick)) {
@@ -278,7 +284,7 @@ const JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/
 export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null }): string {
   if (w.kind === 'command') return w.command ?? ''
   if (w.steps?.length) {
-    const call = (c: WatchCall & { pick?: unknown; expect?: string }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}`
+    const call = (c: WatchCall & { pick?: unknown; expect?: string; retry?: number }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
     return `${w.steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${w.finally ? `; finally ${call(w.finally)}` : ''}${w.match ? ` (lines: ${w.match})` : ''}`
   }
   const input = Object.keys(w.tool_input).length ? ` ${JSON.stringify(w.tool_input)}` : ''

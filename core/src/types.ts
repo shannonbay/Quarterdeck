@@ -235,6 +235,8 @@ export interface WatchStep extends WatchCall {
   pick?: Record<string, { regex: string } | { json: string }>
   /** A regular expression this step's answer must match; an answer that doesn't is a failed check. */
   expect?: string
+  /** Tries in all (1 to 5): a call that errors, misses expect or a pick is made again after a short wait. Left out: one try. */
+  retry?: number
 }
 
 /** What a watch sets the goal's status to: the status text comes only from here, never from the output. */

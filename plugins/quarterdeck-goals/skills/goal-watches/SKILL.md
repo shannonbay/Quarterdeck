@@ -138,7 +138,7 @@ Some sources need two calls, and the second needs a value from the first (Claude
     { "tool": "mcp__claude-in-chrome__tabs_context_mcp", "input": { "createIfEmpty": true } },
     { "tool": "mcp__claude-in-chrome__tabs_create_mcp", "pick": { "tabId": { "regex": "Tab ID: ([0-9]+)" } } },
     { "tool": "mcp__claude-in-chrome__navigate", "input": { "tabId": "{{tabId}}", "url": "https://example.com/inbox" } },
-    { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" }, "expect": "Inbox" } ],
+    { "tool": "mcp__claude-in-chrome__get_page_text", "input": { "tabId": "{{tabId}}" }, "expect": "Inbox", "retry": 3 } ],
   "finally": { "tool": "mcp__claude-in-chrome__tabs_close_mcp", "input": { "tabId": "{{tabId}}" } },
   "match": "(.+)", "every_minutes": 15 }
 ```
@@ -149,7 +149,7 @@ Some sources need two calls, and the second needs a value from the first (Claude
 - The extension not connected, or a site-permission prompt nobody can answer, is a failed check, never "nothing new". A browser problem the tool answers as ordinary text (a lost tab group, a login page, "content not available") is not marked as an error, so it looks like "nothing new" unless the reading step gives `expect`, a regex its answer must match (text that is always on the page you mean, such as "Inbox"); an answer that doesn't match is a failed check naming the step and the pattern (the page text is left out of the error, since it is outside text). An empty result that matches `expect` is still a good check.
 - A picked number reaches the tool as a number when the input is exactly `"{{name}}"`.
 - The first step makes sure the session has a tab group: without one, `tabs_create_mcp` fails with `This session has no tab group of its own`, and a lost group does the same. When there is none, that call can open a Chrome window.
-- A slow page can leave `navigate` returning before the page loaded, so the failure shows up one step later, on the step that reads it (an `expect` on the reading step does not change that: the tool fails before it can match). The time limit covers the whole sequence, not each step.
+- `navigate` returns before the page has loaded, so the step that reads it can fail on a blank tab or read the previous page. Give that step `retry` (tries in all, 1 to 5, such as 3) with an `expect`: when the call errors, misses `expect` or misses a pick, it waits about 2 s and calls the same step again with the same picks. Only that step repeats, so a retry never opens a second tab; the last failure is reported with the number of tries, e.g. `(step 4, …, after 3 tries)`. The time limit (30 s) covers the whole sequence, retries and their waits included, not each step.
 - Create the tab yourself: `navigate` without a `tabId` reuses the first tab in the session's group, which `finally` would then close.
 - Each check opens a tab in the person's real browser: always give a `finally` that closes it.
 

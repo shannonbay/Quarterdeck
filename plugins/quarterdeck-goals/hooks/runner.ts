@@ -152,6 +152,8 @@ async function pass($: Engine): Promise<void> {
 export const WATCH_CALL_MS = 30_000
 /** The most of a tool's answer sent on: ids are near the start, and a huge answer isn't worth a watch. */
 const WATCH_TEXT_MAX = 60_000
+/** How long a step with retry waits before calling again (a page still loading); the waits come out of WATCH_CALL_MS. */
+export const WATCH_RETRY_MS = 2_000
 
 /**
  * Checks one tool watch: calls its tool (a connector's search, say) with nobody
@@ -165,31 +167,57 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   let timedOut = false
   let pickMissed = false
   let at = 0
+  let tried = 1
   const run = async (): Promise<{ text: string } | { error: string }> => {
     let last = ''
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i]
       at = i
-      const where = watch.steps ? ` (step ${i + 1}, ${step.tool})` : ''
       let input: Record<string, unknown>
-      try { input = substitute(step.input ?? {}, values) as Record<string, unknown> } catch (err) { return { error: `${err instanceof Error ? err.message : String(err)}${where}` } }
-      const answer = await $.tool.call({ tool: step.tool, ...input } as never)
-      if (timedOut) return { error: 'timeout' }
-      if (answer.deny !== undefined) return { error: `the call couldn't run${where}: ${answer.deny}` }
-      if (answer.isError === true) return { error: `${resultText(answer).slice(0, 500)}${where}` }
-      last = resultText(answer)
-      if (step.expect !== undefined && !new RegExp(step.expect).test(last)) return { error: `step ${i + 1} (${step.tool}) answered something other than expected (/${step.expect}/)` }
-      for (const [name, how] of Object.entries(step.pick ?? {})) {
-        const found = pickValue(last, how)
-        if (found === null) { pickMissed = true; return { error: `step ${i + 1} (${step.tool}) found nothing for its pick "${name}"` } }
-        values[name] = found
+      try { input = substitute(step.input ?? {}, values) as Record<string, unknown> } catch (err) { return { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${i + 1}, ${step.tool})` : ''}` } }
+      // A step with retry calls again, after a short wait, while it errors, misses its expect or a pick; only this step repeats, so earlier picks (a tab) stay
+      const tries = step.retry ?? 1
+      for (let t = 1; ; t++) {
+        tried = t
+        const after = t > 1 ? `, after ${t} tries` : ''
+        const where = watch.steps ? ` (step ${i + 1}, ${step.tool}${after})` : ''
+        const failed = async (error: string): Promise<{ error: string } | null> => {
+          if (t >= tries) return { error }
+          await $.clock.sleep(WATCH_RETRY_MS)
+          return timedOut ? { error: 'timeout' } : null
+        }
+        const answer = await $.tool.call({ tool: step.tool, ...input } as never)
+        if (timedOut) return { error: 'timeout' }
+        if (answer.deny !== undefined) return { error: `the call couldn't run${where}: ${answer.deny}` }
+        if (answer.isError === true) { const out = await failed(`${resultText(answer).slice(0, 500)}${where}`); if (out) return out; continue }
+        last = resultText(answer)
+        if (step.expect !== undefined && !new RegExp(step.expect).test(last)) {
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) answered something other than expected (/${step.expect}/)`)
+          if (out) return out
+          continue
+        }
+        const found: Record<string, string> = {}
+        let missed: string | null = null
+        for (const [name, how] of Object.entries(step.pick ?? {})) {
+          const value = pickValue(last, how)
+          if (value === null) { missed = name; break }
+          found[name] = value
+        }
+        if (missed !== null) {
+          pickMissed = true
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) found nothing for its pick "${missed}"`)
+          if (out) return out
+          continue
+        }
+        Object.assign(values, found)
+        break
       }
     }
     return { text: last.slice(0, WATCH_TEXT_MAX) }
   }
   try {
     const answer = await Promise.race([run(), $.clock.sleep(WATCH_CALL_MS).then(() => 'timeout' as const)])
-    if (answer === 'timeout') { timedOut = true; report = { error: `${watch.steps ? `step ${at + 1} (${steps[at].tool})` : watch.tool} didn't finish within ${WATCH_CALL_MS / 1000} s` } }
+    if (answer === 'timeout') { timedOut = true; report = { error: `${watch.steps ? `step ${at + 1} (${steps[at].tool}${tried > 1 ? `, after ${tried} tries` : ''})` : watch.tool} didn't finish within ${WATCH_CALL_MS / 1000} s` } }
     else report = answer
   } catch (err) {
     report = { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${at + 1}, ${steps[at].tool})` : ''}` }
