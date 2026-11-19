@@ -524,15 +524,20 @@ export function splitGoalArgs(args: string): { name: string | null; objective: s
 export function discussPrompt(g: GoalCard, run?: GoalCard['runs'][number], question?: string): string {
   const how = 'Read its settings, items, runs and memory with goal_detail. If we agree on changes, make them with update_goal or set_schedule: they ask me to confirm.'
   const asked = question?.trim()
-  if (!run) {
-    return asked
-      ? `Let's talk about my goal "${g.name}" (id ${g.id}). ${how}\n\nMy question: ${asked}`
-      : `Let's talk about my goal "${g.name}" (id ${g.id}). ${how} What's working, what isn't, and what would you change?`
-  }
-  const when = `${run.status} (${run.trigger}), ${run.endedAt ?? run.startedAt}`
-  const transcript = run.agentId
-    ? ` Its agent was ${run.agentId}: its transcript (agent-${run.agentId}.jsonl, under ~/.claude/projects) shows what it actually did.`
+  const whenOf = (r: GoalCard['runs'][number]) => `${r.status} (${r.trigger}), ${r.endedAt ?? r.startedAt}`
+  const transcriptOf = (r: GoalCard['runs'][number]) => r.agentId
+    ? ` Its agent was ${r.agentId}: its transcript (agent-${r.agentId}.jsonl, under ~/.claude/projects) shows what it actually did.`
     : ''
+  if (!run) {
+    // The pane's expanded card has no run history, so the goal prompt carries the last run
+    const last = lastRun(g)
+    const lastText = last ? ` Its last run: ${whenOf(last)}. Summary: ${last.summary ?? '(none)'}.${transcriptOf(last)}` : ''
+    return asked
+      ? `Let's talk about my goal "${g.name}" (id ${g.id}).${lastText} ${how}\n\nMy question: ${asked}`
+      : `Let's talk about my goal "${g.name}" (id ${g.id}).${lastText} ${how} What's working, what isn't, and what would you change?`
+  }
+  const when = whenOf(run)
+  const transcript = transcriptOf(run)
   if (asked) {
     return `Let's talk about this run of my goal "${g.name}" (goal ${g.id}, run ${run.id}): ${when}.\n\nIts summary: ${run.summary ?? '(none)'}\n\n${`${transcript} ${how}`.trim()}\n\nMy question: ${asked}`
   }

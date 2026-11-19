@@ -161,7 +161,7 @@ test("Reject opens a feedback box and shows Quarterdeck's error", async ($, on) 
   await ui.unmount()
 })
 
-test('expanding a goal shows open items, runs and memory; memory delete asks first', async ($, on) => {
+test('expanding a goal shows open items and memory but no run history; memory delete asks first', async ($, on) => {
   engine(on)
   const fake = fakeQuarterdeck(on, [
     goal({
@@ -181,7 +181,8 @@ test('expanding a goal shows open items, runs and memory; memory delete asks fir
     expect(await ui.find({ type: 'Text', text: /Invoice from Acme/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /Invoice from Acme/ }))?.text).not.toContain('blocked')
     expect((await ui.find({ type: 'Text', text: /Fix CI on PR 31/ }))?.text).toContain('blocked: out of attempts')
-    expect((await ui.find({ type: 'Text', text: /Triaged 4 emails/ }))?.text).toContain('schedule')
+    expect(await ui.find({ type: 'Text', text: /Triaged 4 emails/ })).toBeUndefined() // run history is on the goal page
+    expect(await ui.find({ key: 'run-row-r1' })).toBeUndefined()
     expect(await ui.find({ type: 'Text', text: /Alice likes short replies/ })).toBeDefined()
     expect((await ui.find({ type: 'Link', text: /Open in browser/ }))?.props.href).toBe('http://localhost:3000/goals/g1')
     await ui.press({ key: 'toggle-g1' }) // collapse again for the next surface
@@ -475,7 +476,11 @@ test("an expanded goal shows its model; Change… sets the one picked", async ($
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
-  expect(await ui.find({ type: 'Text', text: "Model: the session's model · " })).toBeDefined()
+  const label = await ui.find({ type: 'Text', text: "Model: the session's model · " })
+  expect(label).toBeDefined()
+  // Drawn as a setting in the theme's normal text colour, not a dimmed footnote
+  expect(label?.props.dimColor).toBeUndefined()
+  expect(label?.props.color).toBeUndefined()
   await ui.press({ key: 'model-change-g1' })
   expect(asked[0]).toMatch(/^Which model should "Inbox" run on\? Now: the session's model\./)
   expect(fake.of('update_goal').map((c) => c.input)).toEqual([{ goal_id: 'g1', model: 'haiku' }])
