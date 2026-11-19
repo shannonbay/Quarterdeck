@@ -438,6 +438,51 @@ test('a steps watch step with retry that errors every time fails with the number
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "Can't interact with browser-internal URLs (step 2, mcp__chrome__get_page_text, after 3 tries)", cleanup: 'ok' }])
 })
 
+test('a steps watch step with retry whose call is refused twice (a tool that threw) passes on its third try', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return (reads < 3 ? { deny: "Can't interact with browser-internal or unparseable URLs. Navigate to a web page first." } : { result: 'Inbox: Anna' }) as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Inbox: Anna', cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry whose call is refused every time fails with the number of tries', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return { deny: 'Navigate to a web page first.' } as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "the call couldn't run (step 2, mcp__chrome__get_page_text, after 3 tries): Navigate to a web page first.", cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry whose tool throws every time fails with the number of tries', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; throw new Error('Navigate to a web page first.') })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: expect.stringMatching(/ \(step 2, mcp__chrome__get_page_text, after 3 tries\)$/), cleanup: 'ok' }])
+})
+
 test('a steps watch step whose retries run past the time limit stops at it, and finally still runs', async ($, on) => {
   const { clock } = engine(on)
   settle = () => clock.settle()

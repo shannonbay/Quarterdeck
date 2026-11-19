@@ -186,9 +186,17 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
           await $.clock.sleep(WATCH_RETRY_MS)
           return timedOut ? { error: 'timeout' } : null
         }
-        const answer = await $.tool.call({ tool: step.tool, ...input } as never)
+        // A tool that throws (Claude in Chrome reading a tab before navigate has committed) comes back as a deny, which $.tool.call
+        // can't tell from a permission refusal: on a step with retry both go round again (a refusal just fails on every try)
+        let answer: Awaited<ReturnType<typeof $.tool.call>>
+        try { answer = await $.tool.call({ tool: step.tool, ...input } as never) } catch (err) {
+          if (timedOut) return { error: 'timeout' }
+          const out = await failed(`${err instanceof Error ? err.message : String(err)}${where}`)
+          if (out) return out
+          continue
+        }
         if (timedOut) return { error: 'timeout' }
-        if (answer.deny !== undefined) return { error: `the call couldn't run${where}: ${answer.deny}` }
+        if (answer.deny !== undefined) { const out = await failed(`the call couldn't run${where}: ${answer.deny}`); if (out) return out; continue }
         if (answer.isError === true) { const out = await failed(`${resultText(answer).slice(0, 500)}${where}`); if (out) return out; continue }
         last = resultText(answer)
         if (step.expect !== undefined && !new RegExp(step.expect).test(last)) {
@@ -241,7 +249,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
         $.clock.sleep(WATCH_FINALLY_MS).then(() => 'timeout' as const),
       ])
       if (answer === 'timeout') note = `finally ${watch.finally.tool} didn't finish within ${WATCH_FINALLY_MS / 1000} s`
-      else if (answer.deny !== undefined) note = `finally ${watch.finally.tool} was refused: ${answer.deny}`
+      else if (answer.deny !== undefined) note = `finally ${watch.finally.tool} couldn't run: ${answer.deny}`
       else if (answer.isError === true) note = `finally ${watch.finally.tool} failed: ${resultText(answer).slice(0, 200)}`
       if (note) cleanup = 'failed'
     } catch (err) {
