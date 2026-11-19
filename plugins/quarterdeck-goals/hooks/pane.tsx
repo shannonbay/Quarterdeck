@@ -758,8 +758,10 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
         )
       })}
 
-      {g.inactiveMemory.length > 0 && <Text bold>Inactive memory</Text>}
-      {g.inactiveMemory.map((m) => (
+      {g.inactiveMemory.length > 0 && (
+        <Button key={`inactive-memory-toggle-${g.id}`} plain label={`${view.shown.includes(`inactive-memory:${g.id}`) ? '▾' : '▸'} Inactive memory (${g.inactiveMemory.length})`} onPress={() => void toggleExpanded($, `inactive-memory:${g.id}`)} />
+      )}
+      {view.shown.includes(`inactive-memory:${g.id}`) && g.inactiveMemory.map((m) => (
         // Forgotten, merged, retired or rewritten: kept so it can come back (#105)
         <Box key={`inactive-memory-${m.id}`}>
           <Text dimColor>  [{m.kind}] {m.text} ({INACTIVE_REASON[m.reason ?? ''] ?? 'inactive'}{m.inactiveAt ? ` ${m.inactiveAt.slice(0, 10)}` : ''}) </Text>

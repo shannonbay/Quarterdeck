@@ -195,6 +195,7 @@ test('expanding a goal shows open items and memory but no run history; memory de
   expect(fake.of('delete_memory')).toEqual([])
   await ui.press({ key: 'forget-yes-m1' })
   expect(fake.of('delete_memory').map((c) => c.input)).toEqual([{ goal_id: 'g1', memory_id: 'm1' }])
+  await ui.press({ key: 'inactive-memory-toggle-g1' })
   expect((await ui.find({ type: 'Text', text: /Alice likes short replies/ }))?.text).toContain('forgotten')
   await ui.unmount()
 })
@@ -212,11 +213,13 @@ test('Inactive memory lists forgotten and merged memory with why; Restore brings
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
-  expect(await ui.find({ type: 'Text', text: 'Inactive memory' })).toBeDefined()
+  // Collapsed until its arrow is pressed
+  expect(await ui.find({ type: 'Text', text: /Archive newsletters/ })).toBeUndefined()
+  await ui.press({ key: 'inactive-memory-toggle-g1' })
   expect((await ui.find({ type: 'Text', text: /Archive newsletters/ }))?.text).toContain('merged 2026-11-06')
   await ui.press({ key: 'forget-m1' })
   await ui.press({ key: 'forget-yes-m1' })
-  expect((await ui.find({ type: 'Text', text: /Alice is my manager/ }))?.text).toContain('forgotten')
+  expect((await ui.find({ type: 'Text', text: /Alice is my manager/ }))?.text).toContain('forgotten') // still open
   await ui.press({ key: 'restore-memory-m2' })
   expect(fake.of('restore_memory').map((c) => c.input)).toEqual([{ goal_id: 'g1', memory_id: 'm2' }])
   expect((await ui.find({ type: 'Text', text: /Archive newsletters/ }))?.text).not.toContain('merged')
