@@ -57,10 +57,12 @@ export const OWN_TOOL_RULES = ['mcp__plugin_quarterdeck-goals_quarterdeck', 'mcp
  * this size, so it goes on in the same chat in the Claude app instead of adding
  * one each restart (tested Nov 2026: same id, same Remote Control chat, and
  * goal runs as before). Past it, a new session, so one doesn't open on weeks of
- * history. Runs are subagents with transcripts of their own, so the session's
- * grows mainly with what the person says to it.
+ * history. Runs are subagents with transcripts of their own, but each finished
+ * run's report comes back to the session as a turn (#111), so its transcript
+ * grows with every run, and every later turn re-reads it: kept small, since a
+ * fresh chat costs less than carrying a long one.
  */
-export const RESUME_MAX_BYTES = 2_000_000
+export const RESUME_MAX_BYTES = 300_000
 /** How long a resumed session must stay up to count as resumed; one gone by then is replaced by a new session. */
 const RESUME_SETTLE_MS = 5_000
 
