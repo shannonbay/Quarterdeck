@@ -361,7 +361,11 @@ export function engine(on: On, opts: { answer?: string; answers?: string[]; guar
   const agents: { id: string; description: string; type: string; status: string }[] = []
   const spawned: { prompt: string; subagentType?: string; cwd?: string; model?: string }[] = []
   const stopped: string[] = []
-  on('agent.register', (_, e) => ({ value: { agent: `quarterdeck-goals:${e.name}` } }))
+  const registered: { name: string; disallowedTools?: string[] }[] = []
+  on('agent.register', (_, e) => {
+    registered.push({ name: e.name, ...(e.disallowedTools !== undefined && { disallowedTools: [...e.disallowedTools] }) })
+    return { value: { agent: `quarterdeck-goals:${e.name}` } }
+  })
   on('agent.list', () => ({ value: agents.map((a) => ({ ...a })) }) as never)
   on('agent.spawn', (_, e) => {
     const agentId = `agent-${spawned.length + 1}`
@@ -377,7 +381,7 @@ export function engine(on: On, opts: { answer?: string; answers?: string[]; guar
     return { result: { message: `stopped ${id}` } } as never
   })
   return {
-    toasts, notifications, pushes, statuses, asked, choices, clock, agents, spawned, stopped, prompts, box,
+    toasts, notifications, pushes, statuses, asked, choices, clock, agents, registered, spawned, stopped, prompts, box,
     /** Loads or unloads the guard plugin (its status tool). */
     setGuarded: (on: boolean) => {
       tools = on ? [GUARD] : []
