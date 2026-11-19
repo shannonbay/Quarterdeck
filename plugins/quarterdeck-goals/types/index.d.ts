@@ -18,6 +18,9 @@ export type Run = {
 }
 
 /** One memory entry the goal's runs read. */
+/** A memory that was forgotten, merged, retired or rewritten (#105): kept so the person can restore it. */
+export type InactiveMemory = { id: string; kind: string; text: string; reason: string | null; inactiveAt: string | null; replacedBy: string | null }
+
 export type Memory = {
   id: string; kind: string; text: string; pinned: boolean
   /** What its run had read before writing it: briefs that hand it out mark their runs untrusted until the person trusts it. */
@@ -78,6 +81,8 @@ export type GoalCard = {
   trend: number[]
   /** Most recent first. */
   memory: Memory[]
+  /** Missing from a server older than memory recovery. */
+  inactiveMemory: InactiveMemory[]
   /** Categories approved every time lately: candidates for 'auto'. */
   suggestions: { category: string; approvedInARow: number }[]
   /** Checks whose new lines start a run (empty on a card: `watchCount` has how many). */

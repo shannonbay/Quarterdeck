@@ -50,6 +50,7 @@ type FakeGoal = {
   open_items: Item[]
   health: { passed: boolean; value: number | null }[]
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
+  inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
   suggestions: { category: string; approved_in_a_row: number }[]
   status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null } | null
   watches?: { name: string; every_minutes: number; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
@@ -85,7 +86,7 @@ export function question(id: string, title: string, notes?: string): Item {
 export type Call = { tool: string; input: Record<string, unknown> }
 
 const TOOLS = [
-  'goals_overview', 'decide_item', 'run_goal', 'cancel_run', 'set_goal_status', 'delete_memory', 'trust_memory', 'create_goal',
+  'goals_overview', 'decide_item', 'run_goal', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
   'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item',
 ] as const
 
@@ -154,10 +155,20 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
           g!.status = String(input.status)
           version++
           return ok({ goal_id: g!.id, status: g!.status }) as never
-        case 'delete_memory':
+        case 'delete_memory': {
+          const gone = g!.memory.find((x) => x.id === input.memory_id)
           g!.memory = g!.memory.filter((x) => x.id !== input.memory_id)
+          if (gone) g!.inactive_memory = [{ id: gone.id, kind: gone.kind, text: gone.text, reason: 'forgotten', inactive_at: '2026-11-07T09:00:00Z' }, ...(g!.inactive_memory ?? [])]
           version++
           return ok({ deleted: input.memory_id }) as never
+        }
+        case 'restore_memory': {
+          const back = (g!.inactive_memory ?? []).find((x) => x.id === input.memory_id)
+          g!.inactive_memory = (g!.inactive_memory ?? []).filter((x) => x.id !== input.memory_id)
+          if (back) g!.memory = [...g!.memory, { id: back.id, kind: back.kind, text: back.text, pinned: false }]
+          version++
+          return ok({ restored: input.memory_id }) as never
+        }
         case 'trust_memory':
           g!.memory = g!.memory.map((x) => x.id === input.memory_id ? { ...x, untrusted: null } : x)
           version++

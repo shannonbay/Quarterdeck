@@ -171,6 +171,11 @@ export async function deleteMemory($: Engine, goalId: string, memoryId: string):
   await call($, 'delete_memory', { goal_id: goalId, memory_id: memoryId })
 }
 
+/** Brings back a memory that was forgotten, merged, retired or rewritten (#105). */
+export async function restoreMemory($: Engine, goalId: string, memoryId: string): Promise<void> {
+  await call($, 'restore_memory', { goal_id: goalId, memory_id: memoryId })
+}
+
 /** Clears the untrusted mark on a memory a run wrote after reading outside content. */
 export async function trustMemory($: Engine, goalId: string, memoryId: string): Promise<void> {
   await call($, 'trust_memory', { goal_id: goalId, memory_id: memoryId })
