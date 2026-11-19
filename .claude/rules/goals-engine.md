@@ -42,7 +42,7 @@ The spec's Memory section has the details and the "which memory wins" rules. In 
 
 Claude creates goals with the plugin tool `new_goal` (`createNewGoal`, shared with `/goal-new <objective>`): the schedule question is the person's yes, so dismissing it creates nothing (`pickSchedule` `cancelable`), and it sets only what `/goal-new` does (everything stays `propose`); the server's `create_goal`, which takes autonomy, tool maps and watches, stays person-only. `/goal-new` and the pane's Set schedule suggest a schedule (Haiku via `$.model.complete`, keyword rules as fallback, `plugins/quarterdeck-goals/hooks/schedule.ts`). A goal's instructions are copied from its template at creation, so existing goals need `update_goal` to pick up template changes.
 
-**One-off goals** (`goals.one_off`): `endRun` retires one whose run leaves nothing open (`finishIfDone`), so "done" is `status 'retired'` with `one_off`. The overview still lists the newest 10 done one-offs; `run_goal` (Run again) revives one (`reviveIfDone`); rejecting a one-off's proposal queues a run to revise it.
+**One-off goals** (`goals.one_off`): `endRun` retires one whose run leaves nothing open (`finishIfDone`), so "done" is `status 'retired'` with `one_off`. The overview still lists the newest 10 done one-offs; `run_goal` (Run again) revives one (`reviveIfDone`); rejecting a proposal on any active goal (one-off or recurring) queues a run with `queueRunAfterDecision` to revise or drop it.
 
 ## Discuss and change (`core/src/goal-changes.ts`)
 

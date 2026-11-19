@@ -211,9 +211,34 @@ describe('decideItem', () => {
   it('rejecting saves the feedback as goal memory', () => {
     addItem(db, 'g1', null, { goal: 'Reply to Bob', action: { category: 'email.send', summary: 'Send reply' } })
     const r = decideItem(db, 'g1', '1', { decision: 'reject', feedback: 'too formal' })
-    expect(r.queuedRun).toBeNull()
     expect(getTask(db, 'g1', '1')!.review_requested_at).toBeNull()
     expect(listMemory(db, 'g1').map((m) => m.text)).toContain('Feedback on "Reply to Bob": too formal')
+    // A recurring goal runs again to act on the feedback, and the brief shows it
+    expect(r.queuedRun).toMatchObject({ status: 'queued', trigger: 'manual' })
+    expect(buildBrief(db, 'g1', r.queuedRun!.id).decisions_since_last_run).toEqual([
+      expect.objectContaining({ item: '1', decision: 'rejected', feedback: 'too formal', action: expect.objectContaining({ category: 'email.send' }) }),
+    ])
+  })
+
+  it('a rejection during a run queues a run after it, not the run already going', async () => {
+    const going = claimRun(db, 'g1', { holder: 'A' })!
+    const p = addItem(db, 'g1', going.run_id, { goal: 'Reply to Bob', action: { category: 'email.send', summary: 'Send reply' } }).task
+    const q = addItem(db, 'g1', going.run_id, { goal: 'Reply to Ann', action: { category: 'email.send', summary: 'Send reply' } }).task
+    const rejected = decideItem(db, 'g1', p.id, { decision: 'reject', feedback: 'shorter' }).queuedRun!
+    expect(rejected).toMatchObject({ status: 'queued', trigger: 'manual' })
+    expect(rejected.id).not.toBe(going.run_id)
+    // A second decision rides on the same queued run
+    expect(decideItem(db, 'g1', q.id, { decision: 'reject', feedback: 'warmer' }).queuedRun!.id).toBe(rejected.id)
+    expect((await schedulerPass(db, { holder: 'A' })).claimed).toEqual([])
+    updateRun(db, going.run_id, { status: 'completed', ended_at: new Date().toISOString() })
+    expect((await schedulerPass(db, { holder: 'A' })).claimed.map((c) => c.run_id)).toEqual([rejected.id])
+  })
+
+  it('a rejection on a paused goal queues no run', () => {
+    addItem(db, 'g1', null, { goal: 'Reply to Bob', action: { category: 'email.send', summary: 'Send reply' } })
+    updateGoal(db, 'g1', { status: 'paused' })
+    expect(decideItem(db, 'g1', '1', { decision: 'reject', feedback: 'too formal' }).queuedRun).toBeNull()
+    expect(listRuns(db, 'g1').filter((r) => r.status === 'queued')).toEqual([])
   })
 
   it('refuses an unknown item', () => {

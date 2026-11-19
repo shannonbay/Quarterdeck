@@ -525,7 +525,7 @@ function proposalRow($: Engine, e: E, view: View, g: GoalCard, item: GoalCard['n
       {shownItem.notes && dimLine('notes', `  ${shownItem.notes}`)}
       {view.open === key && Input ? (
         <Box flexDirection="column">
-          <Input key={`feedback-${key}`} label="What should change? (saved to the goal's memory)" submitLabel="Send back" autoFocus onSubmit={sendBack} />
+          <Input key={`feedback-${key}`} label="What should change? (saved to the goal's memory; the goal runs again to redo it)" submitLabel="Send back" autoFocus onSubmit={sendBack} />
           {action($, e, { key: `cancel-${key}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
         </Box>
       ) : (
