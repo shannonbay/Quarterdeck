@@ -335,6 +335,23 @@ test('a steps watch whose finally needs a picked tab that was never picked repor
   expect(closed).toHaveLength(0)
 })
 
+test('a steps watch whose first step failed opened no tab: its clean-up is not unrunnable and adds no note', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'Browser extension is not connected', isError: true }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [{ tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } }],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'Browser extension is not connected (step 1, mcp__chrome__navigate)', cleanup: 'ok' }])
+})
+
 test('a steps watch whose call throws names the step, and a failed finally after a good read adds a note to the text', async ($, on) => {
   const { clock } = engine(on)
   settle = () => clock.settle()

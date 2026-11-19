@@ -96,6 +96,13 @@ describe('recordWatchLines', () => {
     expect(getWatch(db, w.id)).toMatchObject({ last_error: null, fail_count: 0 })
   })
 
+  it('a long error keeps its start, where the cause is named', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+    const error = 'Browser extension is not connected. ' + 'x'.repeat(600)
+    expect(recordWatchLines(db, w.id, { error }).error).toBe(error.slice(0, 500))
+    expect(getWatch(db, w.id)!.last_error).toMatch(/^Browser extension is not connected/)
+  })
+
   it('remembers a capped number of lines, the latest check first', () => {
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
     const batch = (n: number) => Array.from({ length: WATCH_MAX_LINES }, (_, i) => `${n}-${i}`)
@@ -717,6 +724,16 @@ describe('a steps watch whose clean-up keeps failing', () => {
     reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
     reportToolWatch(db, w.id, { text: 'a', cleanup: 'ok' })
     expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0 })
+  })
+
+  it('a failed first step that opened no tab is a failed check, not a stop, and the watch recovers', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { error: 'Browser extension is not connected (step 1, mcp__chrome__read)', cleanup: 'ok' })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(false)
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0, fail_count: 1 })
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toHaveLength(1)
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'ok' })
+    expect(getWatch(db, w.id)).toMatchObject({ last_error: null, fail_count: 0 })
   })
 
   it('stops at once when the clean-up could not run, even after a failed check', () => {

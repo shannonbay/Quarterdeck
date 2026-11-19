@@ -342,7 +342,7 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
   if (!watch) throw new Error(`Watch ${watchId} not found`)
   const at = now.toISOString()
   if ('error' in result) {
-    const error = result.error.trim().slice(-500) || 'The check failed.'
+    const error = result.error.trim().slice(0, 500) || 'The check failed.'
     db.prepare('UPDATE goal_watches SET last_checked_at = ?, last_error = ?, fail_count = fail_count + 1 WHERE id = ?').run(at, error, watchId)
     return { baseline: false, lines: 0, fresh: [], error }
   }
@@ -485,7 +485,7 @@ export function reportToolWatch(db: Database, watchId: string, result: ({ text: 
   if (watchStopped({ cleanup_failures: failures })) { db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(WATCH_CLEANUP_STOPPED, watchId); return { ...checked, error: WATCH_CLEANUP_STOPPED } }
   if ('error' in result) return checked
   // A good read with a failed clean-up: the text counts, the note shows why (a tab left open), and it isn't a failed check
-  if (result.note) db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(result.note.trim().slice(-500), watchId)
+  if (result.note) db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(result.note.trim().slice(0, 500), watchId)
   return checked
 }
 

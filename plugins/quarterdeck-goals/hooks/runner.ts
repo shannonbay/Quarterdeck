@@ -163,6 +163,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
   const values: Record<string, string> = {}
   let report: ({ text: string; note?: string } | { error: string }) & { cleanup?: 'ok' | 'failed' | 'unrunnable' }
   let timedOut = false
+  let pickMissed = false
   let at = 0
   const run = async (): Promise<{ text: string } | { error: string }> => {
     let last = ''
@@ -180,7 +181,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
       if (step.expect !== undefined && !new RegExp(step.expect).test(last)) return { error: `step ${i + 1} (${step.tool}) answered something other than expected (/${step.expect}/)` }
       for (const [name, how] of Object.entries(step.pick ?? {})) {
         const found = pickValue(last, how)
-        if (found === null) return { error: `step ${i + 1} (${step.tool}) found nothing for its pick "${name}"` }
+        if (found === null) { pickMissed = true; return { error: `step ${i + 1} (${step.tool}) found nothing for its pick "${name}"` } }
         values[name] = found
       }
     }
@@ -199,9 +200,11 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
     let cleanup: 'ok' | 'failed' | 'unrunnable' = 'ok'
     let input: Record<string, unknown> | null = null
     try { input = substitute(watch.finally.input ?? {}, values) as Record<string, unknown> } catch (err) {
-      // A pick found nothing, so the call has no tab to close: the tab may still be open
-      cleanup = 'unrunnable'
-      note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
+      // Only a pick that found nothing may have left a tab open. If an earlier step failed, nothing was opened: no note, and it doesn't count
+      if (pickMissed) {
+        cleanup = 'unrunnable'
+        note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
+      }
     }
     if (input) try {
       const answer = await Promise.race([
