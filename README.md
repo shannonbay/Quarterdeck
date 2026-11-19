@@ -106,7 +106,7 @@ The tools for building plans by hand (`create_plan`, `provision_tasks`, `next_ta
 | `end_run` | Finish a run with a summary for the next one |
 | `run_goal` | Queue a run now |
 
-The plugins also use `goals_overview`, `goals_tick` (one scheduler pass), `decide_item`, `cancel_run`, `set_goal_status`, `create_goal`, `delete_memory`, `attach_agent`, `fail_run` and `guard_check`. The guard plugin refuses the person's actions among them (approving, cancelling, pausing...) to agents and to Claude.
+The plugins also use `goals_overview`, `goals_tick` (one scheduler pass), `decide_item`, `cancel_run`, `set_goal_status`, `create_goal`, `delete_memory`, `restore_goal`, `purge_goal`, `attach_agent`, `fail_run` and `guard_check`. The guard plugin refuses the person's actions among them (approving, cancelling, pausing...) to agents and to Claude.
 
 **Goal items**
 
@@ -272,6 +272,7 @@ The packages use Vitest with `QUARTERDECK_DB=:memory:` so tests are isolated and
 | `QUARTERDECK_TOOLS` | goals | MCP server: `all` also lists the plan tools (hidden by default) |
 | `QUARTERDECK_REQUIRE_DECOMPOSE` | off | MCP server, plan tools: `1` blocks activating a task with no sub-tasks unless `state.atomic` is true |
 | `QUARTERDECK_STRICT_COMPLETE` | off | MCP server, plan tools: `1` blocks completing a task while any child is unresolved (otherwise a warning) |
+| `QUARTERDECK_DELETED_RETENTION_DAYS` | 30 | MCP server: days a deleted goal can be restored before the scheduler erases it for good; `0` keeps deleted goals until you delete them permanently |
 | `QUARTERDECK_ALLOWED_HOSTS` | — | Web server: extra `host:port` values to accept besides localhost (comma-separated) |
 
 The MCP server gets Claude Code's environment, so set its variables where Claude Code starts, or under `env` in `~/.claude/settings.json`.
