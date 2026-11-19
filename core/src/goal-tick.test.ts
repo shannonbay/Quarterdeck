@@ -5,7 +5,7 @@ import {
   takeLease, releaseLease, leaseHolder, claimRun, schedulerPass, expireStaleRuns, decideItem, attachAgent, guardToolCallForRun,
   buildOverview, overviewWithEtag, LEASE_MS, insertRun, endRun, updateTask, reviveIfDone, insertMemory,
   SCHEMA_VERSION, dbSchemaVersion, schemaOutdated, runMigrations, setSchedule, cronNext,
-  buildBrief,
+  buildBrief, deleteGoal, restoreGoal,
 } from './index.js'
 
 let db: Database
@@ -239,6 +239,26 @@ describe('decideItem', () => {
     updateGoal(db, 'g1', { status: 'paused' })
     expect(decideItem(db, 'g1', '1', { decision: 'reject', feedback: 'too formal' }).queuedRun).toBeNull()
     expect(listRuns(db, 'g1').filter((r) => r.status === 'queued')).toEqual([])
+  })
+
+  it('the overview lists deleted goals apart, with their purge date, until restored (#105)', () => {
+    expect(buildOverview(db)).not.toHaveProperty('deleted')
+    deleteGoal(db, 'g1', new Date('2026-11-01T00:00:00Z'))
+    const o = buildOverview(db)
+    expect(o.goals).toEqual([])
+    expect(o.deleted).toEqual([{ id: 'g1', name: 'Inbox', deleted_at: '2026-11-01T00:00:00.000Z', purge_at: '2026-12-01T00:00:00.000Z' }])
+    expect(o).not.toHaveProperty('deleted_detail')
+    // Named in detail, a deleted goal comes with its full detail, apart from the live goals (goal_detail reads it)
+    insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Bob prefers mornings', source: 'agent' })
+    const named = buildOverview(db, ['g1'])
+    expect(named.goals).toEqual([])
+    expect(named.deleted_detail).toHaveLength(1)
+    expect(named.deleted_detail![0]).toMatchObject({ id: 'g1', name: 'Inbox', detail: true, deleted_at: '2026-11-01T00:00:00.000Z', purge_at: '2026-12-01T00:00:00.000Z' })
+    expect(named.deleted_detail![0].memory.map((m) => m.text)).toEqual(['Bob prefers mornings'])
+    expect(buildOverview(db, ['other'])).not.toHaveProperty('deleted_detail')
+    restoreGoal(db, 'g1')
+    expect(buildOverview(db)).not.toHaveProperty('deleted')
+    expect(buildOverview(db).goals.map((g) => g.id)).toEqual(['g1'])
   })
 
   it('refuses an unknown item', () => {

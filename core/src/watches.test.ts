@@ -6,7 +6,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, getOpenRun, listRuns, buildBrief, claimRun, endRun, failRun, schedulerPass,
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
-  takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
+  takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal, purgeGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
   matchLines, commandLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
@@ -488,11 +488,14 @@ describe('the overview and deleting', () => {
     expect(buildOverview(db, 'all').goals[0]!.watches.find((x) => x.name === 'y')).toMatchObject({ failing: false, error: null })
   })
 
-  it('deleting a goal deletes its watches and their events', () => {
+  it('deleting a goal hides it from the overview and keeps its watches until it is purged', () => {
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
     recordWatchLines(db, w.id, { lines: [] })
     recordWatchLines(db, w.id, { lines: ['a'] })
     deleteGoal(db, 'g1')
+    expect(buildOverview(db, 'all').goals.map((g) => g.id)).not.toContain('g1')
+    expect(getWatch(db, w.id)).toBeDefined()
+    purgeGoal(db, 'g1')
     expect(getWatch(db, w.id)).toBeUndefined()
     expect(db.prepare('SELECT COUNT(*) n FROM goal_watch_events').get()).toEqual({ n: 0 })
   })

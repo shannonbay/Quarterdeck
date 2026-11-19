@@ -43,7 +43,7 @@ export const createGoal = (plan: core.NewPlan, goal: Omit<core.NewGoal, 'plan_id
 /** Human review actions — used by tests to simulate the web UI. */
 export const approveTask = (planId: string, taskId: string) => core.approveTask(db, planId, taskId)
 export const rejectTask = (planId: string, taskId: string, feedback: string) => core.rejectTask(db, planId, taskId, feedback)
-export const listGoals = (status?: core.Goal['status']) => core.listGoals(db, status)
+export const listGoals = (filter?: core.Goal['status'] | core.GoalFilter) => core.listGoals(db, filter)
 export const getGoal = (planId: string) => core.getGoal(db, planId)
 export const buildBrief = (planId: string, runId?: string) => core.buildBrief(db, planId, runId)
 export const buildCurationBrief = (planId: string, runId: string) => core.buildCurationBrief(db, planId, runId)
@@ -109,3 +109,9 @@ export function runTransaction<T>(fn: () => T): T {
   return db.transaction(fn)()
 }
 export const deleteGoal = (planId: string) => core.deleteGoal(db, planId)
+export const restoreGoal = (planId: string) => core.restoreGoal(db, planId)
+export function purgeDeletedGoal(planId: string) {
+  const goal = core.getGoal(db, planId)
+  if (goal && !goal.deleted_at) throw new Error('Delete the goal first: only a deleted goal can be deleted permanently.')
+  return core.purgeGoal(db, planId)
+}

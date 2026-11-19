@@ -7,7 +7,7 @@ import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
 import { ATTEMPT_REF, isProposal } from './gates.js'
 import {
-  CURATION_REF, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, RUN_SUMMARY_SOURCE, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
+  CURATION_REF, DELETED_GOAL_MESSAGE, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, RUN_SUMMARY_SOURCE, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { listHealth } from './health.js'
@@ -447,6 +447,7 @@ export function recallMemory(db: Database, planId: string, runId: string | null,
  */
 export function queueRun(db: Database, planId: string, trigger: TriggerKind = 'manual'): GoalRun {
   const goal = mustGetGoal(db, planId)
+  if (goal.deleted_at) throw new GoalError(DELETED_GOAL_MESSAGE)
   if (goal.status !== 'active') throw new GoalError(`Goal is ${goal.status}; resume it before running.`)
   const open = db.prepare("SELECT * FROM goal_runs WHERE plan_id = ? AND status IN ('queued', 'running') AND trigger != 'curate' ORDER BY started_at LIMIT 1")
     .get(planId) as GoalRun | undefined
@@ -462,6 +463,7 @@ export function queueRun(db: Database, planId: string, trigger: TriggerKind = 'm
  */
 export function queueRunAfterDecision(db: Database, planId: string): GoalRun {
   const goal = mustGetGoal(db, planId)
+  if (goal.deleted_at) throw new GoalError(DELETED_GOAL_MESSAGE)
   if (goal.status !== 'active') throw new GoalError(`Goal is ${goal.status}; resume it before running.`)
   const queued = db.prepare("SELECT * FROM goal_runs WHERE plan_id = ? AND status = 'queued' AND trigger != 'curate' ORDER BY started_at LIMIT 1")
     .get(planId) as GoalRun | undefined

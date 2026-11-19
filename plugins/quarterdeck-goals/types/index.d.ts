@@ -119,7 +119,12 @@ export type Snapshot = {
   standing?: boolean
   /** Set when a newer Quarterdeck than the installed one is published. */
   update?: Update
+  /** Deleted goals, newest first, while any wait to be purged (#105): the pane's "Recently deleted". */
+  deleted?: DeletedGoal[]
 }
+
+/** A deleted goal the pane can restore or delete permanently. `purgeAt` is null when retention never purges. */
+export type DeletedGoal = { id: string; name: string; deletedAt: string; purgeAt: string | null }
 
 /** A published Quarterdeck newer than the one this session runs; `ready`: already installed, needs only /reload-plugins. */
 export type Update = { installed: string; latest: string; ready?: true }
@@ -141,6 +146,7 @@ export type Confirm =
   | { kind: 'delete-memory'; goalId: string; memoryId: string }
   | { kind: 'auto'; goalId: string; category: string }
   | { kind: 'delete-goal'; goalId: string }
+  | { kind: 'purge-goal'; goalId: string }
 
 /** The goal run this Claude Code session is carrying out. */
 export type ActiveRun = { goalId: string; runId: string; startedAt: number }

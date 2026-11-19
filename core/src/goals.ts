@@ -39,6 +39,7 @@ function deserializeGoal(r: Row): Goal {
     status_source: (r.status_source as string | null | undefined) ?? null,
     resumed_at: (r.resumed_at as string | null | undefined) ?? null,
     curated_at: (r.curated_at as string | null | undefined) ?? null,
+    deleted_at: (r.deleted_at as string | null | undefined) ?? null,
   } as Goal
 }
 
@@ -90,10 +91,23 @@ export function getGoal(db: Database, planId: string): Goal | undefined {
   return row ? deserializeGoal(row) : undefined
 }
 
-export function listGoals(db: Database, status?: Goal['status']): { plan: PlanRow; goal: Goal }[] {
-  const rows = (status
-    ? db.prepare('SELECT * FROM goals WHERE status = ?').all(status)
-    : db.prepare('SELECT * FROM goals').all()) as Row[]
+/** Which goals a list shows by whether they are deleted: hide them (the default), only them, or all. */
+export type DeletedFilter = 'exclude' | 'only' | 'include'
+
+export interface GoalFilter {
+  status?: Goal['status']
+  deleted?: DeletedFilter
+}
+
+/** Lists goals; deleted goals are left out unless `deleted` asks for them. */
+export function listGoals(db: Database, filter?: Goal['status'] | GoalFilter): { plan: PlanRow; goal: Goal }[] {
+  const { status, deleted = 'exclude' }: GoalFilter = typeof filter === 'string' ? { status: filter } : (filter ?? {})
+  const where: string[] = []
+  const args: string[] = []
+  if (status) { where.push('status = ?'); args.push(status) }
+  if (deleted === 'exclude') where.push('deleted_at IS NULL')
+  else if (deleted === 'only') where.push('deleted_at IS NOT NULL')
+  const rows = db.prepare(`SELECT * FROM goals${where.length ? ` WHERE ${where.join(' AND ')}` : ''}`).all(...args) as Row[]
   return rows
     .map((r) => ({ plan: getPlan(db, r.plan_id as string)!, goal: deserializeGoal(r) }))
     .filter((g) => g.plan)
@@ -106,6 +120,7 @@ export function updateGoal(
 ): void {
   const current = getGoal(db, planId)
   if (!current) throw new Error(`Goal ${planId} not found`)
+  if (current.deleted_at && fields.status === 'active') throw new Error(DELETED_GOAL_MESSAGE)
   const serialized: Row = { ...fields }
   if (fields.autonomy) serialized.autonomy = JSON.stringify(fields.autonomy)
   if (fields.tool_map) serialized.tool_map = JSON.stringify(fields.tool_map)
@@ -302,18 +317,82 @@ const GOAL_TABLES = [
   'events', 'transcript_messages', 'agent_sessions', 'tasks', 'goals',
 ]
 
-/**
- * Deletes a goal for good: its items, runs, memory, schedule, health checks,
- * guard decisions and history. Refused while a run is going (cancel it first).
- */
-export function deleteGoal(db: Database, planId: string): { name: string } {
+/** The refusal for anything that would run or resume a deleted goal. */
+export const DELETED_GOAL_MESSAGE = 'This goal is deleted: restore it first.'
+
+/** Days a deleted goal is kept before it is purged: QUARTERDECK_DELETED_RETENTION_DAYS, default 30; 0 never purges automatically. */
+export function deletedRetentionDays(env: Record<string, string | undefined> = process.env): number {
+  const raw = env.QUARTERDECK_DELETED_RETENTION_DAYS
+  if (raw === undefined || raw.trim() === '') return 30
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 30
+}
+
+/** When a deleted goal will be purged, or null when it isn't deleted or retention is 0. */
+export function purgeDate(goal: Pick<Goal, 'deleted_at'>, days = deletedRetentionDays()): string | null {
+  if (!goal.deleted_at || days <= 0) return null
+  return new Date(new Date(goal.deleted_at).getTime() + days * 86_400_000).toISOString()
+}
+
+function goalPlan(db: Database, planId: string): { name: string } {
   const plan = db.prepare("SELECT name, kind FROM plans WHERE id = ?").get(planId) as { name: string; kind: string } | undefined
   if (!plan || plan.kind !== 'goal') throw new Error(`Goal ${planId} not found.`)
+  return { name: plan.name }
+}
+
+function refuseWhileRunning(db: Database, planId: string): void {
   const running = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND status IN ('queued', 'running')").get(planId)
   if (running) throw new Error('This goal has a run in progress: cancel it first, then delete the goal.')
+}
+
+/**
+ * Deletes a goal so it can be restored: it is paused and hidden, keeping its
+ * items, runs, memory and history until it is purged (after the retention
+ * period, or by purgeGoal). Refused while a run is going (cancel it first).
+ */
+export function deleteGoal(db: Database, planId: string, now = new Date()): { name: string; deleted_at: string } {
+  const plan = goalPlan(db, planId)
+  refuseWhileRunning(db, planId)
+  const current = getGoal(db, planId)
+  if (current?.deleted_at) return { name: plan.name, deleted_at: current.deleted_at }
+  const deleted_at = now.toISOString()
+  db.prepare("UPDATE goals SET deleted_at = ?, status = 'paused' WHERE plan_id = ?").run(deleted_at, planId)
+  db.prepare('UPDATE plans SET revision = revision + 1 WHERE id = ?').run(planId)
+  return { name: plan.name, deleted_at }
+}
+
+/** Puts a deleted goal back, paused: nothing runs until the person resumes it. */
+export function restoreGoal(db: Database, planId: string): { name: string } {
+  const plan = goalPlan(db, planId)
+  if (!getGoal(db, planId)?.deleted_at) throw new Error('This goal is not deleted.')
+  db.prepare("UPDATE goals SET deleted_at = NULL, status = 'paused' WHERE plan_id = ?").run(planId)
+  db.prepare('UPDATE plans SET revision = revision + 1 WHERE id = ?').run(planId)
+  return plan
+}
+
+/**
+ * Erases a goal for good: its items, runs, memory, schedule, health checks,
+ * guard decisions and history. Refused while a run is going (cancel it first).
+ * Outside the retention purge, callers purge only a goal that is already deleted.
+ */
+export function purgeGoal(db: Database, planId: string): { name: string } {
+  const plan = goalPlan(db, planId)
+  refuseWhileRunning(db, planId)
   db.transaction(() => {
     for (const table of GOAL_TABLES) db.prepare(`DELETE FROM ${table} WHERE plan_id = ?`).run(planId)
     db.prepare('DELETE FROM plans WHERE id = ?').run(planId)
   })()
-  return { name: plan.name }
+  return plan
+}
+
+/** Purges deleted goals older than the retention period; returns the ids purged. */
+export function purgeExpiredGoals(db: Database, now = new Date(), days = deletedRetentionDays()): string[] {
+  if (days <= 0) return []
+  const cutoff = new Date(now.getTime() - days * 86_400_000).toISOString()
+  const ids = (db.prepare('SELECT plan_id FROM goals WHERE deleted_at IS NOT NULL AND deleted_at <= ?').all(cutoff) as { plan_id: string }[]).map((r) => r.plan_id)
+  const purged: string[] = []
+  for (const id of ids) {
+    try { purgeGoal(db, id); purged.push(id) } catch { /* a run still going: a later pass tries again */ }
+  }
+  return purged
 }

@@ -1,6 +1,7 @@
 import Link from 'next/link'
-import { listGoals, getGoalItems, listRuns } from '@/lib/db'
+import { listGoals, getGoalItems, listRuns, purgeDate } from '@/lib/db'
 import { NewGoalButton } from '@/components/NewGoalButton'
+import { DeletedGoalActions } from '@/components/DeletedGoalActions'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,6 +12,9 @@ export default function DashboardPage() {
       const open = getGoalItems(plan.id).filter((t) => t.status === 'pending' || t.status === 'active')
       return { plan, goal, needsYou: open.filter((t) => t.review_requested_at).length, open: open.length, lastRun: listRuns(plan.id, 1)[0] }
     })
+  // Deleted goals (#105), newest first: they can be restored until the retention purge erases them.
+  const deleted = listGoals(undefined, 'only')
+    .sort((a, b) => (b.goal.deleted_at ?? '').localeCompare(a.goal.deleted_at ?? ''))
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -48,6 +52,28 @@ export default function DashboardPage() {
                   </div>
                 </Link>
               ))}
+            </div>
+          </section>
+        )}
+
+        {deleted.length > 0 && (
+          <section className="mb-10">
+            <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide mb-4">Recently deleted</h2>
+            <div className="grid gap-3">
+              {deleted.map(({ plan, goal }) => {
+                const purgeAt = purgeDate(goal)
+                return (
+                  <div key={plan.id} className="bg-white rounded-lg border border-gray-200 px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="font-medium text-gray-500">{plan.name}</p>
+                      <p className="text-sm text-gray-400 mt-0.5">
+                        Deleted {goal.deleted_at?.slice(0, 10)}{purgeAt ? ` · erased for good on ${purgeAt.slice(0, 10)}` : ' · kept until you delete it permanently'}
+                      </p>
+                    </div>
+                    <DeletedGoalActions id={plan.id} name={plan.name} />
+                  </div>
+                )
+              })}
             </div>
           </section>
         )}

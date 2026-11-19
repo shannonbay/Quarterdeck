@@ -7,15 +7,15 @@
 import {
   schedulerPass, releaseLease, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, updateMemory,
-  setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal,
+  setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema,
 } from '../schema.js'
-import { normalizeModel, type GoalChanges } from '@quarterdeck/core'
+import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
 import { existsSync } from 'fs'
 import { nanoid } from 'nanoid'
 import { record } from '../history.js'
@@ -293,8 +293,21 @@ export async function run_progress(args: unknown) {
   return reportRunProgress(run_id, { event, tool: label })
 }
 
-/** Deletes a goal for good, for the person (the plugin confirms first). */
+/** Deletes a goal so it can be restored until it is purged, for the person (the plugin confirms first). */
 export async function delete_goal(args: unknown) {
   const { goal_id } = DeleteGoalSchema.parse(args)
-  return { deleted: goal_id, ...deleteGoal(goal_id) }
+  const result = deleteGoal(goal_id)
+  return { deleted: goal_id, ...result, purge_at: purgeDate(result) }
+}
+
+/** Puts a deleted goal back, paused, for the person. */
+export async function restore_goal(args: unknown) {
+  const { goal_id } = RestoreGoalSchema.parse(args)
+  return { restored: goal_id, status: 'paused', ...restoreGoal(goal_id) }
+}
+
+/** Erases a deleted goal for good, for the person (the plugin asks again first). */
+export async function purge_goal(args: unknown) {
+  const { goal_id } = PurgeGoalSchema.parse(args)
+  return { purged: goal_id, ...purgeDeletedGoal(goal_id) }
 }

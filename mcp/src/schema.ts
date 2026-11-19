@@ -63,6 +63,7 @@ export const SetStatusSchema = z.object({
 
 export const ListGoalsSchema = z.object({
   status: z.enum(['active', 'paused', 'retired', 'all']).default('active').describe('Filter by goal status'),
+  deleted: z.enum(['exclude', 'only', 'include']).default('exclude').describe('Deleted goals: hide them (default), list only them, or include them'),
 })
 
 export const GetGoalBriefSchema = z.object({
@@ -218,6 +219,14 @@ export const DetectForgeSchema = z.object({
 })
 
 export const DeleteGoalSchema = z.object({
+  goal_id: z.string(),
+})
+
+export const RestoreGoalSchema = z.object({
+  goal_id: z.string(),
+})
+
+export const PurgeGoalSchema = z.object({
   goal_id: z.string(),
 })
 

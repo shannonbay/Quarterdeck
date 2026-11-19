@@ -53,7 +53,11 @@ export { GoalError, isProposal, DEFAULT_GOAL_LIMITS } from '@quarterdeck/core'
 export type { Goal, GoalRun, GoalMemory, GoalTrigger, IntervalConfig, AutonomyMode, TickDecision } from '@quarterdeck/core'
 export const createGoal = (plan: NewPlan, goal: Omit<core.NewGoal, 'plan_id'>, interval?: core.IntervalConfig) => core.createGoal(getDb(), plan, goal, interval)
 export const getGoal = (planId: string) => core.getGoal(getDb(), planId)
-export const listGoals = (status?: core.Goal['status']) => core.listGoals(getDb(), status)
+export const listGoals = (status?: core.Goal['status'], deleted: 'exclude' | 'include' | 'only' = 'exclude') => core.listGoals(getDb(), { status, deleted })
+export const deleteGoal = (planId: string) => core.deleteGoal(getDb(), planId)
+export const restoreGoal = (planId: string) => core.restoreGoal(getDb(), planId)
+export const purgeGoal = (planId: string) => core.purgeGoal(getDb(), planId)
+export const purgeDate = (goal: Pick<core.Goal, 'deleted_at'>) => core.purgeDate(goal)
 export const updateGoal = (planId: string, fields: Parameters<typeof core.updateGoal>[2]) => core.updateGoal(getDb(), planId, fields)
 export const getIntervalTrigger = (planId: string) => core.getIntervalTrigger(getDb(), planId)
 export const setIntervalTrigger = (planId: string, config: core.IntervalConfig | null) => core.setIntervalTrigger(getDb(), planId, config)

@@ -50,7 +50,7 @@ async function load($: Engine): Promise<Snapshot> {
       next = { ...previous, reachable: true, error: null, fetchedAt: now }
     } else {
       const goals = res.goals.map(toCard)
-      next = { reachable: true, error: null, goals, fetchedAt: now, etag: res.etag, hold: res.hold, ...(res.outdated ? { outdated: true } : {}), ...(res.standing ? { standing: true } : {}), ...(res.update ? { update: res.update } : {}) }
+      next = { reachable: true, error: null, goals, fetchedAt: now, etag: res.etag, hold: res.hold, ...(res.outdated ? { outdated: true } : {}), ...(res.standing ? { standing: true } : {}), ...(res.update ? { update: res.update } : {}), ...(res.deleted.length ? { deleted: res.deleted.map((d) => ({ id: d.id, name: d.name, deletedAt: d.deleted_at, purgeAt: d.purge_at })) } : {}) }
       await announce($, goals, now)
     }
   } catch (err) {
@@ -87,7 +87,7 @@ export function stopPolling(): void {
 
 /** The act() keys (before the colon) of the pane's and Claude's goal changes, which the server refuses while outdated. */
 export const OUTDATED_REFUSES = new Set([
-  'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update',
+  'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update', 'restore', 'purge',
 ])
 export const OUTDATED_NOTICE = 'Quarterdeck was updated in another session, and this session still runs the older version: press Reload now (above), or run /reload-plugins, first.'
 

@@ -174,6 +174,8 @@ export interface Goal {
   resumed_at: string | null
   /** Where its last curation reached: the start of the curation run last settled (its request approved or rejected, or it proposed nothing). Runs since then are not yet folded. */
   curated_at: string | null
+  /** When the goal was deleted; null while it isn't. A deleted goal never runs and is hidden from lists until restored; it is purged for good after the retention period. */
+  deleted_at: string | null
 }
 
 export type NewGoal = Pick<Goal, 'plan_id' | 'objective'> & Partial<Omit<Goal, 'plan_id' | 'objective' | 'limits'>> & { limits?: Partial<GoalLimits> }

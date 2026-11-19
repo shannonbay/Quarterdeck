@@ -153,6 +153,7 @@ Last change just now  Refresh
 - **▸ name** expands a goal to show its objective, its schedule, open items and memory; its run history is on the goal's page in the web app (**Open in browser**). Each memory entry can be deleted (asks you to confirm). A memory a run wrote after reading untrusted content (mail, web pages, watch events) shows a yellow ⚠ and **Trust**: until you trust it, any run whose brief includes it needs your approval for its auto actions, in case that content asked for the memory.
 - When you have approved a category every time lately, a hint suggests switching it to auto on the goal page.
 - **Open in browser** opens the goal page.
+- **Recently deleted** lists goals you deleted, with the date they are erased for good (after `QUARTERDECK_DELETED_RETENTION_DAYS`, default 30). **Restore** brings one back paused; **Delete permanently** erases it with its items, runs and memory (asks you to confirm). The web app's dashboard has the same section, and a deleted goal's page shows **Restore**. Until then, ask Claude for its `goal_detail` to read its runs and memory without restoring it.
 
 Hotkeys while the pane has focus: `a`/`r` approve or reject the first proposal, `n` runs the first goal that can run, `g` refreshes, and `1`–`9` expand a goal.
 

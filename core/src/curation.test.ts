@@ -29,10 +29,11 @@ function curationRun(): string {
 }
 
 describe('schema', () => {
-  it('is version 17, with goals.curated_at', () => {
-    expect(SCHEMA_VERSION).toBe(17)
+  it('is version 18, with goals.curated_at and goals.deleted_at', () => {
+    expect(SCHEMA_VERSION).toBe(18)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
+    expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
   })
 
   it('adds untrusted_root to runs and memory from version 13, leaving existing text alone', () => {

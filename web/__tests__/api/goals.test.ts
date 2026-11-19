@@ -6,6 +6,8 @@ import { tmpdir } from 'os'
 import { GET as GETGoals, POST as POSTGoal } from '@/app/api/goals/route.js'
 import { GET as GETGoal, PATCH as PATCHGoal } from '@/app/api/goals/[id]/route.js'
 import { POST as POSTRun } from '@/app/api/goals/[id]/run/route.js'
+import { POST as POSTRestore } from '@/app/api/goals/[id]/restore/route.js'
+import { POST as POSTPurge } from '@/app/api/goals/[id]/purge/route.js'
 import { POST as POSTMemory } from '@/app/api/goals/[id]/memory/route.js'
 import { PATCH as PATCHMemory, DELETE as DELETEMemory } from '@/app/api/goals/[id]/memory/[memoryId]/route.js'
 import { POST as POSTApprove } from '@/app/api/goals/[id]/items/[itemId]/approve/route.js'
@@ -34,6 +36,22 @@ describe('goals API', () => {
     insertPlan({ id: 'plan_ordinary', name: 'Ordinary plan', description: null, status: 'active', working_dir: tmpdir(), created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     const goals = await (await GETGoals(new NextRequest('http://localhost/api/goals'))).json()
     expect(goals).toEqual([expect.objectContaining({ id: body.id, name: 'Inbox', open_items: 0, needs_you: 0 })])
+  })
+
+  it('lists deleted goals only when asked, restores them paused, and purges only a deleted goal (#105)', async () => {
+    const { body } = await createGoal({})
+    const p = { params: Promise.resolve({ id: body.id }) }
+    expect((await POSTPurge(req('POST'), p)).status).toBe(400)
+    core.deleteGoal(getDb(), body.id)
+    expect(await (await GETGoals(new NextRequest('http://localhost/api/goals'))).json()).toEqual([])
+    const only = await (await GETGoals(new NextRequest('http://localhost/api/goals?deleted=only'))).json()
+    expect(only).toEqual([expect.objectContaining({ id: body.id, deleted_at: expect.any(String), purge_at: expect.any(String) })])
+    expect((await POSTRestore(req('POST'), p)).status).toBe(200)
+    expect(getGoal(body.id)).toEqual(expect.objectContaining({ deleted_at: null, status: 'paused' }))
+    expect((await POSTRestore(req('POST'), p)).status).toBe(409)
+    core.deleteGoal(getDb(), body.id)
+    expect((await POSTPurge(req('POST'), p)).status).toBe(200)
+    expect(getGoal(body.id)).toBeUndefined()
   })
 
   it('validates input', async () => {

@@ -118,6 +118,7 @@ export function GoalView({ goalId }: { goalId: string }) {
             <div className="flex items-center gap-2 mt-1">
               <h1 className="text-xl font-semibold text-gray-900">{plan.name}</h1>
               <span className={`text-xs px-1.5 py-0.5 rounded ${goal.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{goal.status}</span>
+              {goal.deleted_at && <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700" title="Restore it to run or resume it again">deleted {goal.deleted_at.slice(0, 10)}</span>}
               {goal.status_note && <span className={`text-xs px-1.5 py-0.5 rounded ${TONE_CLASS[goal.status_tone ?? 'none']}`} title="The status the goal's last run set">{goal.status_note}</span>}
             </div>
             <p className="text-sm text-gray-600 mt-1">{goal.objective}</p>
@@ -128,6 +129,10 @@ export function GoalView({ goalId }: { goalId: string }) {
             </p>
           </div>
           <div className="flex gap-2 flex-shrink-0">
+            {goal.deleted_at ? (
+              <button onClick={() => call('restore', `/api/goals/${goalId}/restore`)} disabled={busy !== null}
+                className="px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">{busy === 'restore' ? 'Restoring…' : 'Restore'}</button>
+            ) : <>
             {open_run?.status === 'running' ? (
               <button onClick={() => call('cancel', `/api/goals/${goalId}/run`, { method: 'DELETE' })} disabled={busy !== null}
                 className="px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50">Cancel run</button>
@@ -139,6 +144,7 @@ export function GoalView({ goalId }: { goalId: string }) {
               className="px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
               {goal.status === 'active' ? 'Pause' : 'Resume'}
             </button>
+            </>}
           </div>
         </div>
       </header>

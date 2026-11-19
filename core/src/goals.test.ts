@@ -5,7 +5,7 @@ import {
   createGoal, getGoal, listGoals, updateGoal, setIntervalTrigger, getIntervalTrigger,
   insertRun, getRun, updateRun, listRuns, getOpenRun, countRunsSince,
   insertMemory, listMemory, updateMemory, deleteMemory, getMemory,
-  deleteGoal, type NewTask,
+  deleteGoal, restoreGoal, purgeGoal, purgeExpiredGoals, deletedRetentionDays, purgeDate, type NewTask,
 } from './index.js'
 
 let db: Database
@@ -118,19 +118,71 @@ describe('work item columns', () => {
   })
 })
 
-describe('deleteGoal', () => {
-  it('removes the goal and everything it holds; refuses while a run is going', () => {
+describe('deleteGoal (soft)', () => {
+  it('hides and pauses the goal, keeping everything it holds; refuses while a run is going', () => {
     createGoal(db, plan(), { objective: 'Inbox zero' })
     insertTask(db, item('1'))
     insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'x', source: 'human' })
     const run = insertRun(db, 'g1', 'manual', 'running')
     expect(() => deleteGoal(db, 'g1')).toThrow(/run in progress/)
     db.prepare("UPDATE goal_runs SET status = 'completed' WHERE id = ?").run(run.id)
-    expect(deleteGoal(db, 'g1').name).toBeTruthy()
+    const at = new Date('2026-11-01T00:00:00Z')
+    expect(deleteGoal(db, 'g1', at)).toMatchObject({ deleted_at: at.toISOString() })
+    expect(getGoal(db, 'g1')).toMatchObject({ status: 'paused', deleted_at: at.toISOString() })
+    for (const t of ['tasks', 'goal_memory', 'goal_runs', 'plans']) {
+      expect((db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE ${t === 'plans' ? 'id' : 'plan_id'} = 'g1'`).get() as { n: number }).n).toBeGreaterThan(0)
+    }
+    expect(listGoals(db)).toHaveLength(0)
+    expect(listGoals(db, 'paused')).toHaveLength(0)
+    expect(listGoals(db, { deleted: 'only' })).toHaveLength(1)
+    expect(listGoals(db, { deleted: 'include' })).toHaveLength(1)
+    expect(() => updateGoal(db, 'g1', { status: 'active' })).toThrow(/deleted: restore it first/)
+  })
+
+  it('restore puts the goal back paused, and refuses a goal that is not deleted', () => {
+    createGoal(db, plan(), { objective: 'x' })
+    expect(() => restoreGoal(db, 'g1')).toThrow(/not deleted/)
+    deleteGoal(db, 'g1')
+    restoreGoal(db, 'g1')
+    expect(getGoal(db, 'g1')).toMatchObject({ status: 'paused', deleted_at: null })
+    expect(listGoals(db)).toHaveLength(1)
+    updateGoal(db, 'g1', { status: 'active' })
+    expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('purges deleted goals only after the retention period', () => {
+    createGoal(db, plan(), { objective: 'x' })
+    deleteGoal(db, 'g1', new Date('2026-11-01T00:00:00Z'))
+    expect(purgeExpiredGoals(db, new Date('2026-11-30T00:00:00Z'), 30)).toEqual([])
+    expect(purgeExpiredGoals(db, new Date('2026-12-01T00:00:00Z'), 0)).toEqual([])
+    expect(purgeExpiredGoals(db, new Date('2026-12-01T00:00:00Z'), 30)).toEqual(['g1'])
+    expect(getGoal(db, 'g1')).toBeUndefined()
+  })
+
+  it('reads the retention period and purge date', () => {
+    expect(deletedRetentionDays({})).toBe(30)
+    expect(deletedRetentionDays({ QUARTERDECK_DELETED_RETENTION_DAYS: '7' })).toBe(7)
+    expect(deletedRetentionDays({ QUARTERDECK_DELETED_RETENTION_DAYS: '0' })).toBe(0)
+    expect(deletedRetentionDays({ QUARTERDECK_DELETED_RETENTION_DAYS: 'soon' })).toBe(30)
+    expect(purgeDate({ deleted_at: '2026-11-01T00:00:00.000Z' }, 30)).toBe('2026-12-01T00:00:00.000Z')
+    expect(purgeDate({ deleted_at: null }, 30)).toBeNull()
+    expect(purgeDate({ deleted_at: '2026-11-01T00:00:00.000Z' }, 0)).toBeNull()
+  })
+})
+
+describe('purgeGoal', () => {
+  it('removes the goal and everything it holds; refuses while a run is going', () => {
+    createGoal(db, plan(), { objective: 'Inbox zero' })
+    insertTask(db, item('1'))
+    insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'x', source: 'human' })
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    expect(() => purgeGoal(db, 'g1')).toThrow(/run in progress/)
+    db.prepare("UPDATE goal_runs SET status = 'completed' WHERE id = ?").run(run.id)
+    expect(purgeGoal(db, 'g1').name).toBeTruthy()
     expect(getGoal(db, 'g1')).toBeUndefined()
     for (const t of ['tasks', 'goal_memory', 'goal_runs', 'plans']) {
       expect((db.prepare(`SELECT COUNT(*) n FROM ${t} WHERE ${t === 'plans' ? 'id' : 'plan_id'} = 'g1'`).get() as { n: number }).n).toBe(0)
     }
-    expect(() => deleteGoal(db, 'g1')).toThrow(/not found/)
+    expect(() => purgeGoal(db, 'g1')).toThrow(/not found/)
   })
 })

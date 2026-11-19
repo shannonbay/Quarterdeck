@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from '../../tools/goals.js'
+import { delete_goal, restore_goal, purge_goal } from '../../tools/goal_runner.js'
 import { set_status } from '../../tools/set_status.js'
 import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
@@ -295,5 +296,22 @@ describe('attempt limits through set_status and update_task', () => {
       await inRun(id, () => expect(set_status({ task_id: item, status: 'abandoned' })).rejects.toThrow(/reason is required/))
     }
     await inRun(id, () => expect(set_status({ task_id: item, status: 'active' })).resolves.toBeDefined())
+  })
+})
+
+describe('deleting, restoring and purging a goal', () => {
+  it('delete_goal hides the goal from list_goals until restore_goal; purge_goal erases only a deleted goal', async () => {
+    const id = makeGoal('goal_soft')
+    await expect(purge_goal({ goal_id: id })).rejects.toThrow(/Delete the goal first/)
+    const deleted = await delete_goal({ goal_id: id })
+    expect(deleted).toMatchObject({ deleted: id, deleted_at: expect.any(String), purge_at: expect.any(String) })
+    expect((await list_goals({ status: 'all' })).goals.map((g) => g.id)).not.toContain(id)
+    expect((await list_goals({ status: 'all', deleted: 'only' })).goals).toEqual([expect.objectContaining({ id, deleted_at: deleted.deleted_at })])
+    expect(() => queueRun(id)).toThrow(/deleted: restore it first/)
+    await restore_goal({ goal_id: id })
+    expect((await list_goals({ status: 'paused' })).goals.map((g) => g.id)).toContain(id)
+    await delete_goal({ goal_id: id })
+    await purge_goal({ goal_id: id })
+    expect((await list_goals({ status: 'all', deleted: 'include' })).goals.map((g) => g.id)).not.toContain(id)
   })
 })

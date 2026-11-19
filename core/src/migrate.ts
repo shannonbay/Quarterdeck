@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 17
+export const SCHEMA_VERSION = 18
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -502,6 +502,8 @@ export function runMigrations(db: Database): void {
   // Schema version 17: lines a watch ignores, and a watch that starts a run despite the goal's gap between watch runs
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN ignore TEXT') } catch { /* already exists */ }
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  // Schema version 18: a deleted goal is hidden, not erased, until it is purged (#105)
+  try { db.exec('ALTER TABLE goals ADD COLUMN deleted_at TEXT') } catch { /* already exists */ }
   // The update trigger's column list grew in 17: an older one is made again below
   if (dbSchemaVersion(db) < 17) db.exec('DROP TRIGGER IF EXISTS trg_goal_watches_update_revision')
   db.exec(`
