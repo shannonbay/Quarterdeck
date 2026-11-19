@@ -13,6 +13,12 @@ CLI `quarterdeck runner install|uninstall|start|stop|status|ensure|attach`; Wind
 
 To restart it while developing, run the task (`MSYS_NO_PATHCONV=1 schtasks /run /tn "Quarterdeck goals runner"` from Git Bash).
 
+**Is it running? Ask it: `node "$(cat ~/.quarterdeck/runner/cli-path)" runner status`.** Don't infer it from side signs. Seen 20 Nov 2026, when a session said it had stopped and it hadn't:
+- `state.json`'s pid is the hidden **console** (`conhost.exe`), not `claude`, so `tasklist` showing conhost there is normal.
+- Its transcript (`~/.claude/projects/C--Users-layen--quarterdeck-runner/<sessionId>.jsonl`) stays still for hours when it has nothing to do. Any open Claude Code window that holds the scheduler lease claims the runs instead. `status` then says "another session holds the goal runs", and the standing session takes over within 90 seconds of that window going quiet.
+- `ensure.log` doesn't log the usual "is running" answer, so a log with nothing new since the last restart is normal too.
+- To see who ran a goal's run, look for "Prompt dropped by a hook: A goal run ended" (or the run's hand-back) in that session's transcript.
+
 ## Learned the hard way (Nov 2026)
 
 - **Not `claude --bg`**: the background service retires a background session minutes after it finishes a turn (`~/.claude/daemon.log`: `bg retire … settled`), which stopped goals after every alert or phone reply.

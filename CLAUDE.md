@@ -36,7 +36,7 @@ Each folder's own `CLAUDE.md` loads when you work there, and `.claude/rules/*.md
 - `.claude/rules/goals-engine.md` — runs, autonomy, items and questions, models, one-off goals, discuss and change, to-do lists, usage limit
 - `.claude/rules/guard.md` — the guard, untrusted content, Quarterdeck's own data
 - `.claude/rules/watches.md` — watches, tool watches, status checks, status tones
-- `.claude/rules/standing-session.md` — the standing session (runner) on Windows and Linux
+- `.claude/rules/standing-session.md` — the standing session (runner) on Windows and Linux. To tell whether it's running, run `node "$(cat ~/.quarterdeck/runner/cli-path)" runner status`. Its pid is a `conhost`, and a quiet transcript or `ensure.log` is normal (the rule says why)
 
 Rules that hold everywhere, whatever file you're in:
 
