@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import { nanoid } from 'nanoid'
 import { existsSync } from 'fs'
-import { createGoal, listGoals, getGoalItems, listRuns, GoalError, setSchedule, updateGoal, nextScheduledRun } from '@/lib/db'
+import { createGoal, listGoals, purgeDate, getGoalItems, listRuns, GoalError, setSchedule, updateGoal, nextScheduledRun } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
 import { ok, err, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
@@ -19,11 +19,16 @@ const CreateGoalSchema = z.object({
   autonomy: AutonomySchema.optional(),
 })
 
-/** GET — goals with their counts and latest run. ?status=active|paused|retired|all (default all). */
+/**
+ * GET — goals with their counts and latest run. ?status=active|paused|retired|all (default all).
+ * ?deleted=exclude|include|only (default exclude): deleted goals (#105) carry deleted_at and purge_at.
+ */
 export async function GET(req: NextRequest) {
   try {
     const status = req.nextUrl.searchParams.get('status')
-    const goals = listGoals(status && status !== 'all' ? (status as 'active' | 'paused' | 'retired') : undefined)
+    const deletedParam = req.nextUrl.searchParams.get('deleted')
+    const deleted = deletedParam === 'include' || deletedParam === 'only' ? deletedParam : 'exclude'
+    const goals = listGoals(status && status !== 'all' ? (status as 'active' | 'paused' | 'retired') : undefined, deleted)
     return ok(goals.map(({ plan, goal }) => {
       const items = getGoalItems(plan.id)
       const open = items.filter((t) => t.status === 'pending' || t.status === 'active')
@@ -36,6 +41,7 @@ export async function GET(req: NextRequest) {
         needs_you: open.filter((t) => t.review_requested_at).length,
         last_run: listRuns(plan.id, 1)[0] ?? null,
         next_run_at: goal.next_run_at,
+        ...(goal.deleted_at ? { deleted_at: goal.deleted_at, purge_at: purgeDate(goal) } : {}),
       }
     }))
   } catch (e) {
