@@ -6,7 +6,7 @@
 
 It's a Claude Code plugin that turns Claude into a personal assistant: it keeps looking after the things you hand it, asks before it does anything you haven't allowed, and remembers what you decided.
 
-You give it **goals**, things you want kept true: "fix new issues on my repo and open pull requests", "tell me when the fixes I'm waiting on land in the projects I use", "find me the three best new job ads each week", "unsubscribe me from mailing lists I never read", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
+You give it **goals**: "sell my birdcage on facebook marketplace", "fix new issues on my repo", "find me the three best new job ads each week", "unsubscribe me from mailing lists I never read", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
 
 The idea behind it: persistent intent may matter more than persistent memory.
 
