@@ -183,7 +183,12 @@ test('expanding a goal shows open items and memory but no run history; memory de
     expect((await ui.find({ type: 'Text', text: /Fix CI on PR 31/ }))?.text).toContain('blocked: out of attempts')
     expect(await ui.find({ type: 'Text', text: /Triaged 4 emails/ })).toBeUndefined() // run history is on the goal page
     expect(await ui.find({ key: 'run-row-r1' })).toBeUndefined()
+    // Memory starts closed behind its count
+    expect(await ui.find({ type: 'Text', text: /Alice likes short replies/ })).toBeUndefined()
+    await ui.press({ key: 'memory-toggle-g1' })
     expect(await ui.find({ type: 'Text', text: /Alice likes short replies/ })).toBeDefined()
+    expect(await ui.find({ key: 'forget-m1' })).toBeUndefined() // a row's actions show once it is opened
+    await ui.press({ key: 'memory-toggle-g1' })
     expect((await ui.find({ type: 'Link', text: /Open in browser/ }))?.props.href).toBe('http://localhost:3000/goals/g1')
     await ui.press({ key: 'toggle-g1' }) // collapse again for the next surface
     await ui.unmount()
@@ -191,12 +196,39 @@ test('expanding a goal shows open items and memory but no run history; memory de
 
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
+  await ui.press({ key: 'memory-toggle-g1' })
+  await ui.press({ key: 'memory-row-m1' })
   await ui.press({ key: 'forget-m1' })
   expect(fake.of('delete_memory')).toEqual([])
   await ui.press({ key: 'forget-yes-m1' })
   expect(fake.of('delete_memory').map((c) => c.input)).toEqual([{ goal_id: 'g1', memory_id: 'm1' }])
   await ui.press({ key: 'inactive-memory-toggle-g1' })
-  expect((await ui.find({ type: 'Text', text: /Alice likes short replies/ }))?.text).toContain('forgotten')
+  expect((await ui.find({ type: 'Text', text: /\[preference\] Alice likes/ }))?.text).toContain('forgotten') // clipped to one line
+  await ui.unmount()
+})
+
+test('an expanded goal keeps to short lines: a long objective clips until pressed, open items stop at 5', async ($, on) => {
+  engine(on)
+  const objective = 'Keep my inbox under twenty unread messages by archiving newsletters, flagging invoices and drafting replies'
+  fakeQuarterdeck(on, [
+    goal({ id: 'g1', name: 'Inbox', objective, open_items: Array.from({ length: 7 }, (_, i) => ({ id: String(i + 1), goal: `Item number ${i + 1}` })) }),
+  ])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  const clipped = (await ui.find({ key: 'objective-g1' }))?.props.label as string
+  expect(clipped.endsWith('…')).toBe(true)
+  expect([...clipped].length).toBeLessThanOrEqual(PANE.props.bodyColumns)
+  await ui.press({ key: 'objective-g1' })
+  expect((await ui.find({ key: 'objective-g1' }))?.props.label).toBe(objective)
+
+  expect(await ui.find({ type: 'Text', text: 'Open items (7)' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Item number 5/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Item number 6/ })).toBeUndefined()
+  await ui.press({ key: 'items-more-g1' })
+  expect(await ui.find({ type: 'Text', text: /Item number 7/ })).toBeDefined()
+  await ui.press({ key: 'items-fewer-g1' })
+  expect(await ui.find({ type: 'Text', text: /Item number 7/ })).toBeUndefined()
   await ui.unmount()
 })
 
@@ -217,6 +249,8 @@ test('Inactive memory lists forgotten and merged memory with why; Restore brings
   expect(await ui.find({ type: 'Text', text: /Archive newsletters/ })).toBeUndefined()
   await ui.press({ key: 'inactive-memory-toggle-g1' })
   expect((await ui.find({ type: 'Text', text: /Archive newsletters/ }))?.text).toContain('merged 2026-11-06')
+  await ui.press({ key: 'memory-toggle-g1' })
+  await ui.press({ key: 'memory-row-m1' })
   await ui.press({ key: 'forget-m1' })
   await ui.press({ key: 'forget-yes-m1' })
   expect((await ui.find({ type: 'Text', text: /Alice is my manager/ }))?.text).toContain('forgotten') // still open
@@ -241,7 +275,11 @@ test('a memory a marked run wrote shows a warning and Trust clears it', async ($
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
+  // A memory to trust opens Memory and its own row by itself
+  expect((await ui.find({ key: 'memory-toggle-g1' }))?.props.label).toBe('▾ Memory (2)')
+  expect(await ui.find({ type: 'Text', text: / 1 to review/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /⚠/ })).toBeDefined()
+  expect(await ui.find({ key: 'forget-m2' })).toBeUndefined()
   await ui.press({ key: 'trust-m1' })
   expect(fake.of('trust_memory').map((c) => c.input)).toEqual([{ goal_id: 'g1', memory_id: 'm1' }])
   await ui.unmount()
@@ -493,8 +531,9 @@ test('a goal\'s controls are separated by dots, and a scheduled goal has Resched
   expect(await ui.find({ key: 'reschedule-g1' })).toBeDefined()
   expect(await ui.find({ key: 'schedule-g1' })).toBeUndefined()
   expect(await ui.find({ key: 'reschedule-g2' })).toBeUndefined()
-  // Each goal: Reschedule (or Set schedule) · Run now · Pause · Delete, with no dot at either end
-  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(6)
+  // Each goal: Reschedule (or Set schedule) · Run now · Pause · Delete, with no dot at either end,
+  // and its facts line: Runs … · model
+  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(8)
   await ui.unmount()
 })
 
@@ -527,16 +566,14 @@ test("an expanded goal shows its model; Change… sets the one picked", async ($
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
-  const label = await ui.find({ type: 'Text', text: "Model: the session's model · " })
-  expect(label).toBeDefined()
-  // Drawn as a setting in the theme's normal text colour, not a dimmed footnote
-  expect(label?.props.dimColor).toBeUndefined()
-  expect(label?.props.color).toBeUndefined()
+  // On the facts line, drawn as something to press
+  expect((await ui.find({ key: 'model-change-g1' }))?.props.label).toBe("the session's model")
+  expect((await ui.find({ type: 'Text', text: "the session's model" }))?.props.color).toBe('suggestion')
   await ui.press({ key: 'model-change-g1' })
   expect(asked[0]).toMatch(/^Which model should "Inbox" run on\? Now: the session's model\./)
   expect(fake.of('update_goal').map((c) => c.input)).toEqual([{ goal_id: 'g1', model: 'haiku' }])
   expect(toasts.join(' ')).toContain('Inbox now runs on Haiku.')
-  expect(await ui.find({ type: 'Text', text: 'Model: Haiku · ' })).toBeDefined()
+  expect((await ui.find({ key: 'model-change-g1' }))?.props.label).toBe('Haiku')
   await ui.unmount()
 })
 
@@ -916,12 +953,12 @@ test("an expanded goal lists its Claude Code allow rules when opened, and Claude
   await ui.press({ key: 'toggle-g1' })
   await ui.press({ key: 'toggle-g2' })
   // One line until opened, and none for a goal with no auto tool rules
-  expect((await ui.find({ key: 'allow-toggle-g1' }))?.props.label).toBe('▸ Claude Code allow rules (1)')
+  expect((await ui.find({ key: 'allow-toggle-g1' }))?.props.label).toBe('▸ 1 allow rule')
   expect(await ui.find({ key: 'allow-toggle-g2' })).toBeUndefined()
   expect(await ui.find({ key: 'allow-ask-g1' })).toBeUndefined()
 
   await ui.press({ key: 'allow-toggle-g1' })
-  expect((await ui.find({ key: 'allow-toggle-g1' }))?.props.label).toBe('▾ Claude Code allow rules (1)')
+  expect((await ui.find({ key: 'allow-toggle-g1' }))?.props.label).toBe('▾ 1 allow rule')
   expect((await ui.find({ type: 'Text', text: /^\s*Bash$/ }))?.text).toContain('Bash')
   // A propose category's tool waits for an approval anyway: no rule for it
   expect(await ui.find({ type: 'Text', text: /trash_thread/ })).toBeUndefined()

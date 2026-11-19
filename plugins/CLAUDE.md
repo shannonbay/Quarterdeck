@@ -21,4 +21,5 @@ The release ships each plugin's hooks as one file, `hooks/register.jsx` (`script
 
 - A goal with nothing for the person (`isQuiet` in `hooks/model.ts`) is one line until expanded, so tests press `toggle-<id>` before a quiet goal's controls.
 - A plain button for an action (Pause, Delete, Ask…, Cancel) goes through `action()` in `hooks/pane.tsx`, which draws its label in the one action colour (`Button` has no colour prop; a `Text` child carries it); rows that are content you press (a goal's name, a to-do's text, ☐) stay plain `Button`s.
+- An expanded goal keeps to short lines (`details` in `hooks/pane.tsx`): one facts line (`factsLine`: runs, model, ▸ watches, ▸ allow rules), sections closed behind ▸ with counts, rows clipped with `clip()` and pressed to open. Open/closed is `isOpen(view, key, byDefault)`: a `view.shown` key flips the default, so a section that opens by itself (a memory to trust, a watch that can't check) can still be closed. Tests press `memory-toggle-<id>`, `memory-row-<mid>`, `watches-toggle-<id>` before what they open.
 - `$.ui.ask` takes at most 4 options.
