@@ -10,7 +10,7 @@ beforeEach(() => { outdated.value = false })
 describe('a server on older code than the database (#60)', () => {
   it("refuses the person's changes and decisions, and what queues runs, with the reload message", () => {
     outdated.value = true
-    for (const tool of ['decide_item', 'update_goal', 'create_goal', 'delete_goal', 'set_goal_status', 'set_schedule', 'delete_memory', 'trust_memory', 'cancel_run', 'run_goal', 'watch_report']) {
+    for (const tool of ['decide_item', 'update_goal', 'create_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'set_goal_status', 'set_schedule', 'delete_memory', 'trust_memory', 'cancel_run', 'run_goal', 'watch_report']) {
       expect(outdatedRefusal(tool)).toBe(OUTDATED_MESSAGE)
     }
     expect(OUTDATED_MESSAGE).toMatch(/reload-plugins/)

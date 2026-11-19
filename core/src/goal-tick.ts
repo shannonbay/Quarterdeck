@@ -10,7 +10,7 @@
 import type { Database } from './sqlite.js'
 import { getTask, updateTask } from './queries.js'
 import { approveTask, isProposal, rejectTask, asksPerson } from './gates.js'
-import { getGoal, getOpenRun, getRun, listGoals, updateGoal, updateRun, insertRun, insertMemory, RUNAWAY_REF } from './goals.js'
+import { getGoal, getOpenRun, getRun, listGoals, purgeExpiredGoals, updateGoal, updateRun, insertRun, insertMemory, RUNAWAY_REF } from './goals.js'
 import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, queueRunAfterDecision, recordSkip, GoalError, ANSWER_PREFIX } from './goal-engine.js'
 import { healthDue, runHealthCheck } from './health.js'
 import { checkCommandWatch, countUnqueuedWatchEvents, listWatches, markWatchEventsQueued, takeDueToolWatches, watchDue, type ToolWatchCall } from './watches.js'
@@ -262,6 +262,8 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
   if (!opts.ignoreLease && !takeLease(db, opts.holder, now)) return { leader: false, claimed: [], expired: [] }
 
   const expired = expireStaleRuns(db, now, { skipRunIds: opts.trackedRunIds })
+  // Deleted goals past the retention period are erased for good (QUARTERDECK_DELETED_RETENTION_DAYS)
+  purgeExpiredGoals(db, now)
   const goals = listGoals(db, 'active')
 
   // Health checks first: a failing check can queue a run that starts in this same pass

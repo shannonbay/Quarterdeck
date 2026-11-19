@@ -42,7 +42,7 @@ import {
   ReportRunEndSchema,
   WatchReportSchema,
   RunProgressSchema,
-  DeleteGoalSchema,
+  DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema,
   UnsubscribeOneClickSchema, ResolveReviewThreadSchema, DetectForgeSchema,
   TodoListSchema,
   TodoAddSchema,
@@ -65,7 +65,7 @@ import { verify_task } from './tools/verify_task.js'
 import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
-  create_goal, delete_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, watch_report, run_progress,
+  create_goal, delete_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
 } from './tools/goal_runner.js'
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
 import { unsubscribe_one_click } from './tools/unsubscribe.js'
@@ -264,7 +264,9 @@ const TOOLS = [
     ['get_item', "One goal item's full title, notes and action summary, which the overview clips.", GetItemSchema, get_item],
     ['cancel_run', "Cancels a goal's run in progress.", CancelRunSchema, cancel_run],
     ['set_goal_status', 'Pauses or resumes a goal.', SetGoalStatusSchema, set_goal_status],
-    ['delete_goal', 'Deletes a goal for good, for the human (after they confirm).', DeleteGoalSchema, delete_goal],
+    ['delete_goal', 'Deletes a goal for the human (after they confirm): it is hidden and paused, and can be restored until it is purged after the retention period.', DeleteGoalSchema, delete_goal],
+    ['restore_goal', 'Restores a deleted goal for the human; it comes back paused.', RestoreGoalSchema, restore_goal],
+    ['purge_goal', 'Erases a deleted goal for good, for the human (after they confirm again).', PurgeGoalSchema, purge_goal],
     ['unsubscribe_one_click', "Unsubscribes from a mailing list with RFC 8058 one-click: one POST to the https List-Unsubscribe link of a message whose List-Unsubscribe-Post header is 'List-Unsubscribe=One-Click'. No browser needed. In a goal run, only for an approved unsubscribe.", UnsubscribeOneClickSchema, unsubscribe_one_click],
     ['attach_agent', 'Records which subagent is doing a goal run.', AttachAgentSchema, attach_agent],
     ['fail_run', 'Marks a goal run failed or timed out.', FailRunSchema, fail_run],

@@ -20,6 +20,8 @@ export const REFUSED_WHEN_OUTDATED = new Set([
   'update_goal',
   'create_goal',
   'delete_goal',
+  'restore_goal',
+  'purge_goal',
   'set_goal_status',
   'set_schedule',
   'delete_memory',

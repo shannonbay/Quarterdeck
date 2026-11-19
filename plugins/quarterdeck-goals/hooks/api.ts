@@ -126,7 +126,7 @@ export async function updateGoal($: Engine, goalId: string, changes: GoalChanges
   return { changed: r.changed, watches: r.watches ?? [] }
 }
 
-/** Deletes a goal for good (the pane confirms first). */
+/** Deletes a goal so it can be restored until it is purged (the pane confirms first). */
 export async function deleteGoal($: Engine, goalId: string): Promise<void> {
   await call($, 'delete_goal', { goal_id: goalId })
 }
@@ -260,4 +260,14 @@ export async function setTodo($: Engine, listId: string, itemId: string, status:
 /** Rewords a to-do (and its notes, when given). */
 export async function editTodo($: Engine, listId: string, itemId: string, input: { text?: string; notes?: string; by: 'human' | 'agent' }): Promise<void> {
   await call($, 'todo_set', { list_id: listId, item_id: itemId, changed_by: input.by, ...(input.text !== undefined && { text: input.text }), ...(input.notes !== undefined && { notes: input.notes }) })
+}
+
+/** Restores a deleted goal; it comes back paused. */
+export async function restoreGoal($: Engine, goalId: string): Promise<void> {
+  await call($, 'restore_goal', { goal_id: goalId })
+}
+
+/** Erases a deleted goal for good (the pane asks again first). */
+export async function purgeGoal($: Engine, goalId: string): Promise<void> {
+  await call($, 'purge_goal', { goal_id: goalId })
 }

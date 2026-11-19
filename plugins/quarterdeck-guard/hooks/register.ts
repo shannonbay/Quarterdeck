@@ -54,6 +54,8 @@ const HUMAN_ONLY = new Set([
   'guard_check',
   'create_goal',
   'delete_goal',
+  'restore_goal',
+  'purge_goal',
   'delete_memory',
   'trust_memory',
   'set_schedule',

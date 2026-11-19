@@ -553,7 +553,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
   if (isDeleting) {
     return (
       <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
-        <Text color="yellow">Delete "{g.name}" for good, with its items, runs and memory? This can't be undone.</Text>
+        <Text color="yellow">Delete "{g.name}"? It stops running and is hidden; you can restore it, with its items, runs and memory, until it is purged after the retention period (30 days unless QUARTERDECK_DELETED_RETENTION_DAYS says otherwise).</Text>
         <Box>
           <Button
             key={`delete-yes-${g.id}`}

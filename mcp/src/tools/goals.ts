@@ -3,6 +3,7 @@ import {
   listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, updateMemory, getRun, endRun, queueRun, countItems, touchPlan,
   reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
 } from '../db.js'
+import { purgeDate } from '@quarterdeck/core'
 import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
 import {
   ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema,
@@ -19,7 +20,7 @@ function requireOpenGoal(): string {
 
 export async function list_goals(args: unknown) {
   const input = ListGoalsSchema.parse(args)
-  const goals = listGoals(input.status === 'all' ? undefined : input.status)
+  const goals = listGoals({ status: input.status === 'all' ? undefined : input.status, deleted: input.deleted })
   return {
     goals: goals.map(({ plan, goal }) => {
       const counts = countItems(plan.id)
@@ -28,6 +29,7 @@ export async function list_goals(args: unknown) {
         name: plan.name,
         objective: goal.objective,
         status: goal.status,
+        ...(goal.deleted_at ? { deleted_at: goal.deleted_at, purge_at: purgeDate(goal) } : {}),
         open_items: counts.open ?? 0,
         awaiting_review: counts.awaiting_review ?? 0,
         last_run_at: goal.last_run_at,
