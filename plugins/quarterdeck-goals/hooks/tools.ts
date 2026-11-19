@@ -5,7 +5,7 @@
  */
 import type { EngineInterface } from 'claude-code'
 
-import type { GoalCard } from '../types'
+import type { DeletedGoal, GoalCard } from '../types'
 import { addTodo, answerItem, approve, createGoal, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
 import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
@@ -200,7 +200,18 @@ async function resolveGoal($: Engine, query: unknown): Promise<Resolved> {
   const s = await refresh($)
   if (!s.reachable) return { error: `Quarterdeck isn't connected${s.error ? ` (${s.error})` : ''}. Check the quarterdeck MCP server with /mcp.` }
   const found = findGoal(s.goals, typeof query === 'string' ? query : '')
-  return 'goal' in found ? found : { error: noMatch(s.goals, String(query ?? ''), found.matches) }
+  if ('goal' in found) return found
+  // A deleted goal (#105) is no live goal, but say so rather than "no goal matches"
+  const q = String(query ?? '').trim()
+  const gone = found.matches.length === 0 ? s.deleted?.find((d) => d.id === q || d.name.toLowerCase() === q.toLowerCase()) : undefined
+  if (gone) return { error: deletedText(gone) }
+  return { error: noMatch(s.goals, String(query ?? ''), found.matches) }
+}
+
+/** What a tool says about a deleted goal: when it was deleted, when it is purged, and how to get it back. */
+export function deletedText(d: DeletedGoal): string {
+  const purge = d.purgeAt ? `it is purged on ${d.purgeAt.slice(0, 10)} unless restored` : 'it is kept until it is deleted permanently'
+  return `"${d.name}" was deleted on ${d.deletedAt.slice(0, 10)}; ${purge}. Restore it from Recently deleted in the goals pane.`
 }
 
 /** The goal with its full detail, fetched for it alone. */

@@ -21,6 +21,14 @@ test('goals_status summarises every goal for Claude, with item ids', async ($, o
   expect(text).toContain('Now: Waiting for its first run')
 })
 
+test('goal_detail on a deleted goal says when it is purged and how to restore it (#105)', async ($, on) => {
+  engine(on)
+  fakeQuarterdeck(on, [inbox()], { deleted: [{ id: 'g9', name: 'Old jobs', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' }] })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'old jobs' } as never)
+  expect(String(res.result)).toBe('Error: "Old jobs" was deleted on 2026-11-06; it is purged on 2026-12-06 unless restored. Restore it from Recently deleted in the goals pane.')
+})
+
 test('approve_item asks first and does nothing when declined', async ($, on) => {
   const { asked } = engine(on, { answer: 'Cancel' })
   const fake = fakeQuarterdeck(on, [inbox()])
