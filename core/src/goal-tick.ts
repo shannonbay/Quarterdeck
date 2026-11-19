@@ -202,9 +202,26 @@ export function queueForWatchEvents(db: Database, planId: string, now: Date = ne
   const open = getOpenRun(db, planId)
   // A memory curation run reads no events: they wait for the run after it
   if (open?.status === 'running' || open?.trigger === 'curate') return null
+  // The goal's gap between watch-started runs: events wait and share the first run after it, unless an urgent watch's are among them
+  if (!open && watchGapHolds(db, planId, now)) return null
   const run = open ?? queueRun(db, planId, 'watch')
   markWatchEventsQueued(db, planId, now)
   return run
+}
+
+/**
+ * True while the goal's min_watch_gap_minutes since its last watch-started run hasn't
+ * passed and no waiting event comes from an urgent watch: watch events then wait.
+ */
+export function watchGapHolds(db: Database, planId: string, now: Date = new Date()): boolean {
+  const gap = getGoal(db, planId)?.limits.min_watch_gap_minutes ?? 0
+  if (!(gap > 0)) return false
+  const last = db.prepare("SELECT started_at FROM goal_runs WHERE plan_id = ? AND trigger = 'watch' AND status != 'skipped' ORDER BY started_at DESC LIMIT 1")
+    .get(planId) as { started_at: string } | undefined
+  if (!last || now.getTime() - new Date(last.started_at).getTime() >= gap * 60_000) return false
+  const urgent = db.prepare(`SELECT 1 FROM goal_watch_events e JOIN goal_watches w ON w.id = e.watch_id
+    WHERE e.plan_id = ? AND e.run_id IS NULL AND e.queued_at IS NULL AND w.urgent = 1 LIMIT 1`).get(planId)
+  return !urgent
 }
 
 // ── The pass ──────────────────────────────────────────────────────────────────

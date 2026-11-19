@@ -125,9 +125,11 @@ export interface GoalLimits {
   max_idle_runs: number
   /** Runs that may work on one item (or one external_ref) before it becomes a Needs-you question (0: off). */
   max_item_attempts: number
+  /** Minutes after a watch-started run before watch events start another (0: no gap). Events in between wait and share the next run; an urgent watch's events don't wait. */
+  min_watch_gap_minutes: number
 }
 
-export const DEFAULT_GOAL_LIMITS: GoalLimits = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48, max_runs_per_hour: 8, max_idle_runs: 5, max_item_attempts: 3 }
+export const DEFAULT_GOAL_LIMITS: GoalLimits = { max_run_minutes: 15, max_items_per_run: 50, max_runs_per_day: 48, max_runs_per_hour: 8, max_idle_runs: 5, max_item_attempts: 3, min_watch_gap_minutes: 0 }
 
 export interface Goal {
   plan_id: string
@@ -199,8 +201,12 @@ export interface Watch {
   steps: WatchStep[] | null
   /** A call that always runs after the steps, even after a failure (null: none). */
   finally: WatchCall | null
-  /** For a tool watch: a regular expression whose first group (or whole match) is one line. */
+  /** For a tool watch: a regular expression whose first group (or whole match) is one line. For a command watch: only output lines it matches count. */
   match: string | null
+  /** A regular expression: lines it matches are left out, never events and never seen. */
+  ignore: string | null
+  /** Its events start a run even within the goal's min_watch_gap_minutes. */
+  urgent: boolean
   every_minutes: number
   /** 'new': a line never seen before is an event. 'change': when the output differs from the last check, its lines that weren't in that check are events. */
   fires: WatchFires
@@ -254,12 +260,25 @@ export interface WatchStatusRules {
 }
 
 /** What the person sets on a watch. */
-export type WatchSpec =
-  | { command: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
+export type WatchSpec = WatchSpecCommon & (
+  /** A shell command: `match` keeps only the output lines it matches. */
+  | { command: string }
   /** A tool the plugin calls (a connector's search): `match` turns its answer into lines. */
-  | { tool: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
+  | { tool: string; input?: Record<string, unknown> }
   /** A short sequence of calls (up to 4), then an optional clean-up call that always runs. */
-  | { steps: WatchStep[]; finally?: WatchCall; match?: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
+  | { steps: WatchStep[]; finally?: WatchCall })
+
+/** What every kind of watch may set. */
+export interface WatchSpecCommon {
+  match?: string
+  /** Lines this regular expression matches are left out. */
+  ignore?: string | null
+  /** Starts a run despite the goal's min_watch_gap_minutes. */
+  urgent?: boolean
+  every_minutes?: number
+  fires?: WatchFires
+  status?: WatchStatusRules | null
+}
 
 export interface WatchEvent {
   id: string

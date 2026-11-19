@@ -116,8 +116,10 @@ export const ProposeWatchSchema = z.object({
   input: z.record(z.unknown()).optional().describe("The tool's input"),
   steps: StepsSchema.optional(),
   finally: FinallySchema.optional(),
-  match: z.string().optional().describe("A regular expression: the tool's answer lines that count"),
-  every_minutes: z.number().int().min(1).optional().describe('How often to check'),
+  match: z.string().optional().describe("A regular expression: the tool's answer lines that count, or for a command the output lines that count"),
+  ignore: z.string().optional().describe('A regular expression: lines it matches are left out'),
+  urgent: z.boolean().optional().describe("true: its news starts a run even within the goal's gap between watch runs"),
+  every_minutes: z.number().int().min(1).optional().describe('How often to check (default 5). Each run it starts is a full model run: pick the longest interval the source allows (goal-watches skill, Fewer quiet runs)'),
   fires: z.enum(['new', 'change']).optional().describe('Run on new lines (default) or when the output changes'),
   status: z.unknown().optional().describe('Optional status rules: {rules: [{match, status, tone?, run?}], default?}'),
   reason: z.string().optional().describe('One short sentence: what this watch is for'),
@@ -257,8 +259,10 @@ const WatchSchema = z.object({
   input: z.record(z.unknown()).optional().describe("The tool's arguments"),
   steps: StepsSchema.optional(),
   finally: FinallySchema.optional(),
-  match: z.string().optional().describe('A regular expression over the tool\'s answer; each match (its first group) is one line. Left out: every "id" in a JSON answer'),
-  every_minutes: z.number().int().min(1).optional().describe('How often to check (default 5)'),
+  match: z.string().optional().describe('A regular expression over the tool\'s answer; each match (its first group) is one line. Left out: every "id" in a JSON answer. For a command: only the output lines it matches count (whole lines, before the line cap)'),
+  ignore: z.string().nullable().optional().describe('A regular expression: lines it matches are left out (for either kind): never a run, never marked seen, not read by status rules. null removes it'),
+  urgent: z.boolean().optional().describe("true: this watch's news starts a run at once, even within the goal's min_watch_gap_minutes (for sources where minutes matter)"),
+  every_minutes: z.number().int().min(1).optional().describe('How often to check (default 5). Each run it starts is a full model run: pick the longest interval the source allows (goal-watches skill, Fewer quiet runs)'),
   status: z.object({
     rules: z.array(z.object({
       match: z.string().min(1).describe('A regular expression tested against each line'),
@@ -329,6 +333,7 @@ export const UpdateGoalSchema = z.object({
   watches: z.record(WatchSchema.nullable()).optional().describe('Watch name → what it checks; null removes the watch. A run starts when a watch sees something new'),
   status: z.enum(['active', 'paused']).optional(),
   model: z.string().nullable().optional().describe("The model its runs use: haiku, sonnet, opus or a full model id; null: the model of the session that starts each run"),
+  min_watch_gap_minutes: z.number().int().min(0).max(1440).optional().describe("Minutes after a watch-started run before watch news starts another (0: none): news in between waits and shares the next run; an urgent watch's still starts one"),
 })
 
 export const ReportRunEndSchema = z.object({

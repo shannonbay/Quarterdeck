@@ -62,6 +62,8 @@ const PatchSchema = z.object({
     max_runs_per_hour: z.number().int().min(0).max(60),
     max_idle_runs: z.number().int().min(0).max(100),
     max_item_attempts: z.number().int().min(0).max(100),
+    // Minutes after a watch-started run before watch events start another (0: none)
+    min_watch_gap_minutes: z.number().int().min(0).max(1440),
   }).partial().optional(),
   item_retention_days: z.number().int().min(1).max(365).optional(),
   interval: z.object({

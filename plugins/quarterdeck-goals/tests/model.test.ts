@@ -283,6 +283,18 @@ test("a goal's model shows in its detail and in a change the person confirms", a
     .toContain(`It sets the goal's status: /^M/ → "dirty" (attention); otherwise "clean" (ok)`)
 })
 
+test('the gap between watch runs, a watch filter and urgent show in the detail and in a change the person confirms (#111)', async () => {
+  const g = card({ id: 'g1', name: 'Listings', watch_gap_minutes: 30, watches: [{ name: 'free', every_minutes: 5, urgent: true, runs: 'node free.js', last_fired_at: null, failing: false, error: null }] })
+  expect(g).toMatchObject({ watchGapMinutes: 30, watches: [{ urgent: true }] })
+  expect(describe(g, NOW)).toContain('watch runs start at least 30 min apart')
+  expect(describe(g, NOW)).toContain('- free: every 5 min (urgent)')
+  expect(describeGoalChanges(g, { min_watch_gap_minutes: 30 })).toEqual([])
+  expect(describeGoalChanges(g, { min_watch_gap_minutes: 0 })).toEqual(['No gap between watch runs: each watch that sees something new starts a run'])
+  expect(describeGoalChanges(card({ id: 'g2', name: 'Other' }), { min_watch_gap_minutes: 20 })[0]).toMatch(/^Watch runs at least 20 min apart/)
+  expect(describeGoalChanges(g, { watches: { feed: { command: 'node feed.js', match: '^item ', ignore: 'sponsored', urgent: true } } })[0])
+    .toBe(`New watch "feed": every 5 min this command runs on your computer, and a run starts when it prints a line it hasn't before: node feed.js (only lines matching ^item ), leaving out lines matching sponsored, urgent (starts a run even within the gap between watch runs)`)
+})
+
 test('a category merge shows where it goes and the mode it ends with', async () => {
   const g = card({ id: 'g1', name: 'Fixer', autonomy: { 'git.push': 'auto' } })
   expect(describeGoalChanges(g, { merge_categories: { 'git.push': 'github.pr' } }))

@@ -650,11 +650,12 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
       {modelLine($, e, view, g)}
       {g.watches.map((w) => (
         <Text key={`watch-${g.id}/${w.name}`} dimColor>
-          Also runs when "{w.name}" {w.onChange ? 'changes' : 'sees something new'} (checked every {w.everyMinutes} min{w.lastFiredAt ? `, last ${ago(w.lastFiredAt, view.now)}` : ''})
+          Also runs when "{w.name}" {w.onChange ? 'changes' : 'sees something new'} (checked every {w.everyMinutes} min{w.urgent && g.watchGapMinutes ? ', urgent' : ''}{w.lastFiredAt ? `, last ${ago(w.lastFiredAt, view.now)}` : ''})
           {w.failing && <Text color="red"> · can't check: {w.error ?? 'the command fails'}</Text>}
           {!w.failing && w.error && <Text dimColor> · note: {w.error}</Text>}
         </Text>
       ))}
+      {g.watches.length > 0 && g.watchGapMinutes > 0 && <Text key={`watch-gap-${g.id}`} dimColor>Watch runs start at least {g.watchGapMinutes} min apart; news in between waits for the next run</Text>}
       {allowSection($, e, view, g)}
 
       <Text bold>Open items</Text>
