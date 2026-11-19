@@ -41,7 +41,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 }
 
-/** DELETE — remove a memory entirely. */
+/** DELETE — forget a memory: it goes inactive with reason forgotten and can be restored (#105). */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   try {
     const stale = refuseIfOutdated()

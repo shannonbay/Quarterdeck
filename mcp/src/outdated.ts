@@ -25,6 +25,7 @@ export const REFUSED_WHEN_OUTDATED = new Set([
   'set_goal_status',
   'set_schedule',
   'delete_memory',
+  'restore_memory',
   'trust_memory',
   'cancel_run',
   'run_goal',

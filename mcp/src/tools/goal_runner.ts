@@ -6,13 +6,13 @@
  */
 import {
   schedulerPass, releaseLease, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
-  getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, updateMemory,
+  getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema,
 } from '../schema.js'
 import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
@@ -168,7 +168,17 @@ export async function delete_memory(args: unknown) {
   if (!m || m.plan_id !== input.goal_id) throw new Error(`Memory ${input.memory_id} not found in this goal.`)
   deleteMemory(m.id)
   record(input.goal_id, input.goal_id, 'memory_deleted', { memory_id: m.id, text: m.text }, human)
-  return { deleted: m.id }
+  return { deleted: m.id, restorable: true }
+}
+
+/** Puts an inactive memory (forgotten, merged, retired or rewritten) back to active, for the person. */
+export async function restore_memory(args: unknown) {
+  const input = RestoreMemorySchema.parse(args)
+  const m = getMemory(input.memory_id)
+  if (!m || m.plan_id !== input.goal_id) throw new Error(`Memory ${input.memory_id} not found in this goal.`)
+  const restored = restoreMemory(m.id)
+  if (!m.active) record(input.goal_id, input.goal_id, 'memory_restored', { memory_id: m.id, was: m.inactive_reason ?? null }, human)
+  return { restored: m.id, was: m.inactive_reason ?? null, active: restored.active, ...(m.replaced_by && { newer_memory: m.replaced_by }) }
 }
 
 /**

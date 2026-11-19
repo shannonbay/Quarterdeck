@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
-  create_goal, delete_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report,
+  create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
 import { create_plan } from '../../tools/create_plan.js'
@@ -189,12 +189,16 @@ describe('create_goal and delete_memory', () => {
     await expect(create_goal({ name: 'X', objective: 'Y', working_dir: '/no/such/dir/xyz' })).rejects.toThrow(/not found/)
   })
 
-  it("deletes a goal's memory, and only from that goal", async () => {
+  it("forgets a goal's memory (kept, inactive), and only from that goal; restore_memory puts it back (#105)", async () => {
     const id = makeGoal()
     const m = insertMemory({ plan_id: id, kind: 'fact', text: 'Bob is my manager', source: 'human' })
     await expect(delete_memory({ goal_id: 'other', memory_id: m.id })).rejects.toThrow(/not found/)
-    expect(await delete_memory({ goal_id: id, memory_id: m.id })).toEqual({ deleted: m.id })
-    expect(getMemory(m.id)).toBeUndefined()
+    expect(await delete_memory({ goal_id: id, memory_id: m.id })).toEqual({ deleted: m.id, restorable: true })
+    expect(getMemory(m.id)).toMatchObject({ active: false, inactive_reason: 'forgotten', text: 'Bob is my manager' })
+    await expect(restore_memory({ goal_id: 'other', memory_id: m.id })).rejects.toThrow(/not found/)
+    expect(await restore_memory({ goal_id: id, memory_id: m.id })).toEqual({ restored: m.id, was: 'forgotten', active: true })
+    expect(getMemory(m.id)).toMatchObject({ active: true, inactive_reason: null })
+    expect(getEvents(id).some((e) => e.event_type === 'memory_restored')).toBe(true)
   })
 
   it("trusts a goal's marked memory, and only that goal's", async () => {

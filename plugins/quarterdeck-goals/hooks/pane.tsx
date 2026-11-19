@@ -17,7 +17,7 @@
 import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
 import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '../types'
-import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
+import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
 import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
@@ -745,10 +745,22 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
         )
       })}
 
+      {g.inactiveMemory.length > 0 && <Text bold>Inactive memory</Text>}
+      {g.inactiveMemory.map((m) => (
+        // Forgotten, merged, retired or rewritten: kept so it can come back (#105)
+        <Box key={`inactive-memory-${m.id}`}>
+          <Text dimColor>  [{m.kind}] {m.text} ({INACTIVE_REASON[m.reason ?? ''] ?? 'inactive'}{m.inactiveAt ? ` ${m.inactiveAt.slice(0, 10)}` : ''}) </Text>
+          {action($, e, { key: `restore-memory-${m.id}`, label: view.doing === `restore-memory:${m.id}` ? 'Restoring…' : 'Restore', onPress: () => void act($, `restore-memory:${m.id}`, 'restore the memory', () => restoreMemory($, g.id, m.id)) })}
+        </Box>
+      ))}
+
       <Link key={`open-${g.id}`} href={`${view.base}/goals/${encodeURIComponent(g.id)}`} label="Open in browser" />
     </Box>
   )
 }
+
+/** Why an inactive memory went, in the pane's words. */
+const INACTIVE_REASON: Record<string, string> = { forgotten: 'forgotten', merged: 'merged', retired: 'retired', rewritten: 'reworded' }
 
 const DONE_SECTION = '__done__'
 

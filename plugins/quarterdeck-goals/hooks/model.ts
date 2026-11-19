@@ -34,6 +34,8 @@ export type OverviewGoal = {
   open_item_count: number
   health: { passed: boolean; value: number | null }[]
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
+  /** Missing from a server older than memory recovery (#105). */
+  inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
   suggestions: { category: string; approved_in_a_row: number }[]
   /** Missing from a server older than watches. */
   watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
@@ -91,6 +93,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     health: latest ? { passed: latest.passed, value: latest.value } : null,
     trend: g.health.map((check) => check.value).filter((v): v is number => v !== null).reverse(),
     memory: g.memory.map((m) => ({ id: m.id, kind: m.kind, text: m.text, pinned: m.pinned, ...(m.untrusted && { untrusted: m.untrusted }) })),
+    inactiveMemory: (g.inactive_memory ?? []).map((m) => ({ id: m.id, kind: m.kind, text: m.text, reason: m.reason, inactiveAt: m.inactive_at, replacedBy: m.replaced_by ?? null })),
     suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row })),
     watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, error: w.error })),
     watchCount: g.watch_count ?? g.watches?.length ?? 0,

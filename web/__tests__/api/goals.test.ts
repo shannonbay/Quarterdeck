@@ -10,6 +10,7 @@ import { POST as POSTRestore } from '@/app/api/goals/[id]/restore/route.js'
 import { POST as POSTPurge } from '@/app/api/goals/[id]/purge/route.js'
 import { POST as POSTMemory } from '@/app/api/goals/[id]/memory/route.js'
 import { PATCH as PATCHMemory, DELETE as DELETEMemory } from '@/app/api/goals/[id]/memory/[memoryId]/route.js'
+import { POST as POSTRestoreMemory } from '@/app/api/goals/[id]/memory/[memoryId]/restore/route.js'
 import { POST as POSTApprove } from '@/app/api/goals/[id]/items/[itemId]/approve/route.js'
 import { POST as POSTReject } from '@/app/api/goals/[id]/items/[itemId]/reject/route.js'
 import { getDb, getOpenRun, getTask, getGoal, getIntervalTrigger, insertPlan } from '@/lib/db'
@@ -130,7 +131,13 @@ describe('goals API', () => {
     const data = await (await GETGoal(req('GET'), p(id))).json()
     expect(data.memory[0]).toMatchObject({ pinned: true, text: 'Never archive mail from the bank.' })
     await DELETEMemory(req('DELETE'), p(id, { memoryId: memory.id }))
-    expect((await (await GETGoal(req('GET'), p(id))).json()).memory).toEqual([])
+    // Forgetting keeps the memory, inactive, so it can be restored (#105)
+    expect((await (await GETGoal(req('GET'), p(id))).json()).memory).toMatchObject([{ id: memory.id, active: false, inactive_reason: 'forgotten' }])
+    // Restore brings it back and clears why it went
+    expect((await POSTRestoreMemory(req('POST'), p(id, { memoryId: memory.id }))).status).toBe(200)
+    expect((await (await GETGoal(req('GET'), p(id))).json()).memory).toMatchObject([{ id: memory.id, active: true, inactive_reason: null }])
+    expect(core.getEvents(getDb(), id, { limit: 10 }).map((e) => e.event_type)).toContain('memory_restored')
+    expect((await POSTRestoreMemory(req('POST'), p('nope', { memoryId: memory.id }))).status).toBe(404)
     expect((await POSTMemory(req('POST', { kind: 'rule', text: ' ' }), p(id))).status).toBe(400)
   })
 

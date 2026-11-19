@@ -16,7 +16,7 @@ import { getTask, insertTask, nextChildId, updateTask } from './queries.js'
 import { approveTask, rejectTask } from './gates.js'
 import {
   CURATION_REF, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertMemory, insertRun, listMemory, markRunUntrusted,
-  RUN_SUMMARY_SOURCE, updateGoal, updateMemory,
+  RUN_SUMMARY_SOURCE, retireMemory, updateGoal, updateMemory,
 } from './goals.js'
 import { compareMemory, GoalError, markFromMemory, MEMORY_BRIEF_CHARS, memoryRank, readOutsideContent } from './goal-engine.js'
 import type { GoalMemory, GoalRun, MemoryKind, MemorySource, Task } from './types.js'
@@ -454,6 +454,7 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
   const runRoot = markedRun?.untrusted_root ?? runMark
   return db.transaction((): CurationResult => {
     const result: CurationResult = { applied: [], skipped: [], created: [] }
+    const rewritten = new Map<string, string>()
     for (const c of state.changes) {
       const line = describeChange(c, state.memory).split('\n')[0]!
       const snaps = touched(c).map((id) => state.memory[id]!)
@@ -476,15 +477,24 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
           })
           // insertMemory marks only agent memory; merged text is the run's, even when it merges the person's own
           if (!m.untrusted_source && runMark) updateMemory(db, m.id, { untrusted_source: runMark, untrusted_root: runRoot })
-          for (const s of sources) updateMemory(db, s.id, { active: false })
+          for (const s of sources) retireMemory(db, s.id, { reason: 'merged', ref: taskId, replaced_by: m.id })
           result.created.push(m.id)
           break
         }
-        case 'rewrite':
-          updateMemory(db, c.id, { text: c.text, ...(runMark && !state.memory[c.id]!.untrusted_source && { untrusted_source: runMark, untrusted_root: runRoot }) })
+        case 'rewrite': {
+          // The old wording is kept: the rewrite is a new row that replaces it
+          const old = getMemory(db, c.id)!
+          const m = insertMemory(db, { plan_id: planId, kind: old.kind, text: c.text, source: old.source, source_ref: old.source_ref, pinned: old.pinned })
+          db.prepare('UPDATE goal_memory SET replaces = ?, last_used_at = ? WHERE id = ?').run(old.id, old.last_used_at, m.id)
+          if (old.untrusted_source) updateMemory(db, m.id, { untrusted_source: old.untrusted_source, untrusted_root: old.untrusted_root })
+          else if (runMark) updateMemory(db, m.id, { untrusted_source: runMark, untrusted_root: runRoot })
+          retireMemory(db, old.id, { reason: 'rewritten', ref: taskId, replaced_by: m.id })
+          rewritten.set(old.id, m.id)
+          result.created.push(m.id)
           break
+        }
         case 'retire':
-          updateMemory(db, c.id, { active: false })
+          retireMemory(db, c.id, { reason: 'retired', ref: taskId, replaced_by: c.replaced_by ?? null })
           break
         case 'unpin':
           updateMemory(db, c.id, { pinned: false })
@@ -496,6 +506,11 @@ export function applyCuration(db: Database, planId: string, taskId: string): Cur
         }
       }
       result.applied.push(line)
+    }
+    // A retire "replaced by" a memory this batch rewrote points at the rewrite
+    for (const [oldId, newId] of rewritten) {
+      db.prepare(`UPDATE goal_memory SET replaced_by = ? WHERE plan_id = ? AND inactive_reason = 'retired' AND inactive_ref = ? AND replaced_by = ?`)
+        .run(newId, planId, taskId, oldId)
     }
     approveTask(db, planId, taskId)
     const summary = `Applied ${result.applied.length} of ${state.changes.length} changes${result.skipped.length ? `; skipped ${result.skipped.length}:\n${result.skipped.map((s) => `- ${s}`).join('\n')}` : '.'}`

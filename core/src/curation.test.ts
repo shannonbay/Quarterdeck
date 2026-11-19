@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Database } from './sqlite.js'
 import {
-  openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateMemory, getTask,
+  openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, updateRun, insertMemory, listMemory, getMemory, updateMemory, restoreMemory, getTask,
   schedulerPass, claimRun, decideItem, endRun, queueRun, addItem, MEMORY_BRIEF_CHARS, SCHEMA_VERSION, dbSchemaVersion, markRunUntrusted, buildBrief, rejectTask, runMigrations,
   curationDue, curationReason, runsSinceCuration, CURATE_AFTER_RUNS, CURATE_RUNS, curateModel, buildCurationBrief, proposeCuration, mergedSource, CURATION_REF, type CurationChange,
 } from './index.js'
@@ -29,8 +29,8 @@ function curationRun(): string {
 }
 
 describe('schema', () => {
-  it('is version 18, with goals.curated_at and goals.deleted_at', () => {
-    expect(SCHEMA_VERSION).toBe(18)
+  it('is version 19, with goals.curated_at and goals.deleted_at', () => {
+    expect(SCHEMA_VERSION).toBe(19)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
     expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
@@ -471,7 +471,8 @@ describe('approve and reject', () => {
     decideItem(db, 'g1', task.id, { decision: 'approve' })
     const merged = listMemory(db, 'g1', { activeOnly: true }).find((m) => m.source === 'human')!
     expect(merged.untrusted_source).toBe('run summary run_a (written after WebFetch)')
-    expect(getMemory(db, fb.id)!.untrusted_source).toBe('run summary run_a (written after WebFetch)')
+    const reworded = listMemory(db, 'g1', { activeOnly: true }).find((m) => m.replaces === fb.id)!
+    expect(reworded.untrusted_source).toBe('run summary run_a (written after WebFetch)')
   })
 
   it("an unmarked curation run's changes stay trusted, and the curation brief isn't marked by an inherited mark alone", () => {
@@ -499,7 +500,37 @@ describe('approve and reject', () => {
     expect(task.notes).toContain('This run had read outside content')
     const r = decideItem(db, 'g1', task.id, { decision: 'approve' })
     expect(getMemory(db, r.curation!.created[0]!)!.untrusted_source).toMatch(/WebFetch/)
-    expect(getMemory(db, rule.id)!.untrusted_source).toMatch(/WebFetch/)
+    expect(getMemory(db, r.curation!.created[1]!)!.untrusted_source).toMatch(/WebFetch/)
+  })
+
+  it('records why curation retired, merged or rewrote memory, keeps the old wording, and a restore leaves the newer memory alone (#105)', () => {
+    const a = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Alice is my manager.', source: 'agent' })
+    const b = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'My manager is Alice.', source: 'agent' })
+    const c = insertMemory(db, { plan_id: 'g1', kind: 'rule', text: 'Archive newsletters on Fridays', source: 'human', pinned: true })
+    const d = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Old office is on Queen St.', source: 'agent' })
+    const run = curationRun()
+    buildCurationBrief(db, 'g1', run)
+    const task = proposeCuration(db, 'g1', run, [
+      { type: 'merge', from: [a.id, b.id], kind: 'fact', text: 'Alice is my manager.' },
+      { type: 'rewrite', id: c.id, text: 'Archive newsletters every Friday.', pinned: true },
+      { type: 'retire', id: d.id, reason: 'We moved.' },
+    ])
+    const r = decideItem(db, 'g1', task.id, { decision: 'approve' })
+    const [mergedId, rewrittenId] = r.curation!.created
+    expect(getMemory(db, a.id)).toMatchObject({ active: false, inactive_reason: 'merged', replaced_by: mergedId, inactive_ref: task.id })
+    expect(getMemory(db, b.id)).toMatchObject({ active: false, inactive_reason: 'merged', replaced_by: mergedId })
+    // The old wording is kept on the retired row; the rewrite is a new row that replaces it
+    expect(getMemory(db, c.id)).toMatchObject({ active: false, text: 'Archive newsletters on Fridays', inactive_reason: 'rewritten', replaced_by: rewrittenId })
+    expect(getMemory(db, rewrittenId!)).toMatchObject({ active: true, text: 'Archive newsletters every Friday.', kind: 'rule', source: 'human', pinned: true, replaces: c.id })
+    expect(getMemory(db, d.id)).toMatchObject({ active: false, inactive_reason: 'retired', inactive_ref: task.id })
+    expect(getMemory(db, d.id)!.inactive_at).toBeTruthy()
+    // Inactive memory stays out of the brief
+    const brief = JSON.stringify(buildCurationBrief(db, 'g1', curationRun()))
+    expect(brief).not.toContain('Old office')
+    // Restoring the rewritten one leaves the rewrite alone
+    restoreMemory(db, c.id)
+    expect(getMemory(db, c.id)).toMatchObject({ active: true, inactive_reason: null, inactive_at: null, inactive_ref: null, replaced_by: null })
+    expect(getMemory(db, rewrittenId!)).toMatchObject({ active: true, replaces: c.id })
   })
 
   it('claimRun keeps the goal model for ordinary runs', () => {

@@ -298,6 +298,13 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         health: listHealth(db, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),
         memory: listMemory(db, plan.id, { activeOnly: true }).slice(-MEMORY).reverse()
           .map((m) => ({ id: m.id, kind: m.kind, text: clip(m.text, CLIP.memory)!, source: m.source, pinned: m.pinned, created_at: m.created_at, untrusted: m.untrusted_source })),
+        // Inactive memory, latest to go first, with why it went, for Restore in the memory view (#105)
+        inactive_memory: listMemory(db, plan.id).filter((m) => !m.active)
+          .sort((x, y) => (y.inactive_at ?? '').localeCompare(x.inactive_at ?? '')).slice(0, MEMORY)
+          .map((m) => ({
+            id: m.id, kind: m.kind, text: clip(m.text, CLIP.memory)!, reason: m.inactive_reason ?? null, inactive_at: m.inactive_at ?? null,
+            ref: m.inactive_ref ?? null, replaced_by: m.replaced_by ?? null,
+          })),
         suggestions: getAutonomySuggestions(db, plan.id),
         // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
         watches: watches.map((w) => ({
@@ -325,7 +332,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           ...(i.asks_person && i.notes && g.needs_you.filter((q) => q.asks_person).indexOf(i) < CARD_CONTEXT ? { notes: i.notes } : {}),
           action: i.action ? { category: (i.action as { category: string }).category, summary: clip((i.action as { summary: string }).summary, CARD_TEXT)! } : null,
         })),
-        runs: g.runs.slice(0, 1), open_items: [], memory: [], instructions: '', tool_map: {}, watches: [],
+        runs: g.runs.slice(0, 1), open_items: [], memory: [], inactive_memory: [], instructions: '', tool_map: {}, watches: [],
       }
     })
   const standing = standingSession !== null && leaseHolder(db) === standingSession
