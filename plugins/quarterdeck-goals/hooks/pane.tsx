@@ -349,10 +349,23 @@ function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap:
   const factsRoom = room - (showNote ? noteWidth : 0)
   return (
     <Box key={g.id} marginBottom={gap}>
-      <Button key={`toggle-${g.id}`} plain label={`▸ ${g.name}`} hotkey={index < 9 ? String(index + 1) : undefined} onPress={() => void toggleExpanded($, g.id).then(() => refresh($))} />
+      {goalName($, e, g, `▸ ${g.name}`, index, () => void toggleExpanded($, g.id).then(() => refresh($)))}
       {showNote && statusNoteText($, e, `note-${g.id}`, note, `[${note.text}]`, ' ')}
       {factsRoom >= 8 && <Text dimColor>{clip(facts, factsRoom)}</Text>}
     </Box>
+  )
+}
+
+/**
+ * A goal's name, which you press to expand or collapse it (hotkeys 1-9). A paused
+ * goal's is dimmed, as its status is, so it stands apart from a running one.
+ */
+function goalName($: Engine, e: E, g: GoalCard, label: string, index: number, onPress: () => void) {
+  const { Button, Text } = parts($, e)
+  return (
+    <Button key={`toggle-${g.id}`} plain label={label} hotkey={index < 9 ? String(index + 1) : undefined} onPress={onPress}>
+      {g.status === 'paused' ? <Text dimColor>{label}</Text> : undefined}
+    </Button>
   )
 }
 
@@ -393,7 +406,7 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
               <Text color="cyan">{SPINNER_FRAMES[view.frame % SPINNER_FRAMES.length]} {g.name}</Text>
             </Button>
           )
-          : <Button key={`toggle-${g.id}`} plain label={`${isOpen ? '▾' : '▸'} ${g.name}`} hotkey={index < 9 ? String(index + 1) : undefined} onPress={toggle} />}
+          : goalName($, e, g, `${isOpen ? '▾' : '▸'} ${g.name}`, index, toggle)}
         <Text dimColor> {g.status}</Text>
         {g.openRun && <Text color="cyan"> · run {g.openRun.status}</Text>}
       </Box>
