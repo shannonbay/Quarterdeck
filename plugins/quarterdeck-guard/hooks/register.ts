@@ -261,6 +261,8 @@ const lastAnswers = new Map<string, string>()
 /** The last few agent turn ends (diagnostic, shown by the status tool). */
 const lastTurns: unknown[] = []
 const HAND_BACK_FROM = /<agent-message from="([^"]+)">/
+/** Shown in place of a dropped run report. */
+export const RUN_REPORT_DROPPED = 'A goal run ended; its summary is in the Goals pane.'
 
 function isRunReport(text: string): boolean {
   const from = HAND_BACK_FROM.exec(text)?.[1]
@@ -368,6 +370,19 @@ export const register: Register = (on) => {
   on('session.send', async ($, e, next) => {
     if (e.agentId && (await runIdFor($, e.agentId))) {
       return { isDelivered: false as const, reason: 'Goal runs report through end_run; Quarterdeck shows the summary in the Goals pane.' }
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A finished run's report reaches the conversation as a prompt from a peer (the
+  // subagent hand-back), which would start a model turn over the whole conversation
+  // (in the standing session, one per run). Dropped, so it starts none (#114). Only a
+  // run agent's, known by the engine's spawnedBy, never by what the text claims.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.origin?.kind === 'peer') {
+      const from = (e.origin as { from?: unknown }).from
+      const agentId = typeof from === 'string' ? from : HAND_BACK_FROM.exec(e.text)?.[1]
+      if (agentId && (await runIdFor($, agentId))) return { drop: RUN_REPORT_DROPPED }
     }
     return next(e)
   }).catch(($, e, next) => next(e))

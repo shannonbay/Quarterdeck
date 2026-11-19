@@ -97,6 +97,25 @@ test("a run's handback goes on, so Claude Code counts its report delivered", asy
   expect(inputs).toEqual([])
 })
 
+test("a run's handed-back report starts no turn; the person's, other agents' and forged ones go on", async ($, on) => {
+  world(on)
+  const entered: string[] = []
+  on('prompt.submit', (_, e) => { entered.push(e.text); return { text: e.text } })
+  await $.session.start(START)
+  const handback = (from: string) => `Another Claude session sent a message:\n<agent-message from="${from}">\n[Subagent hand-back] The report follows:\n  Run run_abc123 ended.\n</agent-message>`
+  // As Claude Code 2.1.3xx delivers it: origin peer, carrying the sender's agent id
+  const run = await $.prompt.submit({ text: handback('run-agent'), origin: { kind: 'peer', from: 'run-agent', handback: true } } as never)
+  expect(run.drop).toContain('Goals pane')
+  // Without origin.from, the frame's agent id
+  const framed = await $.prompt.submit({ text: handback('run-agent'), origin: { kind: 'peer' } } as never)
+  expect(framed.drop).toContain('Goals pane')
+  // The model's own agent with a run-like description, and the person typing the frame
+  const other = await $.prompt.submit({ text: handback('model-agent'), origin: { kind: 'peer', from: 'model-agent' } } as never)
+  const typed = await $.prompt.submit({ text: handback('run-agent'), origin: { kind: 'composer' } } as never)
+  expect([other.drop, typed.drop]).toEqual([undefined, undefined])
+  expect(entered).toHaveLength(2)
+})
+
 test('the guard says it is there, for quarterdeck-goals to check', async ($, on) => {
   world(on)
   await $.session.start(START)

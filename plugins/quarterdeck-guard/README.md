@@ -44,7 +44,7 @@ Everything else goes on to your permission rules unchanged.
 
 - **Changes a tool's input**: adds `run_scope` (the run's id) to a Quarterdeck server call that doesn't already carry it, so the call acts on that run's goal and never on the plan open in your own conversation. A call that already carries it is left exactly as it is (auto mode refuses a call whose input changes after its review).
 - **The goal's guard**: before any other tool runs, asks `guard_check` (with the call's `command`, `file_path`, `notebook_path`, `path` and `pattern` fields, for the rule on Quarterdeck's own data); on "deny" the call is refused with the reason, and otherwise it goes on unchanged, reported to `run_progress` as it starts and when it has finished.
-- **The handback goes on**: `SubagentHandback`, the tool a subagent's report comes back to your conversation through, runs as usual without a guard check, so Claude Code counts the report delivered and doesn't ask the run to send it again; `session.receive` (below) then keeps the report out of your chat, because a run reports in the Goals pane.
+- **The handback goes on**: `SubagentHandback`, the tool a subagent's report comes back to your conversation through, runs as usual without a guard check, so Claude Code counts the report delivered and doesn't ask the run to send it again; `prompt.submit` (below) then keeps the report out of your chat, because a run reports in the Goals pane.
 - **Answers in place of a tool**: this plugin's own `status` tool (`mcp__quarterdeck-guard__status`, read-only) answers that runs are guarded, with the number of runs it knows and its last few turn ends; quarterdeck-goals starts no run without it.
 
 **Other hooks:**
@@ -52,6 +52,7 @@ Everything else goes on to your permission rules unchanged.
 - `classic.PermissionRequest`: when Claude Code is about to ask you about a run agent's tool call, sends `run_progress` that the run waits for your answer, then passes the request on unchanged (`return next(e)`). It never answers the request itself; Claude Code asks you as usual.
 - `turn.complete`: for a run agent, sends `report_run_end` as above. Other turns are passed on untouched.
 - `session.send`: stops a run agent's messages to your conversation (the run reports through `end_run`). Other messages go on.
+- `prompt.submit`: when a message from another agent arrives in your conversation and its sender is a goal run's agent (known by who started it, not by what the message says), drops it, so a finished run's report doesn't start a model turn; you see one line saying its summary is in the Goals pane. Your own messages and every other agent's go on unchanged.
 - `session.receive`: reads a message arriving in your conversation only to recognise a run's handed-back report (by the sending agent, or by matching a run agent's last answer) and keep it out of your chat. Everything else goes on unchanged.
 - `session.start`: registers the `status` tool.
 
