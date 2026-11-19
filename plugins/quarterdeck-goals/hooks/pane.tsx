@@ -16,8 +16,8 @@
  */
 import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
-import type { Confirm, GoalCard, TodoItem, Todos, Update } from '../types'
-import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, reject, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
+import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '../types'
+import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
 import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
@@ -255,11 +255,57 @@ export async function renderPane($: Engine, e: E) {
         : goalCard($, e, view, g, i)))}
       {todos && todos.lists.length > 0 && todoSection($, e, view, todos, addingTo, askingAbout, editing, held)}
       {done.length > 0 && doneSection($, e, view, done)}
+      {s.deleted && s.deleted.length > 0 && deletedSection($, e, view, s.deleted)}
       {message && <Text color="red">{message}</Text>}
       <Box>
         <Text dimColor>Last change {ago(new Date(s.fetchedAt).toISOString(), view.now)} </Text>
         {action($, e, { key: 'refresh', label: 'Refresh', hotkey: 'g', onPress: () => void refresh($) })}
       </Box>
+    </Box>
+  )
+}
+
+/**
+ * "Recently deleted" (#105): deleted goals wait here until they are purged. Restore brings
+ * one back paused; Delete permanently erases it, after a confirm.
+ */
+function deletedSection($: Engine, e: E, view: View, deleted: DeletedGoal[]) {
+  const { Box, Text, Button } = parts($, e)
+  return (
+    <Box key="deleted" flexDirection="column" marginBottom={1}>
+      <Text bold>Recently deleted</Text>
+      {deleted.map((d) => {
+        const purging = view.pending?.kind === 'purge-goal' && view.pending.goalId === d.id
+        const when = d.purgeAt ? `purged ${new Date(d.purgeAt).toLocaleDateString()}` : 'kept until you delete it permanently'
+        if (purging) {
+          return (
+            <Box key={`deleted-${d.id}`} flexDirection="column">
+              <Text color="yellow">Delete "{d.name}" permanently? Its items, runs and memory are erased, and it can't be restored.</Text>
+              <Box>
+                <Button
+                  key={`purge-yes-${d.id}`}
+                  label={view.doing === `purge:${d.id}` ? 'Deleting…' : 'Yes, delete permanently'}
+                  onPress={() => {
+                    void setConfirm($, null)
+                    void act($, `purge:${d.id}`, 'delete the goal permanently', () => purgeGoal($, d.id))
+                  }}
+                />
+                <Text dimColor> · </Text>
+                {action($, e, { key: `purge-no-${d.id}`, label: 'Keep it', onPress: () => void setConfirm($, null) })}
+              </Box>
+            </Box>
+          )
+        }
+        return (
+          <Box key={`deleted-${d.id}`}>
+            <Text>{d.name} </Text>
+            <Text dimColor>deleted {ago(d.deletedAt, view.now)}, {when} </Text>
+            {action($, e, { key: `restore-${d.id}`, label: view.doing === `restore:${d.id}` ? 'Restoring…' : 'Restore', onPress: () => void act($, `restore:${d.id}`, 'restore the goal', () => restoreGoal($, d.id)) })}
+            <Text dimColor> · </Text>
+            {action($, e, { key: `purge-${d.id}`, label: 'Delete permanently', onPress: () => void setConfirm($, { kind: 'purge-goal', goalId: d.id }) })}
+          </Box>
+        )
+      })}
     </Box>
   )
 }

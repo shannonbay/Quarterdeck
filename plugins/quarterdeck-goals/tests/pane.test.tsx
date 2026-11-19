@@ -568,6 +568,40 @@ test('Delete asks first, says the goal can be restored, then deletes it; not whi
   await ui.unmount()
 })
 
+test('Recently deleted lists deleted goals: Restore restores, Delete permanently asks first', async ($, on) => {
+  engine(on)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Jobs' })], {
+    deleted: [
+      { id: 'g9', name: 'Old inbox', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' },
+      { id: 'g8', name: 'Kept', deleted_at: '2026-11-05T08:00:00Z', purge_at: null },
+    ],
+  })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'Recently deleted' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Old inbox/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /kept until you delete it permanently/ })).toBeDefined()
+  await ui.press({ key: 'restore-g9' })
+  expect(fake.of('restore_goal').map((c) => c.input)).toEqual([{ goal_id: 'g9' }])
+  await ui.press({ key: 'purge-g8' })
+  expect(await ui.find({ type: 'Text', text: /Delete "Kept" permanently\? .*can't be restored/ })).toBeDefined()
+  await ui.press({ key: 'purge-no-g8' })
+  expect(fake.of('purge_goal')).toEqual([])
+  await ui.press({ key: 'purge-g8' })
+  await ui.press({ key: 'purge-yes-g8' })
+  expect(fake.of('purge_goal').map((c) => c.input)).toEqual([{ goal_id: 'g8' }])
+  await ui.unmount()
+})
+
+test('No Recently deleted section while nothing is deleted', async ($, on) => {
+  engine(on)
+  fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Jobs' })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'Recently deleted' })).toBeUndefined()
+  await ui.unmount()
+})
+
 test('Reschedule takes "30d", and explains an answer it can\'t read', async ($, on) => {
   const { toasts } = engine(on, { answers: ['30d', 'every fortnight-ish'] })
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox', next_run_at: '2026-11-07T08:25:00Z' })])
