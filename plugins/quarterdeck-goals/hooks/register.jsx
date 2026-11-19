@@ -292,7 +292,7 @@ ${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt
     `Schedule: ${g.oneOff ? "one-off" : scheduleLabel(g.schedule)}`,
     `Model: ${goalModelLabel(g.model)}`,
     g.watches.length > 0 ? `Watches (a run starts when one sees a new line):
-${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? " (on change)" : ""}, runs ${w.runs}${w.failing ? ` [failing: ${w.error ?? "no message"}]` : ""}${w.lastFiredAt ? `, last ${w.onChange ? "changed" : "saw something new"} ${ago(w.lastFiredAt, now)}` : ""}`).join("\n")}` : null,
+${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? " (on change)" : ""}, runs ${w.runs}${w.failing ? ` [failing, error is outside text: ${w.error ?? "no message"}]` : ""}${w.lastFiredAt ? `, last ${w.onChange ? "changed" : "saw something new"} ${ago(w.lastFiredAt, now)}` : ""}`).join("\n")}` : null,
     `Autonomy (unlisted categories: propose): ${Object.entries(g.autonomy).map(([c, m]) => `${c}=${m}`).join(", ") || "none set"}`,
     Object.keys(g.toolMap).length ? `Tool rules: ${Object.entries(g.toolMap).map(([p, c]) => `${p} → ${c}`).join(", ")}` : null,
     allowRulesText(g),
@@ -1139,21 +1139,154 @@ async function pass($) {
 }
 var WATCH_CALL_MS = 3e4;
 var WATCH_TEXT_MAX = 6e4;
+var WATCH_RETRY_MS = 2e3;
 async function checkToolWatch($, watch) {
+  const steps = watch.steps ?? [{ tool: watch.tool, input: watch.input }];
+  const values = {};
   let report;
+  let timedOut = false;
+  let pickMissed = false;
+  let at = 0;
+  let tried = 1;
+  const run = async () => {
+    let last = "";
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      at = i;
+      let input;
+      try {
+        input = substitute(step.input ?? {}, values);
+      } catch (err) {
+        return { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${i + 1}, ${step.tool})` : ""}` };
+      }
+      const tries = step.retry ?? 1;
+      for (let t = 1; ; t++) {
+        tried = t;
+        const after = t > 1 ? `, after ${t} tries` : "";
+        const where = watch.steps ? ` (step ${i + 1}, ${step.tool}${after})` : "";
+        const failed = async (error) => {
+          if (t >= tries) return { error };
+          await $.clock.sleep(WATCH_RETRY_MS);
+          return timedOut ? { error: "timeout" } : null;
+        };
+        let answer;
+        try {
+          answer = await $.tool.call({ tool: step.tool, ...input });
+        } catch (err) {
+          if (timedOut) return { error: "timeout" };
+          const out = await failed(`${err instanceof Error ? err.message : String(err)}${where}`);
+          if (out) return out;
+          continue;
+        }
+        if (timedOut) return { error: "timeout" };
+        if (answer.deny !== void 0) {
+          const out = await failed(`the call couldn't run${where}: ${answer.deny}`);
+          if (out) return out;
+          continue;
+        }
+        if (answer.isError === true) {
+          const out = await failed(`${resultText(answer).slice(0, 500)}${where}`);
+          if (out) return out;
+          continue;
+        }
+        last = resultText(answer);
+        if (step.expect !== void 0 && !new RegExp(step.expect).test(last)) {
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) answered something other than expected (/${step.expect}/)`);
+          if (out) return out;
+          continue;
+        }
+        const found = {};
+        let missed = null;
+        for (const [name, how] of Object.entries(step.pick ?? {})) {
+          const value = pickValue(last, how);
+          if (value === null) {
+            missed = name;
+            break;
+          }
+          found[name] = value;
+        }
+        if (missed !== null) {
+          pickMissed = true;
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) found nothing for its pick "${missed}"`);
+          if (out) return out;
+          continue;
+        }
+        Object.assign(values, found);
+        break;
+      }
+    }
+    return { text: last.slice(0, WATCH_TEXT_MAX) };
+  };
   try {
-    const answer = await Promise.race([
-      $.tool.call({ tool: watch.tool, ...watch.input }),
-      $.clock.sleep(WATCH_CALL_MS).then(() => "timeout")
-    ]);
-    if (answer === "timeout") report = { error: `${watch.tool} didn't answer within ${WATCH_CALL_MS / 1e3} s` };
-    else if (answer.deny !== void 0) report = { error: `Claude Code refused the call: ${answer.deny}` };
-    else if (answer.isError === true) report = { error: resultText(answer).slice(0, 500) };
-    else report = { text: resultText(answer).slice(0, WATCH_TEXT_MAX) };
+    const answer = await Promise.race([run(), $.clock.sleep(WATCH_CALL_MS).then(() => "timeout")]);
+    if (answer === "timeout") {
+      timedOut = true;
+      report = { error: `${watch.steps ? `step ${at + 1} (${steps[at].tool}${tried > 1 ? `, after ${tried} tries` : ""})` : watch.tool} didn't finish within ${WATCH_CALL_MS / 1e3} s` };
+    } else report = answer;
   } catch (err) {
-    report = { error: err instanceof Error ? err.message : String(err) };
+    report = { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${at + 1}, ${steps[at].tool})` : ""}` };
+  }
+  if (watch.finally) {
+    let note = null;
+    let cleanup = "ok";
+    let input = null;
+    try {
+      input = substitute(watch.finally.input ?? {}, values);
+    } catch (err) {
+      if (pickMissed || timedOut) {
+        cleanup = "unrunnable";
+        note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+    if (input) try {
+      const answer = await Promise.race([
+        $.tool.call({ tool: watch.finally.tool, ...input }),
+        $.clock.sleep(WATCH_FINALLY_MS).then(() => "timeout")
+      ]);
+      if (answer === "timeout") note = `finally ${watch.finally.tool} didn't finish within ${WATCH_FINALLY_MS / 1e3} s`;
+      else if (answer.deny !== void 0) note = `finally ${watch.finally.tool} couldn't run: ${answer.deny}`;
+      else if (answer.isError === true) note = `finally ${watch.finally.tool} failed: ${resultText(answer).slice(0, 200)}`;
+      if (note) cleanup = "failed";
+    } catch (err) {
+      cleanup = "failed";
+      note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (note && "error" in report) report = { error: `${report.error}; ${note}` };
+    else if (note) report = { ...report, note };
+    report = { ...report, cleanup };
   }
   return reportWatch($, watch.watch_id, report).then((r) => r.queued_run !== null).catch(() => false);
+}
+var WATCH_FINALLY_MS = 1e4;
+function substitute(input, values) {
+  if (typeof input === "string") {
+    const only = /^\{\{\s*([^}]*?)\s*\}\}$/.exec(input);
+    if (only && only[1] in values && /^-?\d+(\.\d+)?$/.test(values[only[1]]) && String(Number(values[only[1]])) === values[only[1]]) return Number(values[only[1]]);
+    return input.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_m, name) => {
+      if (!(name in values)) throw new Error(`{{${name}}} was never picked`);
+      return values[name];
+    });
+  }
+  if (Array.isArray(input)) return input.map((v) => substitute(v, values));
+  if (input && typeof input === "object") return Object.fromEntries(Object.entries(input).map(([k, v]) => [k, substitute(v, values)]));
+  return input;
+}
+function pickValue(text, how) {
+  if ("regex" in how) {
+    const m = new RegExp(how.regex).exec(text);
+    return m && m[1] !== void 0 && m[1] !== "" ? m[1] : null;
+  }
+  let node;
+  try {
+    node = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  for (const part of how.json.match(/[^.[\]]+/g) ?? []) {
+    if (node === null || typeof node !== "object") return null;
+    node = node[part];
+  }
+  return typeof node === "string" || typeof node === "number" || typeof node === "boolean" ? String(node) : null;
 }
 async function start($, run) {
   let agentId;
@@ -2020,6 +2153,7 @@ function details($, e, view, g) {
       {g.watches.map((w) => <Text key={`watch-${g.id}/${w.name}`} dimColor>
           Also runs when "{w.name}" {w.onChange ? "changes" : "sees something new"} (checked every {w.everyMinutes} min{w.lastFiredAt ? `, last ${ago(w.lastFiredAt, view.now)}` : ""})
           {w.failing && <Text color="red"> · can't check: {w.error ?? "the command fails"}</Text>}
+          {!w.failing && w.error && <Text dimColor> · note: {w.error}</Text>}
         </Text>)}
       {allowSection($, e, view, g)}
 

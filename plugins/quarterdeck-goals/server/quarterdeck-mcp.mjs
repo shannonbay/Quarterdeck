@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.29.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.30.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -2986,7 +2986,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve2.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3013,7 +3013,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve2(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3588,7 +3588,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve2(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3815,7 +3815,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve,
+      resolve: resolve2,
       resolveComponent,
       equal,
       serialize,
@@ -7359,6 +7359,18 @@ function runMigrations(db2) {
   } catch {
   }
   try {
+    db2.exec("ALTER TABLE goal_watches ADD COLUMN steps TEXT");
+  } catch {
+  }
+  try {
+    db2.exec("ALTER TABLE goal_watches ADD COLUMN finally_call TEXT");
+  } catch {
+  }
+  try {
+    db2.exec("ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0");
+  } catch {
+  }
+  try {
     db2.exec("ALTER TABLE goal_watches ADD COLUMN status_rules TEXT");
   } catch {
   }
@@ -7366,7 +7378,7 @@ function runMigrations(db2) {
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     -- Not on every check: only when what the pane shows changes
-    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
+    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;
@@ -7404,7 +7416,7 @@ var SCHEMA_VERSION, OUTDATED_MESSAGE;
 var init_migrate = __esm({
   "../core/src/migrate.ts"() {
     "use strict";
-    SCHEMA_VERSION = 14;
+    SCHEMA_VERSION = 16;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -7920,7 +7932,7 @@ function runVerifyCommand(command, cwd, timeoutS = DEFAULT_VERIFY_TIMEOUT_S, opt
   if (!existsSync2(cwd)) {
     return Promise.resolve(done({ passed: false, exit_code: null, output: `Working directory not found: ${cwd}`, timed_out: false }));
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     let output = "";
     let errors = "";
     let timedOut = false;
@@ -7945,13 +7957,13 @@ function runVerifyCommand(command, cwd, timeoutS = DEFAULT_VERIFY_TIMEOUT_S, opt
     }, timeoutS * 1e3);
     child.on("error", (e) => {
       clearTimeout(timer);
-      resolve(done({ passed: false, exit_code: null, output: `Could not run command: ${e.message}`, timed_out: false }));
+      resolve2(done({ passed: false, exit_code: null, output: `Could not run command: ${e.message}`, timed_out: false }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (timedOut && !opts.stdoutOnly) output = `${output}
 [timed out after ${timeoutS}s]`.slice(-tailChars);
-      resolve(done({ passed: !timedOut && code === 0, exit_code: code, output, timed_out: timedOut, ...opts.stdoutOnly && { stderr: errors } }));
+      resolve2(done({ passed: !timedOut && code === 0, exit_code: code, output, timed_out: timedOut, ...opts.stdoutOnly && { stderr: errors } }));
     });
   });
 }
@@ -8250,10 +8262,10 @@ var init_status_check = __esm({
     STATUS_CHECK_BUDGET_MS = 2e4;
     COMMAND_TIMEOUT_MS = 15e3;
     REPO_RE = /^[\w.-]+\/[\w.-]+$/;
-    defaultRunFile = (file, args) => new Promise((resolve, reject) => {
+    defaultRunFile = (file, args) => new Promise((resolve2, reject) => {
       execFile(file, args, { timeout: COMMAND_TIMEOUT_MS, windowsHide: true, shell: false }, (err, stdout) => {
         if (err) reject(err);
-        else resolve(String(stdout));
+        else resolve2(String(stdout));
       });
     });
     lastChecked = /* @__PURE__ */ new Map();
@@ -8571,6 +8583,8 @@ function deserializeWatch(r) {
   return {
     ...r,
     tool_input: JSON.parse(r.tool_input || "{}"),
+    steps: r.steps ? JSON.parse(r.steps) : null,
+    finally: r.finally_call ? JSON.parse(r.finally_call) : null,
     seen: JSON.parse(r.seen || "[]"),
     status_rules: r.status_rules ? JSON.parse(r.status_rules) : null
   };
@@ -8643,12 +8657,11 @@ function validateWatchSpec(db2, planId, name, spec) {
   if (fires !== "new" && fires !== "change") throw new Error(`The watch "${label}" fires on "new" or "change", not ${JSON.stringify(fires)}.`);
   const statusRules = validateStatusRules(label, spec.status);
   const rulesText = statusRules ? JSON.stringify(statusRules) : null;
-  const what = { kind: "command", command: null, tool: null, tool_input: "{}", match: null };
+  const what = { kind: "command", command: null, tool: null, tool_input: "{}", steps: null, finally_call: null, match: null };
   const given = spec;
-  if (given.tool !== void 0) {
-    const tool = String(given.tool).trim();
+  const checkTool = (raw) => {
+    const tool = String(raw ?? "").trim();
     if (!tool) throw new Error(`The watch "${label}" needs a tool.`);
-    if (given.command) throw new Error(`The watch "${label}" has a command and a tool: give one.`);
     if (!tool.startsWith("mcp__")) throw new Error(`The watch "${label}" can only call a connector or MCP tool (mcp__\u2026), not ${tool}.`);
     if (canonicalToolName(tool).startsWith(QUARTERDECK_TOOL_PREFIX) || /^mcp__quarterdeck-(goals|guard)__/.test(tool)) {
       throw new Error(`The watch "${label}" can't call Quarterdeck's own tools.`);
@@ -8658,6 +8671,9 @@ function validateWatchSpec(db2, planId, name, spec) {
     if (mode !== "auto") {
       throw new Error(`The watch "${label}" can't call ${tool}: this goal's rules put it under "${category}", which is ${mode}. A watch may only read.`);
     }
+    return tool;
+  };
+  const checkMatch = () => {
     if (given.match !== void 0) {
       try {
         new RegExp(given.match);
@@ -8665,6 +8681,73 @@ function validateWatchSpec(db2, planId, name, spec) {
         throw new Error(`The watch "${label}" has a match that isn't a regular expression: ${given.match}`);
       }
     }
+  };
+  if (given.steps !== void 0) {
+    if (given.tool !== void 0) throw new Error(`The watch "${label}" has a tool and steps: give one.`);
+    if (given.command) throw new Error(`The watch "${label}" has a command and steps: give one.`);
+    if (!Array.isArray(given.steps) || given.steps.length === 0) throw new Error(`The watch "${label}" needs at least one step.`);
+    if (given.steps.length > WATCH_MAX_STEPS) throw new Error(`The watch "${label}" has ${given.steps.length} steps: at most ${WATCH_MAX_STEPS}.`);
+    const picked = /* @__PURE__ */ new Set();
+    const refs = (where, input) => {
+      for (const m of JSON.stringify(input ?? {}).matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) {
+        if (!picked.has(m[1])) throw new Error(`The watch "${label}" uses {{${m[1]}}} in ${where}, which no earlier step picks.`);
+      }
+    };
+    const steps = given.steps.map((s, i) => {
+      const where = `step ${i + 1}`;
+      const tool = checkTool(s?.tool);
+      refs(where, s.input);
+      const step = { tool, ...s.input && Object.keys(s.input).length ? { input: s.input } : {} };
+      if (s.expect !== void 0) {
+        if (typeof s.expect !== "string" || !s.expect) throw new Error(`The expect in ${where} of the watch "${label}" needs a regular expression.`);
+        try {
+          new RegExp(s.expect);
+        } catch {
+          throw new Error(`The watch "${label}" has an expect in ${where} that isn't a regular expression: ${s.expect}`);
+        }
+        step.expect = s.expect;
+      }
+      if (s.retry !== void 0) {
+        if (!Number.isInteger(s.retry) || s.retry < 1 || s.retry > WATCH_MAX_TRIES) throw new Error(`The retry in ${where} of the watch "${label}" needs a whole number from 1 to ${WATCH_MAX_TRIES}.`);
+        if (s.retry > 1) step.retry = s.retry;
+      }
+      if (s.pick && Object.keys(s.pick).length) {
+        step.pick = {};
+        for (const [pname, how] of Object.entries(s.pick)) {
+          if (!/^[A-Za-z_][\w-]*$/.test(pname)) throw new Error(`The watch "${label}" names a pick "${pname}" in ${where}: use letters, digits and _.`);
+          if (picked.has(pname) || pname in step.pick) throw new Error(`The watch "${label}" picks "${pname}" twice.`);
+          const h = how;
+          if (typeof h?.regex === "string" === (typeof h?.json === "string")) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" needs a regex or a json path, one of them.`);
+          if (h.regex !== void 0) {
+            let groups;
+            try {
+              groups = new RegExp(`${h.regex}|`).exec("").length - 1;
+            } catch {
+              throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" has a regex that isn't a regular expression: ${h.regex}`);
+            }
+            if (groups !== 1) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" needs a regex with exactly one group, not ${groups}.`);
+            step.pick[pname] = { regex: h.regex };
+          } else {
+            if (!JSON_PATH.test(h.json)) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" has a json path that isn't well formed: ${h.json} (use a.b[0].c).`);
+            step.pick[pname] = { json: h.json };
+          }
+        }
+        for (const pname of Object.keys(step.pick)) picked.add(pname);
+      }
+      return step;
+    });
+    let fin = null;
+    if (given.finally !== void 0 && given.finally !== null) {
+      fin = { tool: checkTool(given.finally.tool), ...given.finally.input && Object.keys(given.finally.input).length ? { input: given.finally.input } : {} };
+      refs("finally", fin.input);
+    }
+    checkMatch();
+    Object.assign(what, { kind: "tool", tool: steps[0].tool, steps: JSON.stringify(steps), finally_call: fin ? JSON.stringify(fin) : null, match: given.match?.trim() || null });
+  } else if (given.tool !== void 0) {
+    if (given.command) throw new Error(`The watch "${label}" has a command and a tool: give one.`);
+    if (given.finally !== void 0) throw new Error(`The watch "${label}" has a finally call without steps.`);
+    const tool = checkTool(given.tool);
+    checkMatch();
     Object.assign(what, { kind: "tool", tool, tool_input: JSON.stringify(given.input ?? {}), match: given.match?.trim() || null });
   } else {
     const command = String(given.command ?? "").trim();
@@ -8678,25 +8761,30 @@ function setWatch(db2, planId, name, spec) {
   const existing = listWatches(db2, planId).find((w) => w.name === label);
   if (!existing) {
     const id = newId("wch");
-    db2.prepare("INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, (/* @__PURE__ */ new Date()).toISOString());
+    db2.prepare("INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, (/* @__PURE__ */ new Date()).toISOString());
     return getWatch(db2, id);
   }
-  const sameCheck = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool && JSON.stringify(existing.tool_input) === what.tool_input && existing.match === what.match && existing.fires === fires;
+  const sameCheck = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool && JSON.stringify(existing.tool_input) === what.tool_input && (existing.steps ? JSON.stringify(existing.steps) : null) === what.steps && (existing.finally ? JSON.stringify(existing.finally) : null) === what.finally_call && existing.match === what.match && existing.fires === fires;
   const rulesEdited = existing.status_rules !== null && statusRules !== null;
   if (sameCheck && (rulesEdited || JSON.stringify(existing.status_rules) === JSON.stringify(statusRules))) {
     db2.prepare("UPDATE goal_watches SET every_minutes = ? WHERE id = ?").run(every, existing.id);
+    if (existing.cleanup_failures) db2.prepare("UPDATE goal_watches SET cleanup_failures = 0, last_error = NULL WHERE id = ?").run(existing.id);
     if (JSON.stringify(existing.status_rules) !== JSON.stringify(statusRules)) db2.prepare("UPDATE goal_watches SET status_rules = ? WHERE id = ?").run(rulesText, existing.id);
   } else {
     db2.prepare(`
-      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0 WHERE id = ?
-    `).run(what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, existing.id);
+      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
+        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+    `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id);
     db2.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL").run(existing.id);
   }
   return getWatch(db2, existing.id);
 }
 function describeWatch(w) {
   if (w.kind === "command") return w.command ?? "";
+  if (w.steps?.length) {
+    const call = (c) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ""}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ""}${c.expect ? ` expecting /${c.expect}/` : ""}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ""}`;
+    return `${w.steps.map((s, i) => `${i + 1}. ${call(s)}`).join(" then ")}${w.finally ? `; finally ${call(w.finally)}` : ""}${w.match ? ` (lines: ${w.match})` : ""}`;
+  }
   const input = Object.keys(w.tool_input).length ? ` ${JSON.stringify(w.tool_input)}` : "";
   return `${w.tool}${input}${w.match ? ` (lines: ${w.match})` : ""}`;
 }
@@ -8712,7 +8800,10 @@ function watchDue(watch, now = /* @__PURE__ */ new Date()) {
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 6e4;
 }
 function watchFailing(watch) {
-  return watch.fail_count >= WATCH_FAILING_AFTER;
+  return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch);
+}
+function watchStopped(watch) {
+  return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER;
 }
 function toLines(output) {
   const lines = /* @__PURE__ */ new Set();
@@ -8728,7 +8819,7 @@ function recordWatchLines(db2, watchId, result, now = /* @__PURE__ */ new Date()
   if (!watch) throw new Error(`Watch ${watchId} not found`);
   const at = now.toISOString();
   if ("error" in result) {
-    const error2 = result.error.trim().slice(-500) || "The check failed.";
+    const error2 = result.error.trim().slice(0, 500) || "The check failed.";
     db2.prepare("UPDATE goal_watches SET last_checked_at = ?, last_error = ?, fail_count = fail_count + 1 WHERE id = ?").run(at, error2, watchId);
     return { baseline: false, lines: 0, fresh: [], error: error2 };
   }
@@ -8802,10 +8893,10 @@ function takeDueToolWatches(db2, planIds, now = /* @__PURE__ */ new Date()) {
   const calls = [];
   for (const planId of planIds) {
     for (const w of listWatches(db2, planId)) {
-      if (w.kind !== "tool" || !w.tool || !watchDue(w, now)) continue;
+      if (w.kind !== "tool" || !(w.tool || w.steps) || watchStopped(w) || !watchDue(w, now)) continue;
       if (w.asked_at && now.getTime() - new Date(w.asked_at).getTime() < WATCH_REPORT_GRACE_MS) continue;
       db2.prepare("UPDATE goal_watches SET asked_at = ? WHERE id = ?").run(now.toISOString(), w.id);
-      calls.push({ watch_id: w.id, goal_id: planId, name: w.name, tool: w.tool, input: w.tool_input });
+      calls.push({ watch_id: w.id, goal_id: planId, name: w.name, tool: w.tool, input: w.tool_input, ...w.steps ? { steps: w.steps } : {}, ...w.finally ? { finally: w.finally } : {} });
     }
   }
   return calls;
@@ -8814,8 +8905,18 @@ function reportToolWatch(db2, watchId, result, now = /* @__PURE__ */ new Date())
   const watch = getWatch(db2, watchId);
   if (!watch || watch.kind !== "tool") throw new Error(`Tool watch ${watchId} not found`);
   db2.prepare("UPDATE goal_watches SET asked_at = NULL WHERE id = ?").run(watchId);
-  if ("error" in result) return recordWatchLines(db2, watchId, { error: result.error }, now);
-  return recordWatchLines(db2, watchId, { lines: matchLines(result.text, watch.match) }, now);
+  let failures = watch.cleanup_failures;
+  if (result.cleanup === "ok") failures = 0;
+  else if (result.cleanup) failures = result.cleanup === "unrunnable" ? WATCH_CLEANUP_STOP_AFTER : failures + 1;
+  if (failures !== watch.cleanup_failures) db2.prepare("UPDATE goal_watches SET cleanup_failures = ? WHERE id = ?").run(failures, watchId);
+  const checked = "error" in result ? recordWatchLines(db2, watchId, { error: result.error }, now) : recordWatchLines(db2, watchId, { lines: matchLines(result.text, watch.match) }, now);
+  if (watchStopped({ cleanup_failures: failures })) {
+    db2.prepare("UPDATE goal_watches SET last_error = ? WHERE id = ?").run(WATCH_CLEANUP_STOPPED, watchId);
+    return { ...checked, error: WATCH_CLEANUP_STOPPED };
+  }
+  if ("error" in result) return checked;
+  if (result.note) db2.prepare("UPDATE goal_watches SET last_error = ? WHERE id = ?").run(result.note.trim().slice(0, 500), watchId);
+  return checked;
 }
 function countUnqueuedWatchEvents(db2, planId) {
   return db2.prepare("SELECT COUNT(*) n FROM goal_watch_events WHERE plan_id = ? AND run_id IS NULL AND queued_at IS NULL").get(planId).n;
@@ -8848,7 +8949,7 @@ function takeWatchEvents(db2, planId, runId) {
 function releaseWatchEvents(db2, runId, opts = {}) {
   db2.prepare(`UPDATE goal_watch_events SET run_id = NULL${opts.requeue ? ", queued_at = NULL" : ""} WHERE run_id = ?`).run(runId);
 }
-var WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS;
+var WATCH_MAX_STEPS, WATCH_MAX_TRIES, WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_CLEANUP_STOP_AFTER, WATCH_CLEANUP_STOPPED, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS, JSON_PATH;
 var init_watches = __esm({
   "../core/src/watches.ts"() {
     "use strict";
@@ -8857,12 +8958,16 @@ var init_watches = __esm({
     init_guard();
     init_queries();
     init_status_check();
+    WATCH_MAX_STEPS = 4;
+    WATCH_MAX_TRIES = 5;
     WATCH_TIMEOUT_S = 30;
     WATCH_MAX_LINES = 200;
     WATCH_LINE_CHARS = 300;
     WATCH_SEEN_MAX = 1e3;
     WATCH_OUTPUT_CHARS = 64 * 1024;
     WATCH_FAILING_AFTER = 3;
+    WATCH_CLEANUP_STOP_AFTER = 3;
+    WATCH_CLEANUP_STOPPED = "its clean-up failed, so a tab may have been left open: the watch is stopped until it is edited";
     WATCH_BRIEF_LINES = 50;
     WATCH_MIN_MINUTES = 1;
     WATCH_DEFAULT_MINUTES = 5;
@@ -8872,6 +8977,7 @@ var init_watches = __esm({
     WATCH_STATUS_RULES_MAX = 10;
     WATCH_STATUS_CHARS = 40;
     EVENT_RETENTION_MS = 30 * 864e5;
+    JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/;
   }
 });
 
@@ -9562,13 +9668,15 @@ var init_goal_changes = __esm({
 // ../core/src/watch-requests.ts
 function specOf(w) {
   const base = { every_minutes: w.every_minutes, fires: w.fires, status: w.status_rules };
+  if (w.kind === "tool" && w.steps) return { steps: w.steps, ...w.finally ? { finally: w.finally } : {}, ...w.match ? { match: w.match } : {}, ...base };
   return w.kind === "tool" ? { tool: w.tool, input: w.tool_input, ...w.match ? { match: w.match } : {}, ...base } : { command: w.command, ...base };
 }
 function describeSpec(spec) {
   const s = spec;
-  const what = describeWatch({ kind: s.tool !== void 0 ? "tool" : "command", command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, match: s.match ?? null });
+  const isTool = s.tool !== void 0 || s.steps !== void 0;
+  const what = describeWatch({ kind: isTool ? "tool" : "command", command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, steps: s.steps ?? null, finally: s.finally ?? null, match: s.match ?? null });
   const rules = spec.status;
-  return [`${s.tool !== void 0 ? "Tool" : "Command"}: ${what}`, `Every ${s.every_minutes ?? "default"} min, fires on ${s.fires ?? "new"} lines`, ...rules ? [`Status: ${describeStatusRules(rules)}`] : []].join("\n");
+  return [`${s.steps !== void 0 ? "Tool sequence" : s.tool !== void 0 ? "Tool" : "Command"}: ${what}`, `Every ${s.every_minutes ?? "default"} min, fires on ${s.fires ?? "new"} lines`, ...rules ? [`Status: ${describeStatusRules(rules)}`] : []].join("\n");
 }
 function isWatchRequest(task) {
   return Boolean(task.external_ref?.startsWith(WATCH_REF) && task.state?.watch);
@@ -10493,7 +10601,8 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
         runs: clip(describeWatch(w), CLIP.watch),
         last_fired_at: w.last_fired_at,
         failing: watchFailing(w),
-        error: watchFailing(w) ? clip(w.last_error, CLIP.notes) : null
+        cleanup_failures: w.cleanup_failures,
+        error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null
       })),
       watch_count: watches.length,
       watch_failing: watches.some(watchFailing)
@@ -21834,7 +21943,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error2) {
@@ -21851,7 +21960,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       const earlyReject = (error2) => {
         reject(error2);
       };
@@ -21929,7 +22038,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve(parseResult.data);
+            resolve2(parseResult.data);
           }
         } catch (error2) {
           reject(error2);
@@ -22190,12 +22299,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve2, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve, interval);
+      const timeoutId = setTimeout(resolve2, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -23065,12 +23174,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const json = serializeMessage(message);
       if (this._stdout.write(json)) {
-        resolve();
+        resolve2();
       } else {
-        this._stdout.once("drain", resolve);
+        this._stdout.once("drain", resolve2);
       }
     });
   }
@@ -23164,11 +23273,21 @@ var ForgetSchema = external_exports.object({
 });
 var MemoryKindSchema = external_exports.enum(["fact", "rule", "preference"]);
 var PinnedFlag = external_exports.boolean().optional().describe("true when the memory changed is pinned: required for a pinned one, so the person sees it named");
+var StepsSchema = external_exports.array(external_exports.object({
+  tool: external_exports.string().trim().min(1),
+  input: external_exports.record(external_exports.unknown()).optional().describe("May use {{name}} for a value an earlier step picked"),
+  pick: external_exports.record(external_exports.union([external_exports.object({ regex: external_exports.string() }), external_exports.object({ json: external_exports.string() })])).optional().describe('Name to {regex: "one group"} or {json: "a.b[0]"} over this step answer text, for later inputs as {{name}}'),
+  expect: external_exports.string().optional().describe('A regular expression this step answer text must match; an answer that does not is a failed check, so a problem the tool answers as plain text is not read as "nothing new"'),
+  retry: external_exports.number().int().min(1).max(5).optional().describe("Tries in all, 1 to 5: when this step errors, misses expect or a pick, wait about 2 s and call it again (a page still loading); only this step repeats, and the waits count toward the 30 s limit")
+})).min(1).max(4).describe("Instead of tool + input: up to 4 read-only calls in order (e.g. a browser navigate, then get_page_text with {{tabId}}); the last answer is read with match");
+var FinallySchema = external_exports.object({ tool: external_exports.string().trim().min(1), input: external_exports.record(external_exports.unknown()).optional() }).describe("With steps: a call that always runs after them, even after a failure (e.g. close the tab)");
 var ProposeWatchSchema = external_exports.object({
   name: external_exports.string().min(1).describe("A short name for the watch; an existing name means replacing that watch"),
   command: external_exports.string().optional().describe("A shell command whose output lines are what to watch (give this or tool)"),
   tool: external_exports.string().optional().describe("An mcp__ connector tool to call instead of a command (read-only)"),
   input: external_exports.record(external_exports.unknown()).optional().describe("The tool's input"),
+  steps: StepsSchema.optional(),
+  finally: FinallySchema.optional(),
   match: external_exports.string().optional().describe("A regular expression: the tool's answer lines that count"),
   every_minutes: external_exports.number().int().min(1).optional().describe("How often to check"),
   fires: external_exports.enum(["new", "change"]).optional().describe("Run on new lines (default) or when the output changes"),
@@ -23217,7 +23336,9 @@ var GoalsTickSchema = external_exports.object({
 var WatchReportSchema = external_exports.object({
   watch_id: external_exports.string(),
   text: external_exports.string().optional().describe("The tool's answer as text"),
-  error: external_exports.string().optional().describe("Why the call failed, when it did")
+  error: external_exports.string().optional().describe("Why the call failed, when it did"),
+  cleanup: external_exports.enum(["ok", "failed", "unrunnable"]).optional().describe("How the watch's clean-up (finally) call went: ok, failed, or unrunnable (it could not be called). Failures in a row stop the watch until it is edited"),
+  note: external_exports.string().optional().describe("With text: a clean-up call that failed after a good read; shown on the watch, not a failed check")
 }).refine((v) => v.text !== void 0 || v.error !== void 0, { message: "Give the text the tool answered, or the error." });
 var GoalsOverviewSchema = external_exports.object({
   etag: external_exports.string().optional().describe("The etag from the last overview; an unchanged overview answers { changed: false }"),
@@ -23283,6 +23404,8 @@ var WatchSchema = external_exports.object({
   command: external_exports.string().trim().min(1).optional().describe("A shell command, run in the goal's directory, that prints one line per current item (an issue number, a feed entry's id). Lines not seen before start a run; the first check only records what is there. Must exit 0"),
   tool: external_exports.string().trim().min(1).optional().describe("Instead of a command: a connector or MCP tool (mcp__\u2026) that only reads, called by the session that runs goals, e.g. a mail search"),
   input: external_exports.record(external_exports.unknown()).optional().describe("The tool's arguments"),
+  steps: StepsSchema.optional(),
+  finally: FinallySchema.optional(),
   match: external_exports.string().optional().describe(`A regular expression over the tool's answer; each match (its first group) is one line. Left out: every "id" in a JSON answer`),
   every_minutes: external_exports.number().int().min(1).optional().describe("How often to check (default 5)"),
   status: external_exports.object({
@@ -23295,7 +23418,7 @@ var WatchSchema = external_exports.object({
     default: external_exports.object({ status: external_exports.string().min(1).max(40), tone: external_exports.enum(["ok", "attention", "problem"]).optional(), run: external_exports.boolean().optional() }).optional().describe("When no rule matches")
   }).nullable().optional().describe("Sets the goal's status (and tone) from each check's lines with no agent run: for a goal that only reports a state. A run starts only when the matching rule says run: true. Best with fires: 'change'"),
   fires: external_exports.enum(["new", "change"]).optional().describe("'new' (default): a line never seen before starts a run. 'change': for a state (a working tree, a health URL): a run starts when the output differs from the last check, with the lines that weren't in it ((none) when it became empty)")
-}).refine((v) => v.command === void 0 !== (v.tool === void 0), { message: "A watch has a command or a tool, one of them." });
+}).refine((v) => [v.command, v.tool, v.steps].filter((x) => x !== void 0).length === 1, { message: "A watch has a command, a tool or steps, one of them." });
 var CreateGoalSchema = external_exports.object({
   name: external_exports.string().trim().min(1),
   objective: external_exports.string().trim().min(1),
@@ -24317,12 +24440,15 @@ import { existsSync as existsSync5 } from "fs";
 // src/runner-session.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { homedir as homedir3, userInfo } from "os";
-import { dirname as dirname2, join as join3 } from "path";
+import { dirname as dirname2, join as join3, resolve } from "path";
+init_src();
 function runnerDir(home = homedir3()) {
   return join3(home, ".quarterdeck", "runner");
 }
-function recordCliPath(serverDir, dir = runnerDir()) {
+function recordCliPath(serverDir, dir = runnerDir(), env = process.env) {
   try {
+    const home = dirname2(dirname2(dir));
+    if (resolve(defaultDbPath(env, home)) !== resolve(defaultDbPath({}, home))) return;
     const cli = join3(serverDir, "quarterdeck-cli.mjs");
     if (!existsSync3(join3(dir, "launch.mjs")) || !existsSync3(cli)) return;
     const file = join3(dir, "cli-path");
@@ -24610,7 +24736,8 @@ async function firstChecks(goalId) {
   for (const w of listWatches2(goalId)) {
     if (w.last_checked_at !== null) continue;
     if (w.kind === "tool") {
-      results.push({ name: w.name, result: `set; the session running goals calls ${w.tool} within a minute, and goal_detail says if that fails` });
+      const calls = w.steps ? `runs ${w.steps.length} step${w.steps.length === 1 ? "" : "s"} (${w.steps.map((s) => s.tool.replace(/^mcp__.+__/, "")).join(", ")})` : `calls ${w.tool}`;
+      results.push({ name: w.name, result: `set; the session running goals ${calls} within a minute, and goal_detail says if that fails` });
       continue;
     }
     const r = await checkCommandWatch2(w.id);
@@ -24625,7 +24752,7 @@ async function watch_report(args) {
   const input = WatchReportSchema.parse(args);
   const watch = getWatch2(input.watch_id);
   if (!watch) throw new Error(`Watch ${input.watch_id} not found.`);
-  const r = reportToolWatch2(watch.id, input.error !== void 0 ? { error: input.error } : { text: input.text ?? "" });
+  const r = reportToolWatch2(watch.id, { ...input.error !== void 0 ? { error: input.error } : { text: input.text ?? "", ...input.note ? { note: input.note } : {} }, ...input.cleanup ? { cleanup: input.cleanup } : {} });
   const goal = getGoal2(watch.plan_id);
   const queued = r.fresh.length && goal?.status === "active" ? queueForWatchEvents2(watch.plan_id) : null;
   return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...r.error && { error: r.error }, queued_run: queued ? queued.id : null };
