@@ -702,11 +702,137 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
     </Box>
   )
   if (!g.detail) return <Text key={`details-${g.id}`} dimColor>  Loading… (if this stays, collapse some other goals: too many open at once)</Text>
+
+  // Open items: the first few, the rest behind "… and N more"
+  const allItems = isOpen(view, `items:${g.id}`)
+  const items = allItems ? g.openItems : g.openItems.slice(0, ITEMS_SHOWN)
+  const moreItems = g.openItemCount - items.length
+
+  // Memory starts closed, or open when a memory waits to be trusted
+  const memoryOpen = isOpen(view, `memory:${g.id}`, g.memory.some((m) => m.untrusted))
+  const inactiveOpen = isOpen(view, `inactive-memory:${g.id}`)
+
   return (
     <Box key={`details-${g.id}`} flexDirection="column" marginTop={1}>
-      <Text dimColor>{g.objective}</Text>
+      {clippedText($, e, view, `objective:${g.id}`, `objective-${g.id}`, g.objective, 0)}
+      {factsLine($, e, view, g)}
+      {watchSection($, e, view, g)}
+      {allowSection($, e, view, g)}
+
+      <Box key={`items-${g.id}`} flexDirection="column" marginTop={1}>
+        <Text bold>Open items{g.openItemCount > 0 ? ` (${g.openItemCount})` : ''}</Text>
+        {g.openItems.length === 0 && <Text dimColor>  none</Text>}
+        {items.map((item) => (
+          <Text key={`item-${g.id}/${item.id}`}>  · {item.title}{item.blocked && <Text color="yellow"> · blocked: out of attempts, waits for your answer</Text>}</Text>
+        ))}
+        {moreItems > 0 && (g.openItems.length > items.length
+          ? <Button key={`items-more-${g.id}`} plain label={`  … and ${moreItems} more`} onPress={() => void toggleExpanded($, `items:${g.id}`)}><Text dimColor>  … and {moreItems} more</Text></Button>
+          : <Text dimColor>  … and {moreItems} more</Text>)}
+        {allItems && g.openItems.length > ITEMS_SHOWN && <Button key={`items-fewer-${g.id}`} plain label="  fewer" onPress={() => void toggleExpanded($, `items:${g.id}`)}><Text dimColor>  fewer</Text></Button>}
+        {view.discussing === `goal:${g.id}`
+          ? discussBox()
+          : action($, e, { key: `discuss-goal-${g.id}`, label: 'Discuss this goal…', onPress: () => void setDiscussing($, `goal:${g.id}`) })}
+      </Box>
+
+      <Box key={`memory-section-${g.id}`} flexDirection="column" marginTop={1}>
+        {g.memory.length === 0
+          ? <Text dimColor>No memory yet</Text>
+          : <Button key={`memory-toggle-${g.id}`} plain label={`${memoryOpen ? '▾' : '▸'} Memory (${g.memory.length})`} onPress={() => void toggleExpanded($, `memory:${g.id}`)}><Text bold>{memoryOpen ? '▾' : '▸'} Memory ({g.memory.length}){untrustedCount(g) ? <Text color="yellow"> · {untrustedCount(g)} to review</Text> : null}</Text></Button>}
+        {memoryOpen && g.memory.map((m) => memoryRow($, e, view, g, m))}
+
+        {g.inactiveMemory.length > 0 && (
+          <Button key={`inactive-memory-toggle-${g.id}`} plain label={`${inactiveOpen ? '▾' : '▸'} Inactive memory (${g.inactiveMemory.length})`} onPress={() => void toggleExpanded($, `inactive-memory:${g.id}`)} />
+        )}
+        {inactiveOpen && g.inactiveMemory.map((m) => {
+          // Forgotten, merged, retired or rewritten: kept so it can come back (#105)
+          const why = ` (${INACTIVE_REASON[m.reason ?? ''] ?? 'inactive'}${m.inactiveAt ? ` ${m.inactiveAt.slice(0, 10)}` : ''}) `
+          return (
+            <Box key={`inactive-memory-${m.id}`}>
+              <Text dimColor>{`  [${m.kind}] ${clip(m.text, Math.max(view.columns - m.kind.length - why.length - 13, 10))}${why}`}</Text>
+              {action($, e, { key: `restore-memory-${m.id}`, label: view.doing === `restore-memory:${m.id}` ? 'Restoring…' : 'Restore', onPress: () => void act($, `restore-memory:${m.id}`, 'restore the memory', () => restoreMemory($, g.id, m.id)) })}
+            </Box>
+          )
+        })}
+      </Box>
+
+      <Box key={`open-row-${g.id}`} marginTop={1}>
+        <Link key={`open-${g.id}`} href={`${view.base}/goals/${encodeURIComponent(g.id)}`} label="Open in browser" />
+      </Box>
+    </Box>
+  )
+}
+
+/** Open items an expanded goal shows before "… and N more". */
+const ITEMS_SHOWN = 5
+
+/**
+ * Whether a section or row is open: its default, flipped when the person
+ * pressed it. So a section that opens by itself (a memory to trust, a watch
+ * that can't check) can still be closed.
+ */
+function isOpen(view: View, key: string, byDefault = false): boolean {
+  return view.shown.includes(key) !== byDefault
+}
+
+function untrustedCount(g: GoalCard): number {
+  return g.memory.filter((m) => m.untrusted).length
+}
+
+/** Text cut to one line; pressing it shows it all (and again, one line). Text that fits is plain. */
+function clippedText($: Engine, e: E, view: View, key: string, buttonKey: string, text: string, indent: number) {
+  const { Button, Text } = parts($, e)
+  const width = Math.max(view.columns - indent - 2, 10)
+  if ([...text].length <= width && !text.includes('\n')) return <Text key={buttonKey} dimColor>{' '.repeat(indent)}{text}</Text>
+  const full = isOpen(view, key)
+  const shown = full ? text : clip(text.split('\n')[0]!, width)
+  return (
+    <Button key={buttonKey} plain label={shown} onPress={() => void toggleExpanded($, key)}>
+      <Text dimColor>{' '.repeat(indent)}{shown}</Text>
+    </Button>
+  )
+}
+
+/**
+ * One dim line of settings: "Runs every 1h · Sonnet · ▸ 2 watches · ▸ 1 allow rule".
+ * The model is pressed to change it; watches and allow rules open their detail below.
+ */
+function factsLine($: Engine, e: E, view: View, g: GoalCard) {
+  const { Box, Text, Button } = parts($, e)
+  const used = lastRun(g)?.model ?? null
+  const differs = used !== null && g.model !== null && !sameModel(g.model, used)
+  const { rules } = allowRules(g)
+  const watchesOpen = isOpen(view, `watches:${g.id}`, g.watches.some((w) => w.failing))
+  const rulesOpen = isOpen(view, `rules:${g.id}`)
+  const dot = (k: string) => <Text key={`fact-dot-${g.id}-${k}`} dimColor>{' · '}</Text>
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
+  return (
+    <Box key={`facts-${g.id}`} flexWrap="wrap">
       <Text dimColor>{runsText(g)}</Text>
-      {modelLine($, e, view, g)}
+      {dot('model')}
+      {action($, e, { key: `model-change-${g.id}`, label: view.doing === `model:${g.id}` ? 'Choosing…' : goalModelLabel(g.model), onPress: () => void act($, `model:${g.id}`, 'change the model', () => chooseModel($, g)) })}
+      {differs && <Text color="yellow"> (last run used {modelName(used)})</Text>}
+      {g.watches.length > 0 && dot('watches')}
+      {g.watches.length > 0 && (
+        <Button key={`watches-toggle-${g.id}`} plain label={`${watchesOpen ? '▾' : '▸'} ${plural(g.watches.length, 'watch', 'watches')}`} onPress={() => void toggleExpanded($, `watches:${g.id}`)}>
+          <Text dimColor>{watchesOpen ? '▾' : '▸'} {plural(g.watches.length, 'watch', 'watches')}</Text>
+        </Button>
+      )}
+      {rules.length > 0 && dot('rules')}
+      {rules.length > 0 && (
+        <Button key={`allow-toggle-${g.id}`} plain label={`${rulesOpen ? '▾' : '▸'} ${plural(rules.length, 'allow rule')}`} onPress={() => void toggleExpanded($, `rules:${g.id}`)}>
+          <Text dimColor>{rulesOpen ? '▾' : '▸'} {plural(rules.length, 'allow rule')}</Text>
+        </Button>
+      )}
+    </Box>
+  )
+}
+
+/** The watches, one line each, when opened from the facts line (open by itself while one can't check). */
+function watchSection($: Engine, e: E, view: View, g: GoalCard) {
+  const { Box, Text } = parts($, e)
+  if (g.watches.length === 0 || !isOpen(view, `watches:${g.id}`, g.watches.some((w) => w.failing))) return null
+  return (
+    <Box key={`watches-${g.id}`} flexDirection="column">
       {g.watches.map((w) => (
         <Text key={`watch-${g.id}/${w.name}`} dimColor>
           Also runs when "{w.name}" {w.onChange ? 'changes' : 'sees something new'} (checked every {w.everyMinutes} min{w.urgent && g.watchGapMinutes ? ', urgent' : ''}{w.lastFiredAt ? `, last ${ago(w.lastFiredAt, view.now)}` : ''})
@@ -714,62 +840,51 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
           {!w.failing && w.error && <Text dimColor> · note: {w.error}</Text>}
         </Text>
       ))}
-      {g.watches.length > 0 && g.watchGapMinutes > 0 && <Text key={`watch-gap-${g.id}`} dimColor>Watch runs start at least {g.watchGapMinutes} min apart; news in between waits for the next run</Text>}
-      {allowSection($, e, view, g)}
+      {g.watchGapMinutes > 0 && <Text key={`watch-gap-${g.id}`} dimColor>Watch runs start at least {g.watchGapMinutes} min apart; news in between waits for the next run</Text>}
+    </Box>
+  )
+}
 
-      <Text bold>Open items</Text>
-      {g.openItems.length === 0 && <Text dimColor>  none</Text>}
-      {g.openItems.map((item) => (
-        <Text key={`item-${g.id}/${item.id}`}>  · {item.title}{item.blocked && <Text color="yellow"> · blocked: out of attempts, waits for your answer</Text>}</Text>
-      ))}
-      {g.openItemCount > g.openItems.length && <Text dimColor>  … and {g.openItemCount - g.openItems.length} more</Text>}
-
-      {view.discussing === `goal:${g.id}`
-        ? discussBox()
-        : action($, e, { key: `discuss-goal-${g.id}`, label: 'Discuss this goal…', onPress: () => void setDiscussing($, `goal:${g.id}`) })}
-
-      <Text bold>Memory</Text>
-      {g.memory.length === 0 && <Text dimColor>  none</Text>}
-      {g.memory.map((m) => {
-        const isConfirming = view.pending?.kind === 'delete-memory' && view.pending.memoryId === m.id
-        return (
-          <Box key={`memory-${m.id}`}>
-            <Text>  {m.pinned ? '📌 ' : ''}{m.untrusted ? <Text color="yellow">⚠ </Text> : null}<Text dimColor>[{m.kind}]</Text> {m.text} </Text>
-            {m.untrusted && !isConfirming ? (
-              // A run wrote it after reading outside content: runs that read it need approval for auto actions until trusted
-              <Box>
-                {action($, e, { key: `trust-${m.id}`, label: 'Trust', onPress: () => void act($, `trust:${m.id}`, 'trust the memory', () => trustMemory($, g.id, m.id)) })}
-                <Text> </Text>
-              </Box>
-            ) : null}
-            {isConfirming ? (
-              <Box>
-                {action($, e, { key: `forget-yes-${m.id}`, label: 'Delete it', onPress: () => {
-                    void setConfirm($, null)
-                    void act($, `forget:${m.id}`, 'delete the memory', () => deleteMemory($, g.id, m.id))
-                  } })}
-                <Text> </Text>
-                {action($, e, { key: `forget-no-${m.id}`, label: 'Keep', onPress: () => void setConfirm($, null) })}
-              </Box>
-            ) : (
-              action($, e, { key: `forget-${m.id}`, label: 'Delete', onPress: () => void setConfirm($, ({ kind: 'delete-memory', goalId: g.id, memoryId: m.id })) })
-            )}
-          </Box>
-        )
-      })}
-
-      {g.inactiveMemory.length > 0 && (
-        <Button key={`inactive-memory-toggle-${g.id}`} plain label={`${view.shown.includes(`inactive-memory:${g.id}`) ? '▾' : '▸'} Inactive memory (${g.inactiveMemory.length})`} onPress={() => void toggleExpanded($, `inactive-memory:${g.id}`)} />
-      )}
-      {view.shown.includes(`inactive-memory:${g.id}`) && g.inactiveMemory.map((m) => (
-        // Forgotten, merged, retired or rewritten: kept so it can come back (#105)
-        <Box key={`inactive-memory-${m.id}`}>
-          <Text dimColor>  [{m.kind}] {m.text} ({INACTIVE_REASON[m.reason ?? ''] ?? 'inactive'}{m.inactiveAt ? ` ${m.inactiveAt.slice(0, 10)}` : ''}) </Text>
-          {action($, e, { key: `restore-memory-${m.id}`, label: view.doing === `restore-memory:${m.id}` ? 'Restoring…' : 'Restore', onPress: () => void act($, `restore-memory:${m.id}`, 'restore the memory', () => restoreMemory($, g.id, m.id)) })}
+/**
+ * A memory on one line; pressed, it shows in full with Trust and Delete. A
+ * memory a run wrote after reading outside content starts open, so Trust shows.
+ */
+function memoryRow($: Engine, e: E, view: View, g: GoalCard, m: GoalCard['memory'][number]) {
+  const { Box, Text, Button } = parts($, e)
+  const isConfirming = view.pending?.kind === 'delete-memory' && view.pending.memoryId === m.id
+  const open = isConfirming || isOpen(view, `memory-row:${m.id}`, Boolean(m.untrusted))
+  const mark = `${m.pinned ? '📌 ' : ''}${m.untrusted ? '⚠ ' : ''}`
+  const head = `  ${open ? '▾' : '▸'} ${mark}[${m.kind}] `
+  const body = open ? m.text : clip(m.text.split('\n')[0]!, Math.max(view.columns - [...head].length - 2, 10))
+  return (
+    <Box key={`memory-${m.id}`} flexDirection="column">
+      <Button key={`memory-row-${m.id}`} plain label={`${head}${body}`} onPress={() => void toggleExpanded($, `memory-row:${m.id}`)}>
+        <Text>{`  ${open ? '▾' : '▸'} `}{m.pinned ? '📌 ' : ''}{m.untrusted ? <Text color="yellow">⚠ </Text> : null}<Text dimColor>[{m.kind}]</Text> {body}</Text>
+      </Button>
+      {open && (
+        <Box key={`memory-actions-${m.id}`}>
+          <Text>{'      '}</Text>
+          {m.untrusted && !isConfirming ? (
+            // A run wrote it after reading outside content: runs that read it need approval for auto actions until trusted
+            <Box>
+              {action($, e, { key: `trust-${m.id}`, label: 'Trust', onPress: () => void act($, `trust:${m.id}`, 'trust the memory', () => trustMemory($, g.id, m.id)) })}
+              <Text dimColor> · </Text>
+            </Box>
+          ) : null}
+          {isConfirming ? (
+            <Box>
+              {action($, e, { key: `forget-yes-${m.id}`, label: 'Delete it', onPress: () => {
+                  void setConfirm($, null)
+                  void act($, `forget:${m.id}`, 'delete the memory', () => deleteMemory($, g.id, m.id))
+                } })}
+              <Text> </Text>
+              {action($, e, { key: `forget-no-${m.id}`, label: 'Keep', onPress: () => void setConfirm($, null) })}
+            </Box>
+          ) : (
+            action($, e, { key: `forget-${m.id}`, label: 'Delete', onPress: () => void setConfirm($, ({ kind: 'delete-memory', goalId: g.id, memoryId: m.id })) })
+          )}
         </Box>
-      ))}
-
-      <Link key={`open-${g.id}`} href={`${view.base}/goals/${encodeURIComponent(g.id)}`} label="Open in browser" />
+      )}
     </Box>
   )
 }
@@ -930,30 +1045,6 @@ function todoSection($: Engine, e: E, view: View, todos: Todos, addingTo: string
   )
 }
 
-/**
- * The Claude Code allow rules for a goal's auto tools, one line until opened.
- * The guard never allows a call, so without these Claude Code asks before each
- * one (unless the session is in auto mode). Claude adds them only after the
- * person's yes: the mod itself never writes settings.
- */
-/**
- * "Model: Sonnet · Change…". When the last run used another model (the
- * setting changed since, or CLAUDE_CODE_SUBAGENT_MODEL overrides every
- * subagent's), it says which, so the setting never claims more than it does.
- */
-function modelLine($: Engine, e: E, view: View, g: GoalCard) {
-  const { Box, Text } = parts($, e)
-  const used = lastRun(g)?.model ?? null
-  const differs = used !== null && g.model !== null && !sameModel(g.model, used)
-  return (
-    <Box key={`model-${g.id}`}>
-      <Text>{`Model: ${goalModelLabel(g.model)} · `}</Text>
-      {action($, e, { key: `model-change-${g.id}`, label: view.doing === `model:${g.id}` ? 'Choosing…' : 'Change…', onPress: () => void act($, `model:${g.id}`, 'change the model', () => chooseModel($, g)) })}
-      {differs && <Text color="yellow"> (last run used {modelName(used)})</Text>}
-    </Box>
-  )
-}
-
 /** A goal's model setting (an alias or an id) and the id a run reported, as the same model. */
 function sameModel(setting: string, used: string): boolean {
   const s = setting.toLowerCase()
@@ -981,25 +1072,28 @@ async function chooseModel($: Engine, g: GoalCard): Promise<void> {
   $.ui.toast(`${g.name} now runs on ${goalModelLabel(read.model)}.`)
 }
 
+/**
+ * The Claude Code allow rules for a goal's auto tools, opened from the facts line.
+ * The guard never allows a call, so without these Claude Code asks before each
+ * one (unless the session is in auto mode). Claude adds them only after the
+ * person's yes: the mod itself never writes settings.
+ */
 function allowSection($: Engine, e: E, view: View, g: GoalCard) {
-  const { Box, Text, Button } = parts($, e)
+  const { Box, Text } = parts($, e)
   const { rules, skipped } = allowRules(g)
-  if (rules.length === 0 && skipped.length === 0) return null
-  const key = `rules:${g.id}`
-  const isOpen = view.shown.includes(key)
+  if (rules.length === 0 || !isOpen(view, `rules:${g.id}`)) return null
   return (
     <Box key={`allow-${g.id}`} flexDirection="column">
-      <Button key={`allow-toggle-${g.id}`} plain label={`${isOpen ? '▾' : '▸'} Claude Code allow rules (${rules.length})`} onPress={() => void toggleExpanded($, key)} />
-      {isOpen && <Text key={`allow-why-${g.id}`} dimColor>  For the tools this goal may use without asking. Without them Claude Code asks before each call, unless it is in auto mode. They apply to all of Claude Code, not only goal runs.</Text>}
-      {isOpen && rules.map((r) => (
+      <Text key={`allow-why-${g.id}`} dimColor>For the tools this goal may use without asking. Without them Claude Code asks before each call, unless it is in auto mode. They apply to all of Claude Code, not only goal runs.</Text>
+      {rules.map((r) => (
         <Box key={`allow-rule-${g.id}/${r}`}>
           <Text>{`  ${r}`}</Text>
           <Text> </Text>
           {action($, e, { key: `allow-add-${g.id}/${r}`, label: 'Add…', onPress: () => void addRule($, r) })}
         </Box>
       ))}
-      {isOpen && skipped.length > 0 && <Text key={`allow-skipped-${g.id}`} dimColor>  Claude Code can't take these tool rules as allow rules: {skipped.join(', ')}</Text>}
-      {isOpen && rules.length > 0 && action($, e, { key: `allow-ask-${g.id}`, label: view.doing === `allow:${g.id}` ? '  Asking…' : '  Ask Claude to add them', onPress: () => void askToAllow($, g, rules) })}
+      {skipped.length > 0 && <Text key={`allow-skipped-${g.id}`} dimColor>  Claude Code can't take these tool rules as allow rules: {skipped.join(', ')}</Text>}
+      {action($, e, { key: `allow-ask-${g.id}`, label: view.doing === `allow:${g.id}` ? '  Asking…' : '  Ask Claude to add them', onPress: () => void askToAllow($, g, rules) })}
     </Box>
   )
 }

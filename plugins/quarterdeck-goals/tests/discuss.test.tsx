@@ -199,14 +199,18 @@ test('a goal shows its watches when expanded, and one that cannot check keeps it
   // Working: one quiet line until expanded
   expect(await ui.find({ key: 'pause-g1' })).toBeUndefined()
   await ui.press({ key: 'toggle-g1' })
+  expect((await ui.find({ key: 'watches-toggle-g1' }))?.props.label).toBe('▸ 1 watch')
+  await ui.press({ key: 'watches-toggle-g1' })
   expect(await ui.find({ type: 'Text', text: /Also runs when "new issues" sees something new \(checked every 5 min, last .* ago\)/ })).toBeDefined()
   // Failing: the card stays, and says so
   expect(await ui.find({ key: 'pause-g2' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^a watch can't check: expand the goal to see why$/ })).toBeDefined()
   await ui.press({ key: 'toggle-g2' })
+  // Open by itself while a watch can't check
   expect(await ui.find({ type: 'Text', text: /can't check: Exit code 4: gh: not logged in/ })).toBeDefined()
   // A watch on a state runs when it changes
   await ui.press({ key: 'toggle-g3' })
+  await ui.press({ key: 'watches-toggle-g3' })
   expect(await ui.find({ type: 'Text', text: /^Also runs when "working tree" changes \(checked every 1 min\)$/ })).toBeDefined()
   await ui.unmount()
 })
