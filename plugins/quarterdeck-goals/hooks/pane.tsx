@@ -41,7 +41,7 @@ type View = {
   open: string | null
   shown: string[]
   pending: Confirm | null
-  /** "goal:<id>" or "run:<id>" while that Discuss question box is open. */
+  /** "goal:<id>" while that goal's Discuss question box is open. */
   discussing: string | null
   /** The first proposal in the pane, which a / r act on. */
   first: string | null
@@ -629,17 +629,17 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
 function details($: Engine, e: E, view: View, g: GoalCard) {
   const { Box, Text, Button, Link, Input } = parts($, e)
   // Discuss opens a box for the person's question, like a to-do's Ask…; Enter on an empty box asks the usual one
-  const discussBox = (kind: 'goal' | 'run', id: string, run?: GoalCard['runs'][number]) => (
-    <Box key={`discuss-${kind}-box-${id}`} flexDirection="column">
+  const discussBox = () => (
+    <Box key={`discuss-goal-box-${g.id}`} flexDirection="column">
       <Input
-        key={`discuss-${kind}-input-${id}`}
+        key={`discuss-goal-input-${g.id}`}
         label="Your question"
         placeholder="type a question, or Enter for the usual one"
         submitLabel={view.doing === `discuss:${g.id}` ? 'Sending…' : 'Discuss'}
         autoFocus
-        onSubmit={(text: string) => void discuss($, g, run, text)}
+        onSubmit={(text: string) => void discuss($, g, undefined, text)}
       />
-      {action($, e, { key: `discuss-${kind}-cancel-${id}`, label: 'Cancel', onPress: () => void setDiscussing($, null) })}
+      {action($, e, { key: `discuss-goal-cancel-${g.id}`, label: 'Cancel', onPress: () => void setDiscussing($, null) })}
     </Box>
   )
   if (!g.detail) return <Text key={`details-${g.id}`} dimColor>  Loading… (if this stays, collapse some other goals: too many open at once)</Text>
@@ -666,26 +666,8 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
       {g.openItemCount > g.openItems.length && <Text dimColor>  … and {g.openItemCount - g.openItems.length} more</Text>}
 
       {view.discussing === `goal:${g.id}`
-        ? discussBox('goal', g.id)
+        ? discussBox()
         : action($, e, { key: `discuss-goal-${g.id}`, label: 'Discuss this goal…', onPress: () => void setDiscussing($, `goal:${g.id}`) })}
-
-      <Text bold>Recent runs</Text>
-      {g.runs.length === 0 && <Text dimColor>  none</Text>}
-      {g.runs.map((r) => (
-        <Box key={`run-${r.id}`} flexDirection="column">
-          <Text key={`run-row-${r.id}`}>
-            {'  '}
-            <Text color={isFailed(r.status) ? 'red' : r.status === 'completed' ? 'green' : 'cyan'}>{r.status}</Text>
-            <Text dimColor> {r.trigger} · {ago(r.endedAt ?? r.startedAt, view.now)}{runCost(r) ? ` · ${runCost(r)}` : ''}</Text>
-            {r.summary ? ` — ${r.summary}` : ''}
-          </Text>
-          {r.untrusted && <Text key={`run-untrusted-${r.id}`} dimColor>    Read outside content ({r.untrusted}): auto actions needed approval</Text>}
-          {r.status !== 'running' && r.status !== 'queued' && (view.discussing === `run:${r.id}`
-            ? discussBox('run', r.id, r)
-            : action($, e, { key: `discuss-run-${r.id}`, label: '    Discuss this run…', onPress: () => void setDiscussing($, `run:${r.id}`) })
-          )}
-        </Box>
-      ))}
 
       <Text bold>Memory</Text>
       {g.memory.length === 0 && <Text dimColor>  none</Text>}
@@ -892,7 +874,7 @@ function modelLine($: Engine, e: E, view: View, g: GoalCard) {
   const differs = used !== null && g.model !== null && !sameModel(g.model, used)
   return (
     <Box key={`model-${g.id}`}>
-      <Text dimColor>{`Model: ${goalModelLabel(g.model)} · `}</Text>
+      <Text>{`Model: ${goalModelLabel(g.model)} · `}</Text>
       {action($, e, { key: `model-change-${g.id}`, label: view.doing === `model:${g.id}` ? 'Choosing…' : 'Change…', onPress: () => void act($, `model:${g.id}`, 'change the model', () => chooseModel($, g)) })}
       {differs && <Text color="yellow"> (last run used {modelName(used)})</Text>}
     </Box>
