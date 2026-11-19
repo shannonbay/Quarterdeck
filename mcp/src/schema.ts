@@ -369,6 +369,8 @@ export const DeleteMemorySchema = z.object({
 
 export const TrustMemorySchema = DeleteMemorySchema
 
+export const RestoreMemorySchema = DeleteMemorySchema
+
 export const VerifyTaskSchema = z.object({
   task_id: z.string().describe('ID of the task whose checks to run'),
 })

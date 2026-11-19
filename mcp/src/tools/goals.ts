@@ -1,6 +1,6 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
-  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, updateMemory, getRun, endRun, queueRun, countItems, touchPlan,
+  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, countItems, touchPlan,
   reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
 } from '../db.js'
 import { purgeDate } from '@quarterdeck/core'
@@ -168,7 +168,7 @@ export async function forget(args: unknown) {
   if (m.source !== 'agent') {
     throw new Error('You can only forget memories an agent created. Human-written and feedback memories are edited by the human in the web UI.')
   }
-  updateMemory(m.id, { active: false })
+  forgetMemory(m.id)
   record(planId, planId, 'memory_forgotten', { memory_id: m.id, text: m.text })
   return { forgotten: m.id }
 }
