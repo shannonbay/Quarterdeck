@@ -185,6 +185,8 @@ export function startArgs(sessionId: string, permissionMode?: string, resume = f
  * finished background subagent's report back to its parent as a turn, so each goal run wakes this
  * session over its whole history. The runs report through Quarterdeck themselves (items, summaries,
  * alerts), so a hand-back needs only a one-line reply with no tool calls. Given on --resume too.
+ * Since #114 the guard drops the hand-back before it starts a turn (its prompt.submit hook); this
+ * stays for a guard older than that, or a hand-back that arrives some other way.
  * No double quotes, % or shell metacharacters: on Windows the argument line passes through
  * PowerShell and quoting that doesn't escape them.
  */

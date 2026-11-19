@@ -11,6 +11,8 @@ paths:
 
 **Why a guard plugin**: the engine hides from a plugin the calls its own timers and buttons cause, so the runner can't see its own timer-started runs. The guard plugin identifies runs by `$.agent.list()` `spawnedBy` plus the description. It sets `run_scope`, applies the goal guard (`guard_check`), refuses the person-only tools (`decide_item`, `cancel_run`, ...) to agents and the model, and keeps run reports out of the chat.
 
+**A run's hand-back starts no turn** (#114): Claude Code delivers a finished background subagent's report to the main loop as a prompt with origin `{ kind: 'peer', from: <agent id>, handback: true, ... }` (seen in Claude Code 2.1.3xx transcripts; `session.receive` is never raised for it, so the guard's older hook there never caught one). The guard's `prompt.submit` hook answers `{ drop }` when that agent id (`origin.from`, else the `<agent-message from="…">` frame) is a run by `runIdFor` (`spawnedBy`), so the standing session no longer pays a turn over its whole history per run. Only `peer` prompts are looked at: the person's own text naming a run agent goes on. `SubagentHandback` itself still runs, so Claude Code counts the report delivered.
+
 ## Tool maps and decisions (`core/src/guard.ts`, MCP `guard_check`)
 
 Called by the guard plugin for each run's tool calls. `tool_map` maps tool-name patterns to categories. It denies `off` categories, and `propose` categories unless an approved proposal for that category is still being carried out (active, not completed): an approval covers its whole action however many calls it takes, until the run completes the item. Every decision is recorded in `goal_tool_calls`. Outside goal runs it allows everything.
