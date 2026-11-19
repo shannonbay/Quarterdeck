@@ -4,7 +4,7 @@ import {
   openDatabase, insertTask, getTask, getPlan, getPlanRevision,
   createGoal, getGoal, listGoals, updateGoal, setIntervalTrigger, getIntervalTrigger,
   insertRun, getRun, updateRun, listRuns, getOpenRun, countRunsSince,
-  insertMemory, listMemory, updateMemory, deleteMemory, forgetMemory, restoreMemory, getMemory,
+  insertMemory, listMemory, updateMemory, deleteMemory, forgetMemory, restoreMemory, getMemory, buildOverview,
   deleteGoal, restoreGoal, purgeGoal, purgeExpiredGoals, deletedRetentionDays, purgeDate, type NewTask,
 } from './index.js'
 
@@ -106,6 +106,16 @@ describe('memory', () => {
     expect(restoreMemory(db, m.id)).toMatchObject({ active: true, inactive_reason: null, inactive_at: null })
     expect(listMemory(db, 'g1', { activeOnly: true })).toHaveLength(1)
     expect(() => restoreMemory(db, 'mem_missing')).toThrow(/not found/)
+  })
+
+  it('the overview lists inactive memory apart, with why it went, and only on a detailed goal (#105)', () => {
+    const kept = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Kept.', source: 'agent' })
+    const gone = insertMemory(db, { plan_id: 'g1', kind: 'fact', text: 'Gone.', source: 'agent' })
+    forgetMemory(db, gone.id)
+    const g = buildOverview(db, ['g1']).goals[0]!
+    expect(g.memory.map((m) => m.id)).toEqual([kept.id])
+    expect(g.inactive_memory).toMatchObject([{ id: gone.id, text: 'Gone.', reason: 'forgotten', ref: null, replaced_by: null }])
+    expect(buildOverview(db, []).goals[0]!.inactive_memory).toEqual([])
   })
 
   it('rejects empty text', () => {
