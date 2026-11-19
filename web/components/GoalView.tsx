@@ -293,6 +293,9 @@ function NeedsYou({ items, goalId, busy, call }: { items: Item[]; goalId: string
   )
 }
 
+/** Why an inactive memory went, in the page's words. */
+const INACTIVE_REASON: Record<string, string> = { forgotten: 'Forgotten', merged: 'Merged into another memory', retired: 'Retired by a curation', rewritten: 'Reworded by a curation' }
+
 function MemorySection({ memory, budget, goalId, busy, call }: { memory: GoalMemory[]; budget: number; goalId: string; busy: string | null; call: Call }) {
   const [kind, setKind] = useState<GoalMemory['kind']>('rule')
   const [text, setText] = useState('')
@@ -304,6 +307,12 @@ function MemorySection({ memory, budget, goalId, busy, call }: { memory: GoalMem
       <span className="text-[10px] uppercase tracking-wide text-gray-400 w-16 flex-shrink-0 mt-0.5">{m.kind}</span>
       <span className="flex-1 text-gray-800">
         {m.text}
+        {!m.active && (
+          // Why it went (#105): forgotten, or merged, retired or reworded by a memory curation
+          <span className="block text-xs text-gray-500 mt-0.5">
+            {INACTIVE_REASON[m.inactive_reason ?? ''] ?? 'Disabled'}{m.inactive_at ? ` ${m.inactive_at.slice(0, 10)}` : ''}
+          </span>
+        )}
         {m.untrusted_source && (
           <span className="block text-xs text-amber-700 mt-0.5">
             ⚠ Written by a run that had read {m.untrusted_source}: runs that read it need approval for auto actions.{' '}
@@ -315,10 +324,13 @@ function MemorySection({ memory, budget, goalId, busy, call }: { memory: GoalMem
       <span className="text-xs text-gray-400 flex-shrink-0">{sourceLabel[m.source]}</span>
       <button title={m.pinned ? 'Unpin' : 'Pin: always include in the brief'} className={`text-xs ${m.pinned ? 'text-amber-600' : 'text-gray-300 hover:text-gray-600'}`}
         onClick={() => call('mem', `/api/goals/${goalId}/memory/${m.id}`, { method: 'PATCH', body: JSON.stringify({ pinned: !m.pinned }) })}>📌</button>
-      <button className="text-xs text-gray-400 hover:text-gray-800"
-        onClick={() => call('mem', `/api/goals/${goalId}/memory/${m.id}`, { method: 'PATCH', body: JSON.stringify({ active: !m.active }) })}>{m.active ? 'Disable' : 'Enable'}</button>
-      <button className="text-xs text-gray-400 hover:text-red-600"
-        onClick={() => call('mem', `/api/goals/${goalId}/memory/${m.id}`, { method: 'DELETE' })}>Delete</button>
+      {m.active ? (
+        <button className="text-xs text-gray-400 hover:text-red-600" title="It moves to inactive memory, where you can restore it"
+          onClick={() => call('mem', `/api/goals/${goalId}/memory/${m.id}`, { method: 'DELETE' })}>Forget</button>
+      ) : (
+        <button className="text-xs text-gray-400 hover:text-gray-800"
+          onClick={() => call('mem', `/api/goals/${goalId}/memory/${m.id}/restore`, { method: 'POST' })}>Restore</button>
+      )}
     </li>
   )
   const chars = active.reduce((n, m) => n + m.text.length, 0)
@@ -326,7 +338,13 @@ function MemorySection({ memory, budget, goalId, busy, call }: { memory: GoalMem
     <Section title={`Memory (${active.length})`}>
       <div className="bg-white rounded-lg border border-gray-200">
         {memory.length === 0 ? <p className="px-4 py-3 text-sm text-gray-400">No memory yet. Add rules here, or reject a proposal with feedback — it becomes memory automatically.</p> : (
-          <ul className="divide-y divide-gray-100">{active.map(row)}{inactive.map(row)}</ul>
+          <ul className="divide-y divide-gray-100">{active.map(row)}</ul>
+        )}
+        {inactive.length > 0 && (
+          <details className="border-t border-gray-100">
+            <summary className="px-4 py-2 text-xs text-gray-500 cursor-pointer">Inactive memory ({inactive.length})</summary>
+            <ul className="divide-y divide-gray-100">{inactive.map(row)}</ul>
+          </details>
         )}
         <form className="flex gap-2 p-3 border-t border-gray-100"
           onSubmit={async (e) => {

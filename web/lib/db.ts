@@ -98,7 +98,8 @@ export const overviewWithEtag = () => core.overviewWithEtag(getDb())
 export const getMemory = (id: string) => core.getMemory(getDb(), id)
 export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core.insertMemory(getDb(), m)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(getDb(), id, fields)
-export const deleteMemory = (id: string) => core.deleteMemory(getDb(), id)
+export const deleteMemory = (id: string) => core.forgetMemory(getDb(), id)
+export const restoreMemory = (id: string) => core.restoreMemory(getDb(), id)
 
 /** Work items of a goal that are not archived, in tree order. */
 export const getGoalItems = (planId: string): Task[] => core.getGoalItems(getDb(), planId)
