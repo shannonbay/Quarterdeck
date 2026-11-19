@@ -273,7 +273,7 @@ const TOOLS = [
     ['delete_memory', "Deletes one of a goal's memories for the human.", DeleteMemorySchema, delete_memory],
     ['trust_memory', "Clears the untrusted mark on a goal memory a run wrote after reading outside content, for the human.", TrustMemorySchema, trust_memory],
     ['set_schedule', "Sets a goal's schedule (interval, cron, or none) for the human.", SetScheduleSchema, set_schedule],
-    ['update_goal', "Changes a goal's name, objective, instructions, autonomy, tool rules, memory, watches or status, once the human has confirmed.", UpdateGoalSchema, update_goal],
+    ['update_goal', "Changes a goal's name, objective, instructions, autonomy, tool rules, memory, watches, the gap between watch runs, model or status, once the human has confirmed.", UpdateGoalSchema, update_goal],
     ['report_run_end', "Reports how a goal run's agent finished a turn: a usage limit skips the run and holds goal runs until the reset.", ReportRunEndSchema, report_run_end],
     ['watch_report', "Records what a goal's tool watch answered when the plugin called its tool; something new queues a run.", WatchReportSchema, watch_report],
     ['run_progress', "Records what a goal run's agent is doing: its latest tool call, or a call waiting for the person's permission answer.", RunProgressSchema, run_progress],

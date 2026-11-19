@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 16
+export const SCHEMA_VERSION = 17
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -449,6 +449,10 @@ export function runMigrations(db: Database): void {
       tool            TEXT,
       tool_input      TEXT NOT NULL DEFAULT '{}',
       match           TEXT,
+      -- lines this regular expression matches are left out (schema 17)
+      ignore          TEXT,
+      -- 1: its events start a run despite the goal's min_watch_gap_minutes (schema 17)
+      urgent          INTEGER NOT NULL DEFAULT 0,
       every_minutes   INTEGER NOT NULL DEFAULT 5,
       -- 'new': a line never seen before fires; 'change': output that differs from the last check fires
       fires           TEXT NOT NULL DEFAULT 'new' CHECK (fires IN ('new', 'change')),
@@ -495,11 +499,16 @@ export function runMigrations(db: Database): void {
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
   // Schema version 12: a watch can set the goal's status
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN status_rules TEXT') } catch { /* already exists */ }
+  // Schema version 17: lines a watch ignores, and a watch that starts a run despite the goal's gap between watch runs
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN ignore TEXT') } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  // The update trigger's column list grew in 17: an older one is made again below
+  if (dbSchemaVersion(db) < 17) db.exec('DROP TRIGGER IF EXISTS trg_goal_watches_update_revision')
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     -- Not on every check: only when what the pane shows changes
-    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
+    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, steps, finally_call, match, ignore, urgent, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;

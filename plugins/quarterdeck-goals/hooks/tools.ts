@@ -148,8 +148,10 @@ export const TOOLS = [
               command: { type: 'string', description: 'Prints one line per current item and exits 0. Runs under cmd.exe on Windows and sh elsewhere, so quote with double quotes' },
               tool: { type: 'string', description: 'For what only a connector reaches (mail, calendar, files): the full name of a tool that only reads, e.g. a mail search. The session running goals calls it with nobody asked' },
               input: { type: 'object', description: "The tool's arguments. Ask for ids only, and few results" },
-              match: { type: 'string', description: 'A regular expression over the tool\'s answer; each match (its first group) is one item. Left out: every "id" in a JSON answer' },
-              every_minutes: { type: 'number', description: 'How often to check (default 5, at least 1)' },
+              match: { type: 'string', description: 'For a tool: a regular expression over its answer; each match (its first group) is one item (left out: every "id" in a JSON answer). For a command: only output lines it matches count' },
+              ignore: { type: ['string', 'null'], description: 'A regular expression: lines it matches are left out (never start a run, never marked seen). null removes it' },
+              urgent: { type: 'boolean', description: "true: this watch's news starts a run at once, even within the goal's min_watch_gap_minutes (for sources where minutes matter)" },
+              every_minutes: { type: 'number', description: 'How often to check (default 5, at least 1). Every run is a full model run, so pick the longest interval the source allows: 5 min only where minutes matter, 30-60 min or more otherwise (goal-watches skill, Fewer quiet runs)' },
               status: {
                 type: ['object', 'null'],
                 description: "Sets the goal's status (and tone) from each check's lines, with no run: for a goal that only reports a state. The first rule matching a line wins, else default. A run starts only when that one says run: true. Best with fires: 'change'",
@@ -163,6 +165,7 @@ export const TOOLS = [
           },
         },
         status: { type: 'string', enum: ['active', 'paused'] },
+        min_watch_gap_minutes: { type: 'number', description: "Minutes after a watch-started run before watch news starts another (0: none, the default): news in between waits and shares the next run. Suggest 20-30 for a goal with several watches; an urgent watch still starts a run at once" },
         model: { type: ['string', 'null'], description: "The model its runs use: haiku, sonnet, opus or a full model id; null: the model of the session that starts each run. Suggest a larger one when runs miss things or time out, a smaller one for routine work" },
       },
       required: ['goal'],
@@ -263,7 +266,7 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
 
   if (name === 'update_goal') {
     // Only the change fields: the call also carries the engine's own (tool, tool_use_id)
-    const keys = ['name', 'objective', 'instructions', 'instructions_edits', 'autonomy', 'tool_map', 'merge_categories', 'add_memory', 'forget_memory', 'watches', 'status', 'model'] as const
+    const keys = ['name', 'objective', 'instructions', 'instructions_edits', 'autonomy', 'tool_map', 'merge_categories', 'add_memory', 'forget_memory', 'watches', 'status', 'model', 'min_watch_gap_minutes'] as const
     const changes = Object.fromEntries(keys.filter((k) => input[k] !== undefined).map((k) => [k, input[k]])) as GoalChanges
     if (changes.instructions_edits !== undefined) {
       if (!Array.isArray(changes.instructions_edits)) return fail('instructions_edits is a list of {old, new}.')

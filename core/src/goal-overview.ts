@@ -268,6 +268,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         status: goal.status,
         one_off: goal.one_off,
         model: goal.model,
+        // Minutes after a watch-started run before watch events start another (0: none)
+        watch_gap_minutes: goal.limits.min_watch_gap_minutes,
         status_note: statusNote(goal, runs, watches),
         instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions)!,
         autonomy: goal.autonomy,
@@ -301,7 +303,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         suggestions: getAutonomySuggestions(db, plan.id),
         // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
         watches: watches.map((w) => ({
-          name: w.name, kind: w.kind, every_minutes: w.every_minutes, fires: w.fires, runs: clip(describeWatch(w), CLIP.watch)!,
+          name: w.name, kind: w.kind, every_minutes: w.every_minutes, fires: w.fires, urgent: w.urgent, runs: clip(describeWatch(w), CLIP.watch)!,
           last_fired_at: w.last_fired_at, failing: watchFailing(w), cleanup_failures: w.cleanup_failures, error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null,
         })),
         watch_count: watches.length,

@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { defaultDbPath } from '@quarterdeck/core'
 import {
-  ensure, install, recordCliPath, runnerCommand, runnerDir, start, startArgs, startByTask, status, statusText, stop, systemdUnits, taskXml, transcriptPath, uninstall, waitingOn,
+  ensure, HANDBACK_PROMPT, install, recordCliPath, runnerCommand, runnerDir, start, startArgs, startByTask, status, statusText, stop, systemdUnits, taskXml, transcriptPath, uninstall, waitingOn,
   RESUME_MAX_BYTES, SESSION_NAME, TASK_NAME, UNIT_NAME, type InstallDeps, type RunnerState,
 } from '../runner-session.js'
 import { checkRunner } from '../doctor.js'
@@ -90,10 +90,16 @@ describe('the standing session', () => {
     const { deps, world } = fake()
     const r = start(deps)
     expect(r).toMatchObject({ started: true, sessionId: 'session-1' })
-    expect(world.spawned).toEqual([['--remote-control', SESSION_NAME, '--name', SESSION_NAME, '--session-id', 'session-1', '--allowedTools', 'mcp__plugin_quarterdeck-goals_quarterdeck,mcp__quarterdeck']])
+    expect(world.spawned).toEqual([['--remote-control', SESSION_NAME, '--name', SESSION_NAME, '--session-id', 'session-1', '--allowedTools', 'mcp__plugin_quarterdeck-goals_quarterdeck,mcp__quarterdeck', '--append-system-prompt', HANDBACK_PROMPT]])
     expect(world.state).toEqual({ sessionId: 'session-1', pid: 101, build: '0.14.0+1' })
     // Not `claude --bg`: the background service retires such a session after a turn
     expect(startArgs('x')).not.toContain('--bg')
+    // Goal runs' hand-backs get a one-line reply with no tool calls (#111), on a new session and on --resume
+    for (const args of [startArgs('x'), startArgs('x', 'auto', true)]) expect(args[args.indexOf('--append-system-prompt') + 1]).toBe(HANDBACK_PROMPT)
+    expect(HANDBACK_PROMPT).toMatch(/one short line/)
+    expect(HANDBACK_PROMPT).toMatch(/no tool calls/)
+    // It passes through PowerShell and the argument quoting on Windows untouched
+    expect(HANDBACK_PROMPT).not.toMatch(/["%&|<>^`$]/)
     // A second start leaves the live one alone
     expect(start(deps).started).toBe(false)
     expect(world.spawned).toHaveLength(1)
@@ -161,7 +167,7 @@ describe('the standing session', () => {
     const r = start(deps)
     expect(r).toMatchObject({ started: true, sessionId: 'session-1' })
     expect(r.text).toMatch(/again/)
-    expect(world.spawned[1]).toEqual(['--remote-control', SESSION_NAME, '--name', SESSION_NAME, '--resume', 'session-1', '--allowedTools', 'mcp__plugin_quarterdeck-goals_quarterdeck,mcp__quarterdeck', '--permission-mode', 'auto'])
+    expect(world.spawned[1]).toEqual(['--remote-control', SESSION_NAME, '--name', SESSION_NAME, '--resume', 'session-1', '--allowedTools', 'mcp__plugin_quarterdeck-goals_quarterdeck,mcp__quarterdeck', '--append-system-prompt', HANDBACK_PROMPT, '--permission-mode', 'auto'])
     expect(world.state).toEqual({ sessionId: 'session-1', pid: 102, build: '0.14.0+1', permissionMode: 'auto' })
     // After an update too
     world.running = 0

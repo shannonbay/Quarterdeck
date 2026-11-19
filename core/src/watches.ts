@@ -67,6 +67,7 @@ function deserializeWatch(r: Row): Watch {
     finally: r.finally_call ? JSON.parse(r.finally_call as string) : null,
     seen: JSON.parse((r.seen as string) || '[]'),
     status_rules: r.status_rules ? JSON.parse(r.status_rules as string) : null,
+    urgent: Boolean(r.urgent),
   } as Watch
 }
 
@@ -156,7 +157,13 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
 
   // What it checks: a command, or a tool with its input and how to read the answer
   const what: Check = { kind: 'command', command: null, tool: null, tool_input: '{}', steps: null, finally_call: null, match: null }
-  const given = spec as { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; steps?: WatchStep[]; finally?: WatchCall }
+  const given = spec as { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; ignore?: string | null; urgent?: boolean; steps?: WatchStep[]; finally?: WatchCall }
+  const ignore = given.ignore === undefined || given.ignore === null ? null : String(given.ignore).trim() || null
+  if (ignore !== null) {
+    try { new RegExp(ignore) } catch { throw new Error(`The watch "${label}" has an ignore that isn't a regular expression: ${ignore}`) }
+  }
+  if (given.urgent !== undefined && typeof given.urgent !== 'boolean') throw new Error(`The watch "${label}" gives urgent as something other than true or false.`)
+  const urgent = given.urgent === true
   const checkTool = (raw: unknown): string => {
     const tool = String(raw ?? '').trim()
     if (!tool) throw new Error(`The watch "${label}" needs a tool.`)
@@ -239,21 +246,26 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
   } else {
     const command = String(given.command ?? '').trim()
     if (!command) throw new Error(`The watch "${label}" needs a command.`)
+    checkMatch()
     what.command = command
+    what.match = given.match?.trim() || null
   }
 
-  return { label, every, fires, statusRules, rulesText, what }
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent }
 }
 
 export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
-  const { label, every, fires, statusRules, rulesText, what } = validateWatchSpec(db, planId, name, spec)
+  const { label, every, fires, statusRules, rulesText, what, ignore, urgent } = validateWatchSpec(db, planId, name, spec)
   const existing = listWatches(db, planId).find((w) => w.name === label)
   if (!existing) {
     const id = newId('wch')
-    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, new Date().toISOString())
+    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, steps, finally_call, match, ignore, urgent, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, ignore, urgent ? 1 : 0, every, fires, rulesText, new Date().toISOString())
     return getWatch(db, id)!
   }
+  // Ignored lines were never marked seen, so a changed ignore needs no fresh start; each is written only on a change (the update trigger)
+  if (existing.ignore !== ignore) db.prepare('UPDATE goal_watches SET ignore = ? WHERE id = ?').run(ignore, existing.id)
+  if (existing.urgent !== urgent) db.prepare('UPDATE goal_watches SET urgent = ? WHERE id = ?').run(urgent ? 1 : 0, existing.id)
   const sameCheck = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool
     && JSON.stringify(existing.tool_input) === what.tool_input && (existing.steps ? JSON.stringify(existing.steps) : null) === what.steps
     && (existing.finally ? JSON.stringify(existing.finally) : null) === what.finally_call && existing.match === what.match && existing.fires === fires
@@ -281,8 +293,12 @@ type Check = { kind: Watch['kind']; command: string | null; tool: string | null;
 const JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/
 
 /** What a watch checks, in a line: its command, or its tool with the input it is called with. */
-export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null }): string {
-  if (w.kind === 'command') return w.command ?? ''
+export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null; ignore?: string | null; urgent?: boolean }): string {
+  return `${describeCheck(w)}${w.ignore ? ` (ignoring: ${w.ignore})` : ''}${w.urgent ? ' (urgent: starts a run despite the gap between watch runs)' : ''}`
+}
+
+function describeCheck(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null }): string {
+  if (w.kind === 'command') return `${w.command ?? ''}${w.match ? ` (lines: ${w.match})` : ''}`
   if (w.steps?.length) {
     const call = (c: WatchCall & { pick?: unknown; expect?: string; retry?: number }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
     return `${w.steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${w.finally ? `; finally ${call(w.finally)}` : ''}${w.match ? ` (lines: ${w.match})` : ''}`
@@ -353,6 +369,8 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     return { baseline: false, lines: 0, fresh: [], error }
   }
 
+  // Ignored lines are left out before anything else: never events, never seen, not read by status rules
+  if (watch.ignore) result = { lines: dropIgnored(result.lines, watch.ignore) }
   const known = new Set(watch.seen)
   const baseline = watch.baseline_at === null
   const current = new Set(result.lines)
@@ -423,22 +441,42 @@ export async function checkCommandWatch(db: Database, watchId: string, now: Date
   const plan = getPlan(db, watch.plan_id)
   if (!plan || watch.kind !== 'command' || !watch.command) throw new Error(`Watch ${watchId} has no command to run`)
   const r = await runVerifyCommand(watch.command, plan.working_dir, WATCH_TIMEOUT_S, { stdoutOnly: true, tailChars: WATCH_OUTPUT_CHARS })
-  if (r.passed) return recordWatchLines(db, watchId, { lines: toLines(r.output) }, now, duringRun)
+  if (r.passed) return recordWatchLines(db, watchId, { lines: commandLines(r.output, watch.match, watch.ignore) }, now, duringRun)
   const why = r.timed_out
     ? `Timed out after ${WATCH_TIMEOUT_S} s`
     : r.exit_code === null ? r.output : `Exit code ${r.exit_code}${r.stderr?.trim() ? `: ${r.stderr.trim()}` : ''}`
   return recordWatchLines(db, watchId, { error: why }, now, duringRun)
 }
 
+/**
+ * A command's output as lines, keeping only those `match` matches and leaving out those
+ * `ignore` matches, before toLines' WATCH_MAX_LINES cap, so dropped lines don't use it up.
+ */
+export function commandLines(output: string, match: string | null, ignore: string | null = null): string[] {
+  let raw = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  if (match) { const re = new RegExp(match); raw = raw.filter((l) => re.test(l)) }
+  if (ignore) raw = dropIgnored(raw, ignore)
+  return toLines(raw.join('\n'))
+}
+
+/** The lines `ignore` (a regular expression) doesn't match. */
+export function dropIgnored(lines: string[], ignore: string): string[] {
+  const re = new RegExp(ignore)
+  return lines.filter((l) => !re.test(l))
+}
+
 // ── Tool watches: the plugin makes the call, since only a session can reach a connector ──
 
-/** A tool's answer as lines: each match of `pattern` (its first group, or all of it). */
-export function matchLines(text: string, pattern: string | null): string[] {
+/** A tool's answer as lines: each match of `pattern` (its first group, or all of it), less those `ignore` matches. */
+export function matchLines(text: string, pattern: string | null, ignore: string | null = null): string[] {
   const re = new RegExp(pattern ?? WATCH_DEFAULT_MATCH, 'g')
+  const skip = ignore ? new RegExp(ignore) : null
   const found: string[] = []
   for (const m of text.matchAll(re)) {
     if (m[0] === '') break // a pattern that matches nothing would match everywhere
-    found.push((m[1] ?? m[0]).replace(/\s+/g, ' '))
+    const line = (m[1] ?? m[0]).replace(/\s+/g, ' ')
+    if (skip?.test(line.trim())) continue
+    found.push(line)
     if (found.length >= WATCH_MAX_LINES * 2) break
   }
   return toLines(found.join('\n'))
@@ -487,7 +525,7 @@ export function reportToolWatch(db: Database, watchId: string, result: ({ text: 
   if (result.cleanup === 'ok') failures = 0
   else if (result.cleanup) failures = result.cleanup === 'unrunnable' ? WATCH_CLEANUP_STOP_AFTER : failures + 1
   if (failures !== watch.cleanup_failures) db.prepare('UPDATE goal_watches SET cleanup_failures = ? WHERE id = ?').run(failures, watchId)
-  const checked = 'error' in result ? recordWatchLines(db, watchId, { error: result.error }, now) : recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  const checked = 'error' in result ? recordWatchLines(db, watchId, { error: result.error }, now) : recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match, watch.ignore) }, now)
   if (watchStopped({ cleanup_failures: failures })) { db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(WATCH_CLEANUP_STOPPED, watchId); return { ...checked, error: WATCH_CLEANUP_STOPPED } }
   if ('error' in result) return checked
   // A good read with a failed clean-up: the text counts, the note shows why (a tab left open), and it isn't a failed check

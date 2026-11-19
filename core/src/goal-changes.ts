@@ -41,6 +41,8 @@ export interface GoalChanges {
   status?: 'active' | 'paused'
   /** The model its runs use (an alias or a full id); null: the model of the session that starts the run. */
   model?: string | null
+  /** Minutes after a watch-started run before watch events start another (0: none): events in between share the next run. */
+  min_watch_gap_minutes?: number
 }
 
 export interface InstructionEdit { old: string; new: string }
@@ -66,6 +68,9 @@ export function applyInstructionEdits(text: string, edits: InstructionEdit[]): s
 
 const clipText = (s: string) => (s.length > 80 ? `${s.slice(0, 79)}…` : s)
 
+/** The longest gap between watch-started runs a goal may set: a day. */
+export const MAX_WATCH_GAP_MINUTES = 1440
+
 const MODES = new Set(['off', 'propose', 'auto'])
 
 /** Applies a set of changes the person confirmed. Returns one line per change made. */
@@ -85,6 +90,10 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
   }
   if (changes.instructions !== undefined && changes.instructions_edits?.length) {
     throw new GoalError('Give the instructions in full or as edits, not both.')
+  }
+  const gap = changes.min_watch_gap_minutes
+  if (gap !== undefined && (!Number.isInteger(gap) || gap < 0 || gap > MAX_WATCH_GAP_MINUTES)) {
+    throw new GoalError(`The gap between watch runs is whole minutes from 0 to ${MAX_WATCH_GAP_MINUTES}, not ${gap}.`)
   }
   const edited = changes.instructions_edits?.length ? applyInstructionEdits(goal.instructions, changes.instructions_edits) : undefined
 
@@ -163,6 +172,10 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
     if (model !== undefined && model !== goal.model) {
       updateGoal(db, planId, { model })
       done.push(model ? `runs use ${model}` : "runs use the session's model")
+    }
+    if (gap !== undefined && gap !== goal.limits.min_watch_gap_minutes) {
+      updateGoal(db, planId, { limits: { min_watch_gap_minutes: gap } })
+      done.push(gap ? `watch runs at least ${gap} min apart (urgent watches excepted)` : 'no gap between watch runs')
     }
     if (changes.status && changes.status !== goal.status) {
       if (goal.status === 'retired') throw new GoalError('This goal is done; run it again first.')

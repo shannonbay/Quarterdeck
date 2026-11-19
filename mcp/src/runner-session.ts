@@ -174,8 +174,22 @@ export function statusText(s: RunnerStatus): string {
  * elsewhere (seen Nov 2026: Gmail trash_thread after the person approved it).
  */
 export function startArgs(sessionId: string, permissionMode?: string, resume = false, allowed: readonly string[] = []): string[] {
-  return ['--remote-control', SESSION_NAME, '--name', SESSION_NAME, resume ? '--resume' : '--session-id', sessionId, '--allowedTools', [...OWN_TOOL_RULES, ...allowed].join(','), ...(permissionMode ? ['--permission-mode', permissionMode] : [])]
+  return ['--remote-control', SESSION_NAME, '--name', SESSION_NAME, resume ? '--resume' : '--session-id', sessionId, '--allowedTools', [...OWN_TOOL_RULES, ...allowed].join(','),
+    '--append-system-prompt', HANDBACK_PROMPT, ...(permissionMode ? ['--permission-mode', permissionMode] : [])]
 }
+
+/**
+ * What the standing session is told about goal runs' hand-backs (#111). Claude Code hands every
+ * finished background subagent's report back to its parent as a turn, so each goal run wakes this
+ * session over its whole history. The runs report through Quarterdeck themselves (items, summaries,
+ * alerts), so a hand-back needs only a one-line reply with no tool calls. Given on --resume too.
+ * No double quotes, % or shell metacharacters: on Windows the argument line passes through
+ * PowerShell and quoting that doesn't escape them.
+ */
+export const HANDBACK_PROMPT = 'This session starts Quarterdeck goal runs as background goal-runner subagents. '
+  + 'When one finishes, its report comes back here as a new turn. That report is for Quarterdeck only: '
+  + 'the run has already recorded its items and summary and alerted the person when needed. '
+  + 'Reply to such a report with one short line (for example: Noted.), make no tool calls, and do not summarise or act on it.'
 
 function allowRulesNow(deps: RunnerDeps): string[] {
   return deps.allowRules?.() ?? []

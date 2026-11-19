@@ -83,6 +83,8 @@ export type GoalCard = {
   /** Checks whose new lines start a run (empty on a card: `watchCount` has how many). */
   watches: Watch[]
   watchCount: number
+  /** Minutes after a watch-started run before watch events start another (0: none). */
+  watchGapMinutes: number
   /** A watch's check has failed several times in a row. */
   watchFailing: boolean
 }
@@ -92,6 +94,8 @@ export type Watch = {
   everyMinutes: number
   /** True when it starts a run on any change to its output, not only on a line it hasn't seen. */
   onChange: boolean
+  /** Its events start a run even within the goal's gap between watch runs. */
+  urgent: boolean
   /** The command it runs. */
   runs: string
   lastFiredAt: string | null

@@ -8,7 +8,7 @@ import {
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
+  matchLines, commandLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
 import { statusNote } from './goal-overview.js'
 
@@ -465,7 +465,7 @@ describe('the overview and deleting', () => {
     for (let i = 0; i < 3; i++) recordWatchLines(db, w.id, { error: 'gh: not logged in' })
     const [full] = buildOverview(db, 'all').goals
     expect(full).toMatchObject({ watch_count: 1, watch_failing: true })
-    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, error: 'gh: not logged in' }])
+    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', urgent: false, runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, error: 'gh: not logged in' }])
     const [card] = buildOverview(db, []).goals
     expect(card).toMatchObject({ watch_count: 1, watch_failing: true, watches: [] })
   })
@@ -773,5 +773,132 @@ describe('schema version 15', () => {
     runMigrations(old)
     const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
     expect(cols).toEqual(expect.arrayContaining(['steps', 'finally_call']))
+  })
+})
+
+describe('fewer quiet runs (#111)', () => {
+  it('a command watch with match counts only the lines it matches, before the line cap', async () => {
+    const many = Array.from({ length: WATCH_MAX_LINES + 50 }, (_, i) => `noise ${i}`)
+    expect(commandLines([...many, 'issue 1', 'issue 2'].join('\n'), '^issue ')).toEqual(['issue 1', 'issue 2'])
+    items('issue 1', 'noise', 'issue 2')
+    const w = setWatch(db, 'g1', 'x', { command: LIST, match: '^issue' })
+    expect(getWatch(db, w.id)!.match).toBe('^issue')
+    expect(describeWatch(getWatch(db, w.id)!)).toBe(`${LIST} (lines: ^issue)`)
+    await checkCommandWatch(db, w.id)
+    expect(getWatch(db, w.id)!.seen).toEqual(['issue 1', 'issue 2'])
+    items('issue 1', 'noise 2', 'issue 3')
+    expect((await checkCommandWatch(db, w.id)).fresh).toEqual(['issue 3'])
+    // A new match starts the watch over, as a new command does
+    expect(setWatch(db, 'g1', 'x', { command: LIST, match: '^bug ' })).toMatchObject({ seen: [], baseline_at: null })
+    expect(() => setWatch(db, 'g1', 'y', { command: LIST, match: '(' })).toThrow(/match that isn't a regular expression/)
+  })
+
+  it('ignored lines never become events and are never marked seen, for either kind', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1', ignore: 'bot' })
+    expect(getWatch(db, w.id)).toMatchObject({ ignore: 'bot', urgent: false })
+    recordWatchLines(db, w.id, { lines: ['1'] })
+    expect(recordWatchLines(db, w.id, { lines: ['1', '2', 'dependabot 3'] })).toMatchObject({ lines: 2, fresh: ['2'] })
+    expect(getWatch(db, w.id)!.seen).not.toContain('dependabot 3')
+    // Removing ignore keeps what was seen, and the line it held is new now
+    expect(setWatch(db, 'g1', 'x', { command: 'echo 1', ignore: null }).seen).toEqual(['1', '2'])
+    expect(recordWatchLines(db, w.id, { lines: ['1', '2', 'dependabot 3'] }).fresh).toEqual(['dependabot 3'])
+
+    const t = setWatch(db, 'g1', 'mail', { tool: 'mcp__gmail__search', match: '"id": "([^"]+)"', ignore: '^skip' })
+    expect(matchLines('"id": "a" "id": "skip-b" "id": "c"', t.match, t.ignore)).toEqual(['a', 'c'])
+    reportToolWatch(db, t.id, { text: '"id": "a"' })
+    expect(reportToolWatch(db, t.id, { text: '"id": "a" "id": "skip-b" "id": "c"' }).fresh).toEqual(['c'])
+    expect(describeWatch(getWatch(db, t.id)!)).toContain('(ignoring: ^skip)')
+    expect(() => setWatch(db, 'g1', 'y', { command: 'echo 1', ignore: '[' })).toThrow(/ignore that isn't a regular expression/)
+  })
+
+  it('status rules read only the lines ignore leaves', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1', ignore: 'bot', fires: 'change', status: { rules: [{ match: 'bot', status: 'bots' }], default: { status: 'clear' } } })
+    expect(recordWatchLines(db, w.id, { lines: ['dependabot 1'] }).status).toMatchObject({ status: 'clear' })
+  })
+
+  describe('a gap between watch runs', () => {
+    /** One watch run for what waits, claimed and ended now; then the watch sees `line`. */
+    const afterAWatchRun = (watchId: string, line: string) => {
+      const run = claimRun(db, 'g1', { holder: 'A', queuedRunId: queueForWatchEvents(db, 'g1')!.id })!
+      buildBrief(db, 'g1', run.run_id)
+      endRun(db, run.run_id, 'done')
+      recordWatchLines(db, watchId, { lines: ['a', line] })
+      return run
+    }
+
+    it('holds watch events within the gap and starts one run with all of them after it', () => {
+      applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 30 })
+      const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+      recordWatchLines(db, w.id, { lines: [] })
+      recordWatchLines(db, w.id, { lines: ['a'] })
+      afterAWatchRun(w.id, 'b')
+      const other = setWatch(db, 'g1', 'y', { command: 'echo 2' })
+      recordWatchLines(db, other.id, { lines: [] })
+      recordWatchLines(db, other.id, { lines: ['c'] })
+      expect(queueForWatchEvents(db, 'g1', later(10))).toBeNull()
+      expect(queueForWatchEvents(db, 'g1', later(29))).toBeNull()
+      const run = queueForWatchEvents(db, 'g1', later(31))
+      expect(run).toMatchObject({ trigger: 'watch', status: 'queued' })
+      const claimed = claimRun(db, 'g1', { holder: 'A', queuedRunId: run!.id })!
+      expect(buildBrief(db, 'g1', claimed.run_id).watch_events).toEqual([{ watch: 'x', new: ['b'], omitted: 0 }, { watch: 'y', new: ['c'], omitted: 0 }])
+    })
+
+    it('with no gap, each watch run is followed at once', () => {
+      const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+      recordWatchLines(db, w.id, { lines: [] })
+      recordWatchLines(db, w.id, { lines: ['a'] })
+      afterAWatchRun(w.id, 'b')
+      expect(queueForWatchEvents(db, 'g1')).toMatchObject({ trigger: 'watch' })
+    })
+
+    it("an urgent watch's events start a run despite the gap, carrying the others waiting", () => {
+      applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 30 })
+      const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+      recordWatchLines(db, w.id, { lines: [] })
+      recordWatchLines(db, w.id, { lines: ['a'] })
+      afterAWatchRun(w.id, 'b')
+      expect(queueForWatchEvents(db, 'g1', later(5))).toBeNull()
+      const free = setWatch(db, 'g1', 'free items', { command: 'echo 2', urgent: true })
+      expect(describeWatch(free)).toContain('urgent')
+      recordWatchLines(db, free.id, { lines: [] })
+      recordWatchLines(db, free.id, { lines: ['sofa'] })
+      const run = queueForWatchEvents(db, 'g1', later(6))
+      expect(run).toMatchObject({ trigger: 'watch' })
+      const claimed = claimRun(db, 'g1', { holder: 'A', queuedRunId: run!.id })!
+      expect(buildBrief(db, 'g1', claimed.run_id).watch_events.map((n) => n.watch).sort()).toEqual(['free items', 'x'])
+    })
+
+    it("update_goal sets the gap and a watch's urgent, and refuses a gap it cannot use", () => {
+      expect(applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 20 })).toEqual(['watch runs at least 20 min apart (urgent watches excepted)'])
+      expect(getGoal(db, 'g1')!.limits.min_watch_gap_minutes).toBe(20)
+      expect(applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 20 })).toEqual([])
+      expect(applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 0 })).toEqual(['no gap between watch runs'])
+      expect(() => applyGoalChanges(db, 'g1', { min_watch_gap_minutes: -1 })).toThrow(/whole minutes/)
+      expect(() => applyGoalChanges(db, 'g1', { min_watch_gap_minutes: 1.5 })).toThrow(/whole minutes/)
+      applyGoalChanges(db, 'g1', { watches: { x: { command: 'echo 1' } } })
+      expect(applyGoalChanges(db, 'g1', { watches: { x: { command: 'echo 1', urgent: true } } })[0]).toMatch(/watch "x" changed.*urgent/)
+      expect(listWatches(db, 'g1')[0]!.urgent).toBe(true)
+      expect(() => setWatch(db, 'g1', 'x', { command: 'echo 1', urgent: 'yes' as never })).toThrow(/urgent/)
+      const card = buildOverview(db, 'all').goals.find((g) => g.id === 'g1')! as unknown as { watch_gap_minutes: number; watches: { urgent: boolean }[] }
+      expect(card.watch_gap_minutes).toBe(0)
+      expect(card.watches[0]!.urgent).toBe(true)
+    })
+  })
+})
+
+describe('schema version 17', () => {
+  it('adds ignore and urgent to a database from version 16, and the revision trigger covers them', () => {
+    const old = openDatabase(':memory:')
+    old.exec('DROP TRIGGER trg_goal_watches_update_revision')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN ignore')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN urgent')
+    old.exec(`CREATE TRIGGER trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
+      BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;`)
+    old.exec('PRAGMA user_version = 16')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toEqual(expect.arrayContaining(['ignore', 'urgent']))
+    const trigger = old.prepare("SELECT sql FROM sqlite_master WHERE name = 'trg_goal_watches_update_revision'").get() as { sql: string }
+    expect(trigger.sql).toContain('ignore, urgent')
   })
 })

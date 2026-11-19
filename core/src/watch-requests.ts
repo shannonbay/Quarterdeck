@@ -27,17 +27,18 @@ export interface WatchRequestState {
 
 /** A watch in the shape of the spec that sets it. */
 function specOf(w: Watch): WatchSpec {
-  const base = { every_minutes: w.every_minutes, fires: w.fires, status: w.status_rules }
+  // ignore and urgent only when set, so a watch without them reads as it did before they existed
+  const base = { every_minutes: w.every_minutes, fires: w.fires, status: w.status_rules, ...(w.ignore ? { ignore: w.ignore } : {}), ...(w.urgent ? { urgent: true } : {}) }
   if (w.kind === 'tool' && w.steps) return { steps: w.steps, ...(w.finally ? { finally: w.finally } : {}), ...(w.match ? { match: w.match } : {}), ...base }
   return w.kind === 'tool'
     ? { tool: w.tool!, input: w.tool_input, ...(w.match ? { match: w.match } : {}), ...base }
-    : { command: w.command!, ...base }
+    : { command: w.command!, ...(w.match ? { match: w.match } : {}), ...base }
 }
 
 function describeSpec(spec: WatchSpec): string {
-  const s = spec as { command?: string; tool?: string; steps?: WatchStep[]; finally?: WatchCall; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: string; status?: never }
+  const s = spec as { command?: string; tool?: string; steps?: WatchStep[]; finally?: WatchCall; input?: Record<string, unknown>; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: string; status?: never }
   const isTool = s.tool !== undefined || s.steps !== undefined
-  const what = describeWatch({ kind: isTool ? 'tool' : 'command', command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, steps: s.steps ?? null, finally: s.finally ?? null, match: s.match ?? null })
+  const what = describeWatch({ kind: isTool ? 'tool' : 'command', command: s.command ?? null, tool: s.tool ?? null, tool_input: s.input ?? {}, steps: s.steps ?? null, finally: s.finally ?? null, match: s.match ?? null, ignore: s.ignore ?? null, urgent: s.urgent === true })
   const rules = (spec as { status?: Parameters<typeof describeStatusRules>[0] | null }).status
   return [`${s.steps !== undefined ? 'Tool sequence' : s.tool !== undefined ? 'Tool' : 'Command'}: ${what}`, `Every ${s.every_minutes ?? 'default'} min, fires on ${s.fires ?? 'new'} lines`, ...(rules ? [`Status: ${describeStatusRules(rules)}`] : [])].join('\n')
 }
