@@ -390,7 +390,19 @@ export interface GoalMemory {
   untrusted_source: string | null
   /** The original outside read behind it, carried from run to memory to run so marks don't nest. */
   untrusted_root: string | null
+  /** Why it went inactive (null while active, or for memory retired before reasons were recorded). */
+  inactive_reason?: MemoryInactiveReason | null
+  /** When it went inactive. */
+  inactive_at?: string | null
+  /** The curation request that retired, merged or rewrote it. */
+  inactive_ref?: string | null
+  /** The memory that replaced it (a merge or a rewrite). */
+  replaced_by?: string | null
+  /** The memory this one replaced (a rewrite). */
+  replaces?: string | null
 }
+
+export type MemoryInactiveReason = 'merged' | 'retired' | 'rewritten' | 'forgotten'
 
 export interface HealthResult {
   id: string

@@ -307,8 +307,35 @@ export function updateMemory(db: Database, id: string, fields: Partial<Pick<Goal
     .run(...entries.map(([, v]) => v), id)
 }
 
-export function deleteMemory(db: Database, id: string): void {
-  db.prepare('DELETE FROM goal_memory WHERE id = ?').run(id)
+/** Forgets a memory: it goes inactive (kept, restorable) until its goal is purged. */
+export function forgetMemory(db: Database, id: string): void {
+  db.prepare(`UPDATE goal_memory SET active = 0, inactive_reason = 'forgotten', inactive_at = ?, inactive_ref = NULL WHERE id = ?`)
+    .run(new Date().toISOString(), id)
+}
+
+/** @deprecated Forgetting keeps the row; use forgetMemory. */
+export const deleteMemory = forgetMemory
+
+/**
+ * Puts an inactive memory back to active and clears why it went. A newer memory
+ * that merged or rewrote it is left alone: the person decides which to keep.
+ */
+export function restoreMemory(db: Database, id: string): GoalMemory {
+  const m = getMemory(db, id)
+  if (!m) throw new Error(`Memory ${id} not found.`)
+  if (!m.active) {
+    db.prepare('UPDATE goal_memory SET active = 1, inactive_reason = NULL, inactive_at = NULL, inactive_ref = NULL, replaced_by = NULL WHERE id = ?').run(id)
+  }
+  return getMemory(db, id)!
+}
+
+/** Marks a memory inactive and records why (curation merge, retire or rewrite). */
+export function retireMemory(
+  db: Database, id: string,
+  why: { reason: 'merged' | 'retired' | 'rewritten'; ref?: string | null; replaced_by?: string | null },
+): void {
+  db.prepare('UPDATE goal_memory SET active = 0, inactive_reason = ?, inactive_at = ?, inactive_ref = ?, replaced_by = ? WHERE id = ?')
+    .run(why.reason, new Date().toISOString(), why.ref ?? null, why.replaced_by ?? null, id)
 }
 
 /** The tables that hold a goal's rows, children before the plan itself. */
