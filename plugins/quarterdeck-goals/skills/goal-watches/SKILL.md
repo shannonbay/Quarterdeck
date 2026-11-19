@@ -17,6 +17,7 @@ A goal run cannot set a watch itself. When it knows what should start its next r
 - The first check only records what is there. It starts nothing.
 - A check that fails (non-zero exit or longer than 30 seconds) changes nothing and starts nothing. After three failures in a row the Goals pane shows the watch as failing.
 - Several new lines, or lines that arrive while a run is going, make one run, not one each.
+- Each run is a full model run: see "Fewer quiet runs" for choosing `every_minutes`, filtering with `match` / `ignore`, and spacing watch runs out.
 - With `fires: "change"` (default `"new"`), the watch compares each check only with the one before: see "Watching a state" below.
 
 So print **stable identifiers**, not text that changes. A line with a comment count or a "2 hours ago" in it looks new at every check.
@@ -152,6 +153,21 @@ Some sources need two calls, and the second needs a value from the first (Claude
 - `navigate` returns before the page has loaded, so the step that reads it can fail on a blank tab or read the previous page. Give that step `retry` (tries in all, 1 to 5, such as 3) with an `expect`: when the call errors or can't run (Claude in Chrome's "Navigate to a web page first" comes back this way), misses `expect` or misses a pick, it waits about 2 s and calls the same step again with the same picks. Only that step repeats, so a retry never opens a second tab; the last failure is reported with the number of tries, e.g. `(step 4, …, after 3 tries)`. The time limit (30 s) covers the whole sequence, retries and their waits included, not each step.
 - Create the tab yourself: `navigate` without a `tabId` reuses the first tab in the session's group, which `finally` would then close.
 - Each check opens a tab in the person's real browser: always give a `finally` that closes it.
+
+## Fewer quiet runs
+
+Every run a watch starts is a full model run, so a run that finds nothing worth doing costs as much as one that does. Cut them at the source:
+
+- **Check as seldom as the source allows.** Keep `every_minutes: 5` only where minutes matter (a free item that goes within the hour, a failing build someone is waiting on). New issues, feeds, replies and most mail are fine at 30 to 60 minutes, or more.
+- **Print only lines that need a run.** Filter in the command (`--label`, `--search`, jq's `select`), or give `match` and `ignore`:
+  - `match`: for a command, only output lines this regular expression matches count; for a tool, it picks the items out of the answer (see below). Filtered before the 200-line cap.
+  - `ignore` (either kind): lines this regular expression matches are left out: never a run, never marked seen, not read by status rules. Example: `"ignore": "dependabot|renovate"` on a pull request watch. Removing `ignore` later lets those lines fire, since they were never seen.
+- **Gate runs on the lines.** Status rules with `run: true` (below) start a run only when a line matches a rule that says so; the rest only set the status.
+- **Space out watch runs.** A goal with several watches starts a run for each one that fires. Set the goal's `min_watch_gap_minutes` with `update_goal` (20 to 30 suits most goals with several watches): after a watch-started run, news that arrives within the gap waits and shares the first run after it. Give a watch `"urgent": true` when its news can't wait (free items): it starts a run at once, which also carries whatever else is waiting. Scheduled runs and Run now are not held by the gap, and they pick up waiting news too.
+
+```json
+{ "goal": "Listings", "min_watch_gap_minutes": 30, "watches": { "free items": { "command": "node free.js", "every_minutes": 5, "urgent": true }, "new listings": { "command": "node listings.js", "every_minutes": 30, "ignore": "^sold " } } }
+```
 
 ## When not to use a watch
 

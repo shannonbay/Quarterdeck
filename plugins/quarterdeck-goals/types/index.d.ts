@@ -18,6 +18,9 @@ export type Run = {
 }
 
 /** One memory entry the goal's runs read. */
+/** A memory that was forgotten, merged, retired or rewritten (#105): kept so the person can restore it. */
+export type InactiveMemory = { id: string; kind: string; text: string; reason: string | null; inactiveAt: string | null; replacedBy: string | null }
+
 export type Memory = {
   id: string; kind: string; text: string; pinned: boolean
   /** What its run had read before writing it: briefs that hand it out mark their runs untrusted until the person trusts it. */
@@ -78,11 +81,15 @@ export type GoalCard = {
   trend: number[]
   /** Most recent first. */
   memory: Memory[]
+  /** Missing from a server older than memory recovery. */
+  inactiveMemory: InactiveMemory[]
   /** Categories approved every time lately: candidates for 'auto'. */
   suggestions: { category: string; approvedInARow: number }[]
   /** Checks whose new lines start a run (empty on a card: `watchCount` has how many). */
   watches: Watch[]
   watchCount: number
+  /** Minutes after a watch-started run before watch events start another (0: none). */
+  watchGapMinutes: number
   /** A watch's check has failed several times in a row. */
   watchFailing: boolean
 }
@@ -92,6 +99,8 @@ export type Watch = {
   everyMinutes: number
   /** True when it starts a run on any change to its output, not only on a line it hasn't seen. */
   onChange: boolean
+  /** Its events start a run even within the goal's gap between watch runs. */
+  urgent: boolean
   /** The command it runs. */
   runs: string
   lastFiredAt: string | null
@@ -115,7 +124,12 @@ export type Snapshot = {
   standing?: boolean
   /** Set when a newer Quarterdeck than the installed one is published. */
   update?: Update
+  /** Deleted goals, newest first, while any wait to be purged (#105): the pane's "Recently deleted". */
+  deleted?: DeletedGoal[]
 }
+
+/** A deleted goal the pane can restore or delete permanently. `purgeAt` is null when retention never purges. */
+export type DeletedGoal = { id: string; name: string; deletedAt: string; purgeAt: string | null }
 
 /** A published Quarterdeck newer than the one this session runs; `ready`: already installed, needs only /reload-plugins. */
 export type Update = { installed: string; latest: string; ready?: true }
@@ -137,6 +151,7 @@ export type Confirm =
   | { kind: 'delete-memory'; goalId: string; memoryId: string }
   | { kind: 'auto'; goalId: string; category: string }
   | { kind: 'delete-goal'; goalId: string }
+  | { kind: 'purge-goal'; goalId: string }
 
 /** The goal run this Claude Code session is carrying out. */
 export type ActiveRun = { goalId: string; runId: string; startedAt: number }
