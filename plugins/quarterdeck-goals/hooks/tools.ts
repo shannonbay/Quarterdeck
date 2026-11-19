@@ -194,7 +194,7 @@ export async function registerTools($: Engine): Promise<void> {
   }
 }
 
-type Resolved = { goal: GoalCard } | { error: string }
+type Resolved = { goal: GoalCard } | { error: string; deleted?: DeletedGoal }
 
 async function resolveGoal($: Engine, query: unknown): Promise<Resolved> {
   const s = await refresh($)
@@ -204,7 +204,7 @@ async function resolveGoal($: Engine, query: unknown): Promise<Resolved> {
   // A deleted goal (#105) is no live goal, but say so rather than "no goal matches"
   const q = String(query ?? '').trim()
   const gone = found.matches.length === 0 ? s.deleted?.find((d) => d.id === q || d.name.toLowerCase() === q.toLowerCase()) : undefined
-  if (gone) return { error: deletedText(gone) }
+  if (gone) return { error: deletedText(gone), deleted: gone }
   return { error: noMatch(s.goals, String(query ?? ''), found.matches) }
 }
 
@@ -214,12 +214,18 @@ export function deletedText(d: DeletedGoal): string {
   return `"${d.name}" was deleted on ${d.deletedAt.slice(0, 10)}; ${purge}. Restore it from Recently deleted in the goals pane.`
 }
 
-/** The goal with its full detail, fetched for it alone. */
 /** A goal's full detail, with its instructions uncut: goal_detail shows them, and update_goal checks instructions_edits against them. */
 async function withDetail($: Engine, goal: GoalCard): Promise<GoalCard> {
   const res = await fetchOverview($, null, [goal.id], true)
   const full = res.changed ? res.goals.find((g) => g.id === goal.id) : undefined
   return full ? toCard(full) : goal
+}
+
+/** A deleted goal's full detail (#105), so goal_detail can show its history and memory without restoring it; null when the server can't give it. */
+async function deletedDetail($: Engine, gone: DeletedGoal): Promise<GoalCard | null> {
+  const res = await fetchOverview($, null, [gone.id], true)
+  const full = res.changed ? res.deletedDetail.find((g) => g.id === gone.id) : undefined
+  return full ? toCard(full) : null
 }
 
 /** Asks the person; a dismissed dialog counts as no. */
@@ -263,7 +269,14 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
   }
 
   const found = await resolveGoal($, input.goal)
-  if ('error' in found) return fail(found.error)
+  if ('error' in found) {
+    // goal_detail still reads a deleted goal (its history and memory); every other tool refuses it
+    const card = name === 'goal_detail' && found.deleted ? await deletedDetail($, found.deleted).catch(() => null) : null
+    if (card) return { text: `${deletedText(found.deleted!)}
+
+${describe(card, now)}`, isError: false }
+    return fail(found.error)
+  }
   let { goal } = found
   // goal_detail and update_goal read the goal's full detail, which the overview gives only on request,
   // and always fetch it: an expanded goal's detail has its instructions cut

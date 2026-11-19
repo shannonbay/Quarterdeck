@@ -21,12 +21,41 @@ test('goals_status summarises every goal for Claude, with item ids', async ($, o
   expect(text).toContain('Now: Waiting for its first run')
 })
 
-test('goal_detail on a deleted goal says when it is purged and how to restore it (#105)', async ($, on) => {
+const OLD_JOBS = { id: 'g9', name: 'Old jobs', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' }
+const DELETED_LINE = '"Old jobs" was deleted on 2026-11-06; it is purged on 2026-12-06 unless restored. Restore it from Recently deleted in the goals pane.'
+
+test('goal_detail on a deleted goal shows its history and memory under when it is purged and how to restore it (#105)', async ($, on) => {
   engine(on)
-  fakeQuarterdeck(on, [inbox()], { deleted: [{ id: 'g9', name: 'Old jobs', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' }] })
+  const oldJobs = goal({
+    id: 'g9', name: 'Old jobs', status: 'paused',
+    memory: [{ id: 'm1', kind: 'fact', text: 'The CI runner needs node 22', source: 'agent', pinned: false, created_at: '2026-11-01T08:00:00Z' }],
+    runs: [{ id: 'r1', status: 'completed', trigger: 'schedule', summary: 'Checked 3 jobs, all green', started_at: '2026-11-05T08:00:00Z', ended_at: '2026-11-05T08:01:00Z' }],
+  } as never)
+  const fake = fakeQuarterdeck(on, [inbox()], { deleted: [OLD_JOBS], deletedGoals: [oldJobs] })
   await $.session.start(START)
   const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'old jobs' } as never)
-  expect(String(res.result)).toBe('Error: "Old jobs" was deleted on 2026-11-06; it is purged on 2026-12-06 unless restored. Restore it from Recently deleted in the goals pane.')
+  const text = String(res.result)
+  expect(text.startsWith(DELETED_LINE)).toBe(true)
+  expect(text).toContain('The CI runner needs node 22')
+  expect(text).toContain('Checked 3 jobs, all green')
+  expect(fake.of('goals_overview').some((c) => Array.isArray(c.input.detail) && (c.input.detail as string[]).includes('g9'))).toBe(true)
+})
+
+test('goal_detail on a deleted goal still says when it is purged when its detail is missing (#105)', async ($, on) => {
+  engine(on)
+  fakeQuarterdeck(on, [inbox()], { deleted: [OLD_JOBS] })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'old jobs' } as never)
+  expect(String(res.result)).toBe(`Error: ${DELETED_LINE}`)
+})
+
+test('other tools refuse a deleted goal (#105)', async ($, on) => {
+  engine(on, { answer: 'Run now' })
+  const fake = fakeQuarterdeck(on, [inbox()], { deleted: [OLD_JOBS], deletedGoals: [goal({ id: 'g9', name: 'Old jobs' })] })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__run_goal', goal: 'old jobs' } as never)
+  expect(String(res.result)).toBe(`Error: ${DELETED_LINE}`)
+  expect(fake.of('run_goal')).toEqual([])
 })
 
 test('approve_item asks first and does nothing when declined', async ($, on) => {

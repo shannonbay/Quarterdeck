@@ -252,9 +252,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
   const done = all.filter(({ goal }) => goal.status === 'retired' && goal.one_off)
     .sort((a, b) => (b.goal.last_run_at ?? '').localeCompare(a.goal.last_run_at ?? ''))
     .slice(0, DONE)
-  const goals = [...all.filter(({ goal }) => goal.status !== 'retired'), ...done]
-    .sort((a, b) => a.plan.name.localeCompare(b.plan.name))
-    .map(({ plan, goal }) => {
+  const entry = ({ plan, goal }: (typeof all)[number]) => {
       const items = getGoalItems(db, plan.id)
       const open = items.filter((t) => t.status === 'pending' || t.status === 'active')
       const openRun = getOpenRun(db, plan.id) ?? null
@@ -309,7 +307,10 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         watch_count: watches.length,
         watch_failing: watches.some(watchFailing),
       }
-    })
+    }
+  const goals = [...all.filter(({ goal }) => goal.status !== 'retired'), ...done]
+    .sort((a, b) => a.plan.name.localeCompare(b.plan.name))
+    .map(entry)
     .map((g) => {
       const waiting = g.needs_you.length
       if (detail === 'all' || detail.includes(g.id)) return { ...g, detail: true, needs_you_count: waiting }
@@ -332,8 +333,15 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
   const deleted = listGoals(db, { deleted: 'only' })
     .sort((a, b) => (b.goal.deleted_at ?? '').localeCompare(a.goal.deleted_at ?? ''))
     .map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at!, purge_at: purgeDate(goal) }))
+  // A deleted goal named in detail comes with its full detail (goal_detail reads its history and memory
+  // without restoring it), apart from the live goals so nothing lists it as one
+  const named = detail === 'all' ? [] : listGoals(db, { deleted: 'only' }).filter(({ plan }) => detail.includes(plan.id))
+  const deletedDetail = named.map((d) => {
+    const g = entry(d)
+    return { ...g, detail: true, needs_you_count: g.needs_you.length, deleted_at: d.goal.deleted_at!, purge_at: purgeDate(d.goal) }
+  })
   return {
-    goals, hold: getRunHold(db), ...(deleted.length ? { deleted } : {}),
+    goals, hold: getRunHold(db), ...(deleted.length ? { deleted } : {}), ...(deletedDetail.length ? { deleted_detail: deletedDetail } : {}),
     ...(schemaOutdated(db) ? { outdated: true as const } : {}), ...(standing ? { standing: true as const } : {}),
   }
 }

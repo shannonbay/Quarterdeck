@@ -105,10 +105,10 @@ export type OverviewDeleted = { id: string; name: string; deleted_at: string; pu
 
 /** The overview: cards for every goal, full detail for the ids in `detail` (the expanded ones). */
 /** `fullInstructions`: the detailed goals' instructions uncut (an older server ignores it and cuts them). */
-export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = [], fullInstructions = false): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null; deleted: OverviewDeleted[] }> {
-  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; deleted?: OverviewDeleted[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail], ...(fullInstructions && { full_instructions: true }) })
+export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = [], fullInstructions = false): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null; deleted: OverviewDeleted[]; deletedDetail: OverviewGoal[] }> {
+  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; deleted?: OverviewDeleted[]; deleted_detail?: OverviewGoal[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail], ...(fullInstructions && { full_instructions: true }) })
   if (!res.changed) return { changed: false }
-  return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null, deleted: res.deleted ?? [] }
+  return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null, deleted: res.deleted ?? [], deletedDetail: res.deleted_detail ?? [] }
 }
 
 /** What the server's detect_forge found: the folder's git host and its CLI. */
