@@ -559,7 +559,7 @@ test('Delete asks first, says the goal can be restored, then deletes it; not whi
   await ui.press({ key: 'toggle-g1' }) // a quiet goal is one line: its controls show once expanded
   expect(await ui.find({ key: 'delete-g2' })).toBeUndefined()
   await ui.press({ key: 'delete-g1' })
-  expect(await ui.find({ type: 'Text', text: /Delete "Jobs"? It stops running and is hidden; you can restore it/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Delete "Jobs"\? It stops running and is hidden; you can restore it/ })).toBeDefined()
   await ui.press({ key: 'delete-no-g1' })
   expect(fake.of('delete_goal')).toEqual([])
   await ui.press({ key: 'delete-g1' })
