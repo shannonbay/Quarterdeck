@@ -671,3 +671,10 @@ test('the issue fixer reads inline review comments with the repo written out; th
   expect(ISSUE_FIX_WORK).toContain('gh api repos/<owner>/<name>/pulls/<number>/comments --jq')
   expect(ISSUE_FIX_WORK).not.toContain('repos/{owner}/{repo}/pulls')
 })
+
+test('describe marks a failing watch error as outside text', () => {
+  const error = 'step 1 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/): PLANTED PAGE TEXT'
+  const c = toCard({ ...goal({ id: 'g1', name: 'Sale', watches: [{ name: 'inbox', every_minutes: 5, runs: 'steps', last_fired_at: null, failing: true, error }] }), open_item_count: 0 })
+  const line = describe(c, NOW).split('\n').find((l) => l.includes('[failing')) ?? ''
+  expect(line).toMatch(/outside (text|content)|untrusted/i)
+})

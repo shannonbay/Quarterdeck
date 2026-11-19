@@ -195,6 +195,10 @@ export interface Watch {
   command: string | null
   tool: string | null
   tool_input: Record<string, unknown>
+  /** A tool watch's sequence of calls (null: the single `tool`). The last step's answer is read with `match`. */
+  steps: WatchStep[] | null
+  /** A call that always runs after the steps, even after a failure (null: none). */
+  finally: WatchCall | null
   /** For a tool watch: a regular expression whose first group (or whole match) is one line. */
   match: string | null
   every_minutes: number
@@ -213,10 +217,27 @@ export interface Watch {
   last_error: string | null
   /** Checks failed in a row. */
   fail_count: number
+  /** Clean-up (finally) calls that failed in a row, or could not run; at WATCH_CLEANUP_STOP_AFTER the watch stops until it is edited. */
+  cleanup_failures: number
   created_at: string
 }
 
 export type WatchFires = 'new' | 'change'
+
+/** One tool call of a watch's sequence. */
+export interface WatchCall {
+  tool: string
+  input?: Record<string, unknown>
+}
+
+/** A step: a call, and values picked from its answer text for later inputs as {{name}}. */
+export interface WatchStep extends WatchCall {
+  pick?: Record<string, { regex: string } | { json: string }>
+  /** A regular expression this step's answer must match; an answer that doesn't is a failed check. */
+  expect?: string
+  /** Tries in all (1 to 5): a call that errors, misses expect or a pick is made again after a short wait. Left out: one try. */
+  retry?: number
+}
 
 /** What a watch sets the goal's status to: the status text comes only from here, never from the output. */
 export interface WatchStatusOutcome {
@@ -237,6 +258,8 @@ export type WatchSpec =
   | { command: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
   /** A tool the plugin calls (a connector's search): `match` turns its answer into lines. */
   | { tool: string; input?: Record<string, unknown>; match?: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
+  /** A short sequence of calls (up to 4), then an optional clean-up call that always runs. */
+  | { steps: WatchStep[]; finally?: WatchCall; match?: string; every_minutes?: number; fires?: WatchFires; status?: WatchStatusRules | null }
 
 export interface WatchEvent {
   id: string

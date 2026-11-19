@@ -5,10 +5,10 @@ import { join } from 'path'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, getOpenRun, listRuns, buildBrief, claimRun, endRun, failRun, schedulerPass,
-  setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
+  setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, describeWatch, reportToolWatch, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
+  matchLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
 import { statusNote } from './goal-overview.js'
 
@@ -94,6 +94,13 @@ describe('recordWatchLines', () => {
     // It works again: nothing was lost, and nothing old looks new
     expect(recordWatchLines(db, w.id, { lines: ['1', '2'] }).fresh).toEqual(['2'])
     expect(getWatch(db, w.id)).toMatchObject({ last_error: null, fail_count: 0 })
+  })
+
+  it('a long error keeps its start, where the cause is named', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+    const error = 'Browser extension is not connected. ' + 'x'.repeat(600)
+    expect(recordWatchLines(db, w.id, { error }).error).toBe(error.slice(0, 500))
+    expect(getWatch(db, w.id)!.last_error).toMatch(/^Browser extension is not connected/)
   })
 
   it('remembers a capped number of lines, the latest check first', () => {
@@ -458,9 +465,27 @@ describe('the overview and deleting', () => {
     for (let i = 0; i < 3; i++) recordWatchLines(db, w.id, { error: 'gh: not logged in' })
     const [full] = buildOverview(db, 'all').goals
     expect(full).toMatchObject({ watch_count: 1, watch_failing: true })
-    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', runs: 'echo 1', last_fired_at: null, failing: true, error: 'gh: not logged in' }])
+    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, error: 'gh: not logged in' }])
     const [card] = buildOverview(db, []).goals
     expect(card).toMatchObject({ watch_count: 1, watch_failing: true, watches: [] })
+  })
+
+  it('shows a note on a watch that is not failing', () => {
+    const w = setWatch(db, 'g1', 'x', { tool: 'mcp__claude_ai_Gmail__search_threads', input: { query: 'a' } })
+    reportToolWatch(db, w.id, { text: 'Anna: hi', note: 'finally tabs_close failed: no such tab' } as never)
+    const [full] = buildOverview(db, 'all').goals
+    expect(full!.watches[0]).toMatchObject({ failing: false, error: 'finally tabs_close failed: no such tab' })
+  })
+
+  it('a single failed check is not shown until the watch counts as failing', () => {
+    const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
+    recordWatchLines(db, w.id, { lines: ['1'] })
+    recordWatchLines(db, w.id, { error: 'Exit code 1: no network' })
+    const [full] = buildOverview(db, 'all').goals
+    expect(full!.watches[0]).toMatchObject({ failing: false, error: null })
+    const t = setWatch(db, 'g1', 'y', { tool: 'mcp__claude_ai_Gmail__search_threads', input: { query: 'a' } })
+    reportToolWatch(db, t.id, { error: 'timed out' } as never)
+    expect(buildOverview(db, 'all').goals[0]!.watches.find((x) => x.name === 'y')).toMatchObject({ failing: false, error: null })
   })
 
   it('deleting a goal deletes its watches and their events', () => {
@@ -609,5 +634,144 @@ describe('status rules', () => {
     const second = startRun(db, queueRun(db, 'g1').id, null)
     endRun(db, second.id, 'Checked.', '')
     expect(getGoal(db, 'g1')).toMatchObject({ status_note: null, status_source: null })
+  })
+})
+
+describe('tool watches with steps', () => {
+  const NAV = 'mcp__claude-in-chrome__navigate'
+  const TEXT = 'mcp__claude-in-chrome__get_page_text'
+  const CLOSE = 'mcp__claude-in-chrome__tabs_close_mcp'
+  const steps = () => [
+    { tool: NAV, input: { url: 'https://example.com/inbox' }, pick: { tabId: { regex: 'tab (\d+)' } } },
+    { tool: TEXT, input: { tabId: '{{tabId}}' } },
+  ]
+
+  it('stores, shows and hands out the steps and the finally call', () => {
+    const w = setWatch(db, 'g1', 'inbox', { steps: steps(), finally: { tool: CLOSE, input: { tabId: '{{tabId}}' } }, match: '^(.+)$' })
+    expect(w).toMatchObject({ kind: 'tool', steps: steps(), finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(describeWatch(w)).toMatch(/1\. mcp__claude-in-chrome__navigate .* then 2\. .*; finally mcp__claude-in-chrome__tabs_close_mcp/)
+    expect(takeDueToolWatches(db, ['g1'])).toMatchObject([{ watch_id: w.id, steps: steps(), finally: { tool: CLOSE } }])
+  })
+
+  it('reads differently when only expect changes', () => {
+    const watch = (e: string) => ({ kind: 'tool' as const, command: null, tool: 'mcp__chrome__navigate', tool_input: {}, match: null, steps: [{ tool: 'mcp__chrome__get_page_text', input: {}, expect: e }] })
+    expect(describeWatch(watch('Inbox'))).not.toBe(describeWatch(watch('Sign in')))
+  })
+
+  it('keeps the expect of a step', () => {
+    const s = [{ tool: NAV }, { tool: TEXT, expect: 'Inbox' }]
+    expect(setWatch(db, 'g1', 'inbox2', { steps: s })).toMatchObject({ steps: s })
+  })
+
+  it('keeps a step retry, shows it, and drops a retry of 1', () => {
+    const w = setWatch(db, 'g1', 'inbox3', { steps: [{ tool: NAV, retry: 1 }, { tool: TEXT, expect: 'Inbox', retry: 3 }] })
+    expect(w.steps).toEqual([{ tool: NAV }, { tool: TEXT, expect: 'Inbox', retry: 3 }])
+    expect(describeWatch(w)).toMatch(/expecting \/Inbox\/ \(up to 3 tries\)/)
+  })
+
+  it('refuses a bad sequence', () => {
+    const t = (spec: object) => () => setWatch(db, 'g1', 'x', spec as never)
+    expect(t({ steps: [...steps(), ...steps(), ...steps()] })).toThrow(/at most 4/)
+    expect(t({ steps: steps(), tool: NAV })).toThrow(/tool and steps/)
+    expect(t({ steps: steps(), command: 'echo 1' })).toThrow(/command and steps/)
+    expect(t({ steps: [{ tool: 'Bash' }] })).toThrow(/mcp__/)
+    expect(t({ steps: [{ tool: 'mcp__quarterdeck__decide_item' }] })).toThrow(/own tools/)
+    expect(t({ steps: steps(), finally: { tool: 'mcp__quarterdeck__decide_item' } })).toThrow(/own tools/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: '(' } } }] })).toThrow(/regular expression/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: 'x' } } }] })).toThrow(/exactly one group, not 0/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { regex: '(x)(y)' } } }] })).toThrow(/exactly one group, not 2/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'a..b' } } }] })).toThrow(/json path/)
+    expect(t({ steps: [{ tool: NAV, expect: '(' }] })).toThrow(/expect .* isn't a regular expression/)
+    expect(t({ steps: [{ tool: NAV, expect: '' }] })).toThrow(/needs a regular expression/)
+    expect(t({ steps: [{ tool: NAV, retry: 0 }] })).toThrow(/whole number from 1 to 5/)
+    expect(t({ steps: [{ tool: NAV, retry: 6 }] })).toThrow(/whole number from 1 to 5/)
+    expect(t({ steps: [{ tool: NAV, retry: 2.5 }] })).toThrow(/whole number from 1 to 5/)
+    expect(t({ steps: [{ tool: NAV, input: { id: '{{nope}}' } }] })).toThrow(/\{\{nope\}\}.*no earlier step/)
+    expect(t({ steps: [{ tool: NAV, input: { id: '{{a}}' }, pick: { a: { json: 'x' } } }] })).toThrow(/no earlier step/)
+    expect(t({ steps: [{ tool: NAV, pick: { a: { json: 'x' } } }, { tool: TEXT, pick: { a: { json: 'y' } } }] })).toThrow(/twice/)
+    expect(t({ tool: NAV, finally: { tool: CLOSE } })).toThrow(/without steps/)
+  })
+
+  it('refuses a step mapped to a category that is not auto', () => {
+    updateGoal(db, 'g1', { tool_map: { [TEXT]: 'browser.read' }, autonomy: { 'browser.read': 'propose' } })
+    expect(() => setWatch(db, 'g1', 'x', { steps: steps() })).toThrow(/"browser.read", which is propose/)
+  })
+
+  it('a changed sequence resets what was seen; an unchanged re-set does not', () => {
+    const w = setWatch(db, 'g1', 'inbox', { steps: steps(), match: '^(.+)$' })
+    reportToolWatch(db, w.id, { text: 'one' })
+    expect(getWatch(db, w.id)!.seen).toEqual(['one'])
+    setWatch(db, 'g1', 'inbox', { steps: steps(), match: '^(.+)$', every_minutes: 9 })
+    expect(getWatch(db, w.id)!.seen).toEqual(['one'])
+    setWatch(db, 'g1', 'inbox', { steps: steps(), finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(getWatch(db, w.id)!.seen).toEqual([])
+  })
+})
+
+describe('a steps watch whose clean-up keeps failing', () => {
+  const CLOSE = 'mcp__chrome__tabs_close'
+  const mk = () => setWatch(db, 'g1', 'inbox', { steps: [{ tool: 'mcp__chrome__read', input: {} }], finally: { tool: CLOSE }, match: '^(.+)$' })
+
+  it('stops after three failed clean-ups in a row, shows why, and is checked again once it is edited', () => {
+    const w = mk()
+    for (let i = 0; i < 2; i++) reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 2 })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(false)
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    const stopped = getWatch(db, w.id)!
+    expect(watchStopped(stopped)).toBe(true)
+    expect(watchFailing(stopped)).toBe(true)
+    expect(stopped.last_error).toMatch(/tab may have been left open/)
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toEqual([])
+    setWatch(db, 'g1', 'inbox', { steps: [{ tool: 'mcp__chrome__read', input: { x: 1 } }], finally: { tool: CLOSE }, match: '^(.+)$' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0 })
+    expect(takeDueToolWatches(db, ['g1'])).toHaveLength(1)
+  })
+
+  it('a good clean-up clears the count', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'failed' })
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'ok' })
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0 })
+  })
+
+  it('a failed first step that opened no tab is a failed check, not a stop, and the watch recovers', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { error: 'Browser extension is not connected (step 1, mcp__chrome__read)', cleanup: 'ok' })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(false)
+    expect(getWatch(db, w.id)).toMatchObject({ cleanup_failures: 0, fail_count: 1 })
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toHaveLength(1)
+    reportToolWatch(db, w.id, { text: 'a', cleanup: 'ok' })
+    expect(getWatch(db, w.id)).toMatchObject({ last_error: null, fail_count: 0 })
+  })
+
+  it('stops at once when the clean-up could not run, even after a failed check', () => {
+    const w = mk()
+    reportToolWatch(db, w.id, { error: 'step 1 found nothing for its pick', cleanup: 'unrunnable' })
+    expect(watchStopped(getWatch(db, w.id)!)).toBe(true)
+    expect(takeDueToolWatches(db, ['g1'], new Date(Date.now() + 3600_000))).toEqual([])
+  })
+})
+
+describe('schema version 16', () => {
+  it('adds the cleanup_failures column to a database from version 15', () => {
+    const old = openDatabase(':memory:')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN cleanup_failures')
+    old.exec('PRAGMA user_version = 15')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('cleanup_failures')
+  })
+})
+
+describe('schema version 15', () => {
+  it('adds the steps and finally_call columns to a database from version 14', () => {
+    const old = openDatabase(':memory:')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN steps')
+    old.exec('ALTER TABLE goal_watches DROP COLUMN finally_call')
+    old.exec('PRAGMA user_version = 14')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toEqual(expect.arrayContaining(['steps', 'finally_call']))
   })
 })

@@ -238,7 +238,10 @@ async function firstChecks(goalId: string): Promise<{ name: string; result: stri
     if (w.last_checked_at !== null) continue
     if (w.kind === 'tool') {
       // Only a Claude Code session can call a connector: the one running goals makes the first call at its next pass
-      results.push({ name: w.name, result: `set; the session running goals calls ${w.tool} within a minute, and goal_detail says if that fails` })
+      const calls = w.steps
+        ? `runs ${w.steps.length} step${w.steps.length === 1 ? '' : 's'} (${w.steps.map((s) => s.tool.replace(/^mcp__.+__/, '')).join(', ')})`
+        : `calls ${w.tool}`
+      results.push({ name: w.name, result: `set; the session running goals ${calls} within a minute, and goal_detail says if that fails` })
       continue
     }
     const r = await checkCommandWatch(w.id)
@@ -264,7 +267,7 @@ export async function watch_report(args: unknown) {
   const input = WatchReportSchema.parse(args)
   const watch = getWatch(input.watch_id)
   if (!watch) throw new Error(`Watch ${input.watch_id} not found.`)
-  const r = reportToolWatch(watch.id, input.error !== undefined ? { error: input.error } : { text: input.text ?? '' })
+  const r = reportToolWatch(watch.id, { ...(input.error !== undefined ? { error: input.error } : { text: input.text ?? '', ...(input.note ? { note: input.note } : {}) }), ...(input.cleanup ? { cleanup: input.cleanup } : {}) })
   const goal = getGoal(watch.plan_id)
   const queued = r.fresh.length && goal?.status === 'active' ? queueForWatchEvents(watch.plan_id) : null
   return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...(r.error && { error: r.error }), queued_run: queued ? queued.id : null }

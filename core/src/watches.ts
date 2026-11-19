@@ -19,7 +19,12 @@ import { getGoal, newId } from './goals.js'
 import { canonicalToolName, matchToolCategory, QUARTERDECK_TOOL_PREFIX } from './guard.js'
 import { getPlan } from './queries.js'
 import { STATUS_TONES } from './status-check.js'
-import type { Watch, WatchEvent, WatchSpec, WatchStatusOutcome, WatchStatusRules } from './types.js'
+import type { Watch, WatchCall, WatchEvent, WatchSpec, WatchStatusOutcome, WatchStatusRules, WatchStep } from './types.js'
+
+/** Calls in a watch's sequence. */
+export const WATCH_MAX_STEPS = 4
+/** The most tries a watch step may give with retry. */
+export const WATCH_MAX_TRIES = 5
 
 export const WATCH_TIMEOUT_S = 30
 /** Lines read from one check; more are ignored. */
@@ -31,6 +36,10 @@ export const WATCH_SEEN_MAX = 1000
 export const WATCH_OUTPUT_CHARS = 64 * 1024
 /** Checks failed in a row before the watch is shown as failing. */
 export const WATCH_FAILING_AFTER = 3
+/** Clean-up calls failed in a row before a steps watch stops being checked (until it is edited): each failed one may leave a tab open. */
+export const WATCH_CLEANUP_STOP_AFTER = 3
+/** Shown on a watch stopped for its clean-up. */
+export const WATCH_CLEANUP_STOPPED = "its clean-up failed, so a tab may have been left open: the watch is stopped until it is edited"
 /** New lines per watch a brief lists; the rest are counted. */
 export const WATCH_BRIEF_LINES = 50
 export const WATCH_MIN_MINUTES = 1
@@ -54,6 +63,8 @@ function deserializeWatch(r: Row): Watch {
   return {
     ...r,
     tool_input: JSON.parse((r.tool_input as string) || '{}'),
+    steps: r.steps ? JSON.parse(r.steps as string) : null,
+    finally: r.finally_call ? JSON.parse(r.finally_call as string) : null,
     seen: JSON.parse((r.seen as string) || '[]'),
     status_rules: r.status_rules ? JSON.parse(r.status_rules as string) : null,
   } as Watch
@@ -144,12 +155,11 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
   const rulesText = statusRules ? JSON.stringify(statusRules) : null
 
   // What it checks: a command, or a tool with its input and how to read the answer
-  const what: Check = { kind: 'command', command: null, tool: null, tool_input: '{}', match: null }
-  const given = spec as { command?: string; tool?: string; input?: Record<string, unknown>; match?: string }
-  if (given.tool !== undefined) {
-    const tool = String(given.tool).trim()
+  const what: Check = { kind: 'command', command: null, tool: null, tool_input: '{}', steps: null, finally_call: null, match: null }
+  const given = spec as { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; steps?: WatchStep[]; finally?: WatchCall }
+  const checkTool = (raw: unknown): string => {
+    const tool = String(raw ?? '').trim()
     if (!tool) throw new Error(`The watch "${label}" needs a tool.`)
-    if (given.command) throw new Error(`The watch "${label}" has a command and a tool: give one.`)
     if (!tool.startsWith('mcp__')) throw new Error(`The watch "${label}" can only call a connector or MCP tool (mcp__…), not ${tool}.`)
     if (canonicalToolName(tool).startsWith(QUARTERDECK_TOOL_PREFIX) || /^mcp__quarterdeck-(goals|guard)__/.test(tool)) {
       throw new Error(`The watch "${label}" can't call Quarterdeck's own tools.`)
@@ -160,9 +170,71 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
     if (mode !== 'auto') {
       throw new Error(`The watch "${label}" can't call ${tool}: this goal's rules put it under "${category}", which is ${mode}. A watch may only read.`)
     }
+    return tool
+  }
+  const checkMatch = () => {
     if (given.match !== undefined) {
       try { new RegExp(given.match) } catch { throw new Error(`The watch "${label}" has a match that isn't a regular expression: ${given.match}`) }
     }
+  }
+  if (given.steps !== undefined) {
+    if (given.tool !== undefined) throw new Error(`The watch "${label}" has a tool and steps: give one.`)
+    if (given.command) throw new Error(`The watch "${label}" has a command and steps: give one.`)
+    if (!Array.isArray(given.steps) || given.steps.length === 0) throw new Error(`The watch "${label}" needs at least one step.`)
+    if (given.steps.length > WATCH_MAX_STEPS) throw new Error(`The watch "${label}" has ${given.steps.length} steps: at most ${WATCH_MAX_STEPS}.`)
+    const picked = new Set<string>()
+    const refs = (where: string, input: unknown) => {
+      for (const m of JSON.stringify(input ?? {}).matchAll(/\{\{\s*([^}]*?)\s*\}\}/g)) {
+        if (!picked.has(m[1])) throw new Error(`The watch "${label}" uses {{${m[1]}}} in ${where}, which no earlier step picks.`)
+      }
+    }
+    const steps: WatchStep[] = given.steps.map((s, i) => {
+      const where = `step ${i + 1}`
+      const tool = checkTool(s?.tool)
+      refs(where, s.input)
+      const step: WatchStep = { tool, ...(s.input && Object.keys(s.input).length ? { input: s.input } : {}) }
+      if (s.expect !== undefined) {
+        if (typeof s.expect !== 'string' || !s.expect) throw new Error(`The expect in ${where} of the watch "${label}" needs a regular expression.`)
+        try { new RegExp(s.expect) } catch { throw new Error(`The watch "${label}" has an expect in ${where} that isn't a regular expression: ${s.expect}`) }
+        step.expect = s.expect
+      }
+      if (s.retry !== undefined) {
+        if (!Number.isInteger(s.retry) || s.retry < 1 || s.retry > WATCH_MAX_TRIES) throw new Error(`The retry in ${where} of the watch "${label}" needs a whole number from 1 to ${WATCH_MAX_TRIES}.`)
+        if (s.retry > 1) step.retry = s.retry
+      }
+      if (s.pick && Object.keys(s.pick).length) {
+        step.pick = {}
+        for (const [pname, how] of Object.entries(s.pick)) {
+          if (!/^[A-Za-z_][\w-]*$/.test(pname)) throw new Error(`The watch "${label}" names a pick "${pname}" in ${where}: use letters, digits and _.`)
+          if (picked.has(pname) || pname in step.pick) throw new Error(`The watch "${label}" picks "${pname}" twice.`)
+          const h = how as { regex?: string; json?: string }
+          if ((typeof h?.regex === 'string') === (typeof h?.json === 'string')) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" needs a regex or a json path, one of them.`)
+          if (h.regex !== undefined) {
+            let groups: number
+            try { groups = new RegExp(`${h.regex}|`).exec('')!.length - 1 } catch { throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" has a regex that isn't a regular expression: ${h.regex}`) }
+            if (groups !== 1) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" needs a regex with exactly one group, not ${groups}.`)
+            step.pick[pname] = { regex: h.regex }
+          } else {
+            if (!JSON_PATH.test(h.json!)) throw new Error(`The pick "${pname}" in ${where} of the watch "${label}" has a json path that isn't well formed: ${h.json} (use a.b[0].c).`)
+            step.pick[pname] = { json: h.json! }
+          }
+        }
+        for (const pname of Object.keys(step.pick)) picked.add(pname)
+      }
+      return step
+    })
+    let fin: WatchCall | null = null
+    if (given.finally !== undefined && given.finally !== null) {
+      fin = { tool: checkTool(given.finally.tool), ...(given.finally.input && Object.keys(given.finally.input).length ? { input: given.finally.input } : {}) }
+      refs('finally', fin.input)
+    }
+    checkMatch()
+    Object.assign(what, { kind: 'tool', tool: steps[0].tool, steps: JSON.stringify(steps), finally_call: fin ? JSON.stringify(fin) : null, match: given.match?.trim() || null })
+  } else if (given.tool !== undefined) {
+    if (given.command) throw new Error(`The watch "${label}" has a command and a tool: give one.`)
+    if (given.finally !== undefined) throw new Error(`The watch "${label}" has a finally call without steps.`)
+    const tool = checkTool(given.tool)
+    checkMatch()
     Object.assign(what, { kind: 'tool', tool, tool_input: JSON.stringify(given.input ?? {}), match: given.match?.trim() || null })
   } else {
     const command = String(given.command ?? '').trim()
@@ -178,33 +250,43 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   const existing = listWatches(db, planId).find((w) => w.name === label)
   if (!existing) {
     const id = newId('wch')
-    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, new Date().toISOString())
+    db.prepare('INSERT INTO goal_watches (id, plan_id, name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(id, planId, label, what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, new Date().toISOString())
     return getWatch(db, id)!
   }
   const sameCheck = existing.kind === what.kind && existing.command === what.command && existing.tool === what.tool
-    && JSON.stringify(existing.tool_input) === what.tool_input && existing.match === what.match && existing.fires === fires
+    && JSON.stringify(existing.tool_input) === what.tool_input && (existing.steps ? JSON.stringify(existing.steps) : null) === what.steps
+    && (existing.finally ? JSON.stringify(existing.finally) : null) === what.finally_call && existing.match === what.match && existing.fires === fires
   // Editing rules that stay set keeps what was seen, so lines a quiet rule held can fire under a new run rule
   const rulesEdited = existing.status_rules !== null && statusRules !== null
   if (sameCheck && (rulesEdited || JSON.stringify(existing.status_rules) === JSON.stringify(statusRules))) {
     db.prepare('UPDATE goal_watches SET every_minutes = ? WHERE id = ?').run(every, existing.id)
+    // Saving it again resumes a watch stopped for its clean-up
+    if (existing.cleanup_failures) db.prepare('UPDATE goal_watches SET cleanup_failures = 0, last_error = NULL WHERE id = ?').run(existing.id)
     // Written only on a change: the column's update trigger bumps the plan's revision
     if (JSON.stringify(existing.status_rules) !== JSON.stringify(statusRules)) db.prepare('UPDATE goal_watches SET status_rules = ? WHERE id = ?').run(rulesText, existing.id)
   } else {
     db.prepare(`
-      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0 WHERE id = ?
-    `).run(what.kind, what.command, what.tool, what.tool_input, what.match, every, fires, rulesText, existing.id)
+      UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
+        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+    `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(existing.id)
   }
   return getWatch(db, existing.id)!
 }
 
-type Check = { kind: Watch['kind']; command: string | null; tool: string | null; tool_input: string; match: string | null }
+type Check = { kind: Watch['kind']; command: string | null; tool: string | null; tool_input: string; steps: string | null; finally_call: string | null; match: string | null }
+
+/** A pick's json path: a.b[0].c */
+const JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/
 
 /** What a watch checks, in a line: its command, or its tool with the input it is called with. */
-export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'>): string {
+export function describeWatch(w: Pick<Watch, 'kind' | 'command' | 'tool' | 'tool_input' | 'match'> & { steps?: WatchStep[] | null; finally?: WatchCall | null }): string {
   if (w.kind === 'command') return w.command ?? ''
+  if (w.steps?.length) {
+    const call = (c: WatchCall & { pick?: unknown; expect?: string; retry?: number }) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
+    return `${w.steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${w.finally ? `; finally ${call(w.finally)}` : ''}${w.match ? ` (lines: ${w.match})` : ''}`
+  }
   const input = Object.keys(w.tool_input).length ? ` ${JSON.stringify(w.tool_input)}` : ''
   return `${w.tool}${input}${w.match ? ` (lines: ${w.match})` : ''}`
 }
@@ -223,8 +305,13 @@ export function watchDue(watch: Watch, now: Date = new Date()): boolean {
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 60_000
 }
 
-export function watchFailing(watch: Pick<Watch, 'fail_count'>): boolean {
-  return watch.fail_count >= WATCH_FAILING_AFTER
+export function watchFailing(watch: Pick<Watch, 'fail_count'> & { cleanup_failures?: number }): boolean {
+  return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch)
+}
+
+/** True when the watch's clean-up has failed too often: it is not checked until it is edited. */
+export function watchStopped(watch: { cleanup_failures?: number }): boolean {
+  return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER
 }
 
 // ── Checking ──────────────────────────────────────────────────────────────────
@@ -261,7 +348,7 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
   if (!watch) throw new Error(`Watch ${watchId} not found`)
   const at = now.toISOString()
   if ('error' in result) {
-    const error = result.error.trim().slice(-500) || 'The check failed.'
+    const error = result.error.trim().slice(0, 500) || 'The check failed.'
     db.prepare('UPDATE goal_watches SET last_checked_at = ?, last_error = ?, fail_count = fail_count + 1 WHERE id = ?').run(at, error, watchId)
     return { baseline: false, lines: 0, fresh: [], error }
   }
@@ -364,6 +451,9 @@ export interface ToolWatchCall {
   name: string
   tool: string
   input: Record<string, unknown>
+  /** A sequence of calls in place of `tool` + `input`, and a call that always runs after it. */
+  steps?: WatchStep[]
+  finally?: WatchCall
 }
 
 /**
@@ -375,22 +465,34 @@ export function takeDueToolWatches(db: Database, planIds: string[], now: Date = 
   const calls: ToolWatchCall[] = []
   for (const planId of planIds) {
     for (const w of listWatches(db, planId)) {
-      if (w.kind !== 'tool' || !w.tool || !watchDue(w, now)) continue
+      if (w.kind !== 'tool' || !(w.tool || w.steps) || watchStopped(w) || !watchDue(w, now)) continue
       if (w.asked_at && now.getTime() - new Date(w.asked_at).getTime() < WATCH_REPORT_GRACE_MS) continue
       db.prepare('UPDATE goal_watches SET asked_at = ? WHERE id = ?').run(now.toISOString(), w.id)
-      calls.push({ watch_id: w.id, goal_id: planId, name: w.name, tool: w.tool, input: w.tool_input })
+      calls.push({ watch_id: w.id, goal_id: planId, name: w.name, tool: w.tool!, input: w.tool_input, ...(w.steps ? { steps: w.steps } : {}), ...(w.finally ? { finally: w.finally } : {}) })
     }
   }
   return calls
 }
 
 /** Records what a tool watch's call answered: its text, read into lines, or why it failed. */
-export function reportToolWatch(db: Database, watchId: string, result: { text: string } | { error: string }, now: Date = new Date()): WatchCheck {
+/** How the clean-up call went: 'ok', 'failed', or 'unrunnable' (it could not even be called, as when a pick found nothing). Left out: the watch has none. */
+export type CleanupOutcome = 'ok' | 'failed' | 'unrunnable'
+
+export function reportToolWatch(db: Database, watchId: string, result: ({ text: string; note?: string } | { error: string }) & { cleanup?: CleanupOutcome }, now: Date = new Date()): WatchCheck {
   const watch = getWatch(db, watchId)
   if (!watch || watch.kind !== 'tool') throw new Error(`Tool watch ${watchId} not found`)
   db.prepare('UPDATE goal_watches SET asked_at = NULL WHERE id = ?').run(watchId)
-  if ('error' in result) return recordWatchLines(db, watchId, { error: result.error }, now)
-  return recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  // Clean-up failures in a row: a good one clears them; one that could not run counts as all of them, since each check would leak a tab
+  let failures = watch.cleanup_failures
+  if (result.cleanup === 'ok') failures = 0
+  else if (result.cleanup) failures = result.cleanup === 'unrunnable' ? WATCH_CLEANUP_STOP_AFTER : failures + 1
+  if (failures !== watch.cleanup_failures) db.prepare('UPDATE goal_watches SET cleanup_failures = ? WHERE id = ?').run(failures, watchId)
+  const checked = 'error' in result ? recordWatchLines(db, watchId, { error: result.error }, now) : recordWatchLines(db, watchId, { lines: matchLines(result.text, watch.match) }, now)
+  if (watchStopped({ cleanup_failures: failures })) { db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(WATCH_CLEANUP_STOPPED, watchId); return { ...checked, error: WATCH_CLEANUP_STOPPED } }
+  if ('error' in result) return checked
+  // A good read with a failed clean-up: the text counts, the note shows why (a tab left open), and it isn't a failed check
+  if (result.note) db.prepare('UPDATE goal_watches SET last_error = ? WHERE id = ?').run(result.note.trim().slice(0, 500), watchId)
+  return checked
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────

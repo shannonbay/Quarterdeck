@@ -114,7 +114,7 @@ test('a tool watch whose call is refused or fails is reported as a failed check'
   await $.session.start(START)
   await settle()
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([
-    { watch_id: 'w-1', error: 'Claude Code refused the call: denied by a permission rule' },
+    { watch_id: 'w-1', error: "the call couldn't run: denied by a permission rule" },
     { watch_id: 'w-2', error: 'Not signed in' },
   ])
   expect(fake.of('goals_tick')).toHaveLength(1)
@@ -219,4 +219,284 @@ test('while plan mode refuses the tick the pane says so instead of "Offline", an
   const after = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await after.find({ type: 'Text', text: /^Plan mode is on/ })).toBeFalsy()
   await after.unmount()
+})
+
+test('a steps watch passes a picked value to the next call, reads the last answer, and always runs its finally call', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const calls: Record<string, unknown>[] = []
+  const seen = (tool: string, result: string, isError = false) => on('tool.call', { tool: tool as never }, (_, e) => {
+    const { tool_use_id: _u, agentId: _a, ...rest } = e as unknown as Record<string, unknown>
+    calls.push(rest)
+    return { result, isError } as never
+  })
+  seen('mcp__chrome__navigate', 'Opened tab 42')
+  seen('mcp__chrome__get_page_text', 'Anna: hi')
+  seen('mcp__chrome__tabs_close', 'closed')
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: { url: 'https://example.com/inbox' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}', label: 'tab {{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  // A reference that is the whole string becomes a number; text around it stays a string
+  expect(calls.map((c) => [c.tool, c.tabId])).toEqual([['mcp__chrome__navigate', undefined], ['mcp__chrome__get_page_text', 42], ['mcp__chrome__tabs_close', 42]])
+  expect(calls[1].label).toBe('tab 42')
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Anna: hi', cleanup: 'ok' }])
+})
+
+test('a steps watch whose last answer does not match its expect is a failed check naming the step, and still runs finally', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'Opened tab 42', isError: false }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => ({ result: "This session's tab group no longer exists.", isError: false }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'closed', isError: false } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: {}, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' }, expect: 'Inbox' },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(closed).toHaveLength(1)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text) answered something other than expected (/Inbox/)", cleanup: 'ok' }])
+})
+
+test('a steps watch keeps a picked number that would change as a string', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const calls: Record<string, unknown>[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'id 1234567890123456789 or 00123' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, (_, e) => { calls.push(e as never); return { result: 'Anna: hi' } as never })
+  fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: {}, pick: { big: { regex: 'id ([0-9]+)' }, padded: { regex: 'or ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { big: '{{big}}', padded: '{{padded}}' } },
+      ],
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(calls.map((c) => [c.big, c.padded])).toEqual([['1234567890123456789', '00123']])
+})
+
+test('a steps watch whose pick finds nothing reports an error naming the step, and still runs finally', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'no tab here' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [
+        { tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: {} },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'step 1 (mcp__chrome__navigate) found nothing for its pick "tabId"', cleanup: 'ok' }])
+  expect(closed).toHaveLength(1)
+})
+
+test('a steps watch whose finally needs a picked tab that was never picked reports the clean-up as unrunnable', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'no tab here' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [{ tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } }],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: expect.stringMatching(/found nothing for its pick.*a tab may have been left open/), cleanup: 'unrunnable' }])
+  expect(closed).toHaveLength(0)
+})
+
+test('a steps watch whose tab-opening step runs past the limit reports the clean-up as unrunnable, since its tab may still open', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  const closed: unknown[] = []
+  let answer: ((v: unknown) => void) | null = null
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => new Promise((resolve) => { answer = resolve }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__tabs_create', input: {},
+      steps: [
+        { tool: 'mcp__chrome__tabs_create', input: {}, pick: { tabId: { regex: 'Tab ID: ([0-9]+)' } } },
+        { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' } },
+      ],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await clock.advance(30_000)
+  answer?.({ result: 'Tab ID: 7' }) // too late to be picked
+  await settle()
+  const reports = fake.of('watch_report').map((c) => c.input)
+  expect(reports[0]).toEqual({ watch_id: 'w-1', error: expect.stringMatching(/didn't finish within 30 s.*a tab may have been left open/), cleanup: 'unrunnable' })
+  expect(closed).toHaveLength(0)
+})
+
+test('a steps watch whose first step failed opened no tab: its clean-up is not unrunnable and adds no note', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => ({ result: 'Browser extension is not connected', isError: true }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [{
+      watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__navigate', input: {},
+      steps: [{ tool: 'mcp__chrome__navigate', input: { url: 'https://example.com' }, pick: { tabId: { regex: 'tab ([0-9]+)' } } }],
+      finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+    }],
+  })
+  await $.session.start(START)
+  await settle()
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: 'Browser extension is not connected (step 1, mcp__chrome__navigate)', cleanup: 'ok' }])
+})
+
+test('a steps watch whose call throws names the step, and a failed finally after a good read adds a note to the text', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  on('tool.call', { tool: 'mcp__chrome__navigate' as never }, () => { throw new Error('extension not connected') })
+  on('tool.call', { tool: 'mcp__chrome__read' as never }, () => ({ result: 'Anna: hi' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'no such tab', isError: true }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [
+      { watch_id: 'w-1', goal_id: 'g1', name: 'a', tool: 'mcp__chrome__navigate', input: {}, steps: [{ tool: 'mcp__chrome__read', input: {} }, { tool: 'mcp__chrome__navigate', input: {} }] },
+      { watch_id: 'w-2', goal_id: 'g1', name: 'b', tool: 'mcp__chrome__read', input: {}, steps: [{ tool: 'mcp__chrome__read', input: {} }], finally: { tool: 'mcp__chrome__tabs_close', input: {} } },
+    ],
+  })
+  await $.session.start(START)
+  await settle()
+  const reports = fake.of('watch_report').map((c) => c.input as Record<string, unknown>)
+  expect(reports.find((r) => r.watch_id === 'w-1')).toEqual({ watch_id: 'w-1', error: expect.stringMatching(/step 2, mcp__chrome__navigate[)]$/) })
+  expect(reports.find((r) => r.watch_id === 'w-2')).toEqual({ watch_id: 'w-2', text: 'Anna: hi', note: 'finally mcp__chrome__tabs_close failed: no such tab', cleanup: 'failed' })
+})
+
+const retryWatch = (retry: number) => ({
+  watch_id: 'w-1', goal_id: 'g1', name: 'inbox', tool: 'mcp__chrome__tabs_create', input: {},
+  steps: [
+    { tool: 'mcp__chrome__tabs_create', input: {}, pick: { tabId: { regex: 'Tab ID: ([0-9]+)' } } },
+    { tool: 'mcp__chrome__get_page_text', input: { tabId: '{{tabId}}' }, expect: 'Inbox', retry },
+  ],
+  finally: { tool: 'mcp__chrome__tabs_close', input: { tabId: '{{tabId}}' } },
+})
+
+test('a steps watch step with retry that misses its expect twice passes on its third try, repeating only that step', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let created = 0
+  const reads: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => { created++; return { result: 'Tab ID: 7' } as never })
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, (_, e) => { reads.push((e as { tabId: unknown }).tabId); return { result: reads.length < 3 ? '' : 'Inbox: Anna' } as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(created).toBe(1)
+  expect(reads).toEqual([7, 7, 7])
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Inbox: Anna', cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry that errors every time fails with the number of tries', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return { result: "Can't interact with browser-internal URLs", isError: true } as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "Can't interact with browser-internal URLs (step 2, mcp__chrome__get_page_text, after 3 tries)", cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry whose call is refused twice (a tool that threw) passes on its third try', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return (reads < 3 ? { deny: "Can't interact with browser-internal or unparseable URLs. Navigate to a web page first." } : { result: 'Inbox: Anna' }) as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', text: 'Inbox: Anna', cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry whose call is refused every time fails with the number of tries', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return { deny: 'Navigate to a web page first.' } as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "the call couldn't run (step 2, mcp__chrome__get_page_text, after 3 tries): Navigate to a web page first.", cleanup: 'ok' }])
+})
+
+test('a steps watch step with retry whose tool throws every time fails with the number of tries', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; throw new Error('Navigate to a web page first.') })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, () => ({ result: 'ok' }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(3)] })
+  await $.session.start(START)
+  for (let k = 0; k < 5; k++) await clock.advance(2_000)
+  await settle()
+  expect(reads).toBe(3)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: expect.stringMatching(/ \(step 2, mcp__chrome__get_page_text, after 3 tries\)$/), cleanup: 'ok' }])
+})
+
+test('a steps watch step whose retries run past the time limit stops at it, and finally still runs', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  let reads = 0
+  const closed: unknown[] = []
+  on('tool.call', { tool: 'mcp__chrome__tabs_create' as never }, () => ({ result: 'Tab ID: 7' }) as never)
+  on('tool.call', { tool: 'mcp__chrome__get_page_text' as never }, () => { reads++; return (reads === 1 ? { result: '' } : new Promise(() => {})) as never })
+  on('tool.call', { tool: 'mcp__chrome__tabs_close' as never }, (_, e) => { closed.push(e); return { result: 'ok' } as never })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], { toolWatches: [retryWatch(5)] })
+  await $.session.start(START)
+  await clock.advance(2_000)
+  await clock.advance(30_000)
+  await settle()
+  expect(reads).toBe(2)
+  expect(closed).toHaveLength(1)
+  expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text, after 2 tries) didn't finish within 30 s", cleanup: 'ok' }])
 })

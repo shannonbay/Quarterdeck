@@ -10,7 +10,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { RunEntry } from '../types'
-import { attachAgent, cancelRunRecord, failRun, releaseLease, reportWatch, resultText, tick, type ClaimedRun, type ToolWatch } from './api'
+import { attachAgent, cancelRunRecord, failRun, releaseLease, reportWatch, resultText, tick, type ClaimedRun, type ToolWatch, type WatchStep } from './api'
 import { addRun, getNotice, getRuns, getSnapshot, removeRun, setGuardMissing, setNotice, setPlanMode } from './state'
 import { planModeBlocked, spawnModel } from './model'
 import { serverToolNames } from './names'
@@ -148,10 +148,12 @@ async function pass($: Engine): Promise<void> {
   }
 }
 
-/** How long a watch's tool may take before the check counts as failed. */
+/** How long a watch's tool may take before the check counts as failed; for steps it is the limit on the whole sequence, not on each step. */
 export const WATCH_CALL_MS = 30_000
 /** The most of a tool's answer sent on: ids are near the start, and a huge answer isn't worth a watch. */
 const WATCH_TEXT_MAX = 60_000
+/** How long a step with retry waits before calling again (a page still loading); the waits come out of WATCH_CALL_MS. */
+export const WATCH_RETRY_MS = 2_000
 
 /**
  * Checks one tool watch: calls its tool (a connector's search, say) with nobody
@@ -159,20 +161,140 @@ const WATCH_TEXT_MAX = 60_000
  * True when that queued a run.
  */
 async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
-  let report: { text: string } | { error: string }
+  const steps: WatchStep[] = watch.steps ?? [{ tool: watch.tool, input: watch.input }]
+  const values: Record<string, string> = {}
+  let report: ({ text: string; note?: string } | { error: string }) & { cleanup?: 'ok' | 'failed' | 'unrunnable' }
+  let timedOut = false
+  let pickMissed = false
+  let at = 0
+  let tried = 1
+  const run = async (): Promise<{ text: string } | { error: string }> => {
+    let last = ''
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i]
+      at = i
+      let input: Record<string, unknown>
+      try { input = substitute(step.input ?? {}, values) as Record<string, unknown> } catch (err) { return { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${i + 1}, ${step.tool})` : ''}` } }
+      // A step with retry calls again, after a short wait, while it errors, misses its expect or a pick; only this step repeats, so earlier picks (a tab) stay
+      const tries = step.retry ?? 1
+      for (let t = 1; ; t++) {
+        tried = t
+        const after = t > 1 ? `, after ${t} tries` : ''
+        const where = watch.steps ? ` (step ${i + 1}, ${step.tool}${after})` : ''
+        const failed = async (error: string): Promise<{ error: string } | null> => {
+          if (t >= tries) return { error }
+          await $.clock.sleep(WATCH_RETRY_MS)
+          return timedOut ? { error: 'timeout' } : null
+        }
+        // A tool that throws (Claude in Chrome reading a tab before navigate has committed) comes back as a deny, which $.tool.call
+        // can't tell from a permission refusal: on a step with retry both go round again (a refusal just fails on every try)
+        let answer: Awaited<ReturnType<typeof $.tool.call>>
+        try { answer = await $.tool.call({ tool: step.tool, ...input } as never) } catch (err) {
+          if (timedOut) return { error: 'timeout' }
+          const out = await failed(`${err instanceof Error ? err.message : String(err)}${where}`)
+          if (out) return out
+          continue
+        }
+        if (timedOut) return { error: 'timeout' }
+        if (answer.deny !== undefined) { const out = await failed(`the call couldn't run${where}: ${answer.deny}`); if (out) return out; continue }
+        if (answer.isError === true) { const out = await failed(`${resultText(answer).slice(0, 500)}${where}`); if (out) return out; continue }
+        last = resultText(answer)
+        if (step.expect !== undefined && !new RegExp(step.expect).test(last)) {
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) answered something other than expected (/${step.expect}/)`)
+          if (out) return out
+          continue
+        }
+        const found: Record<string, string> = {}
+        let missed: string | null = null
+        for (const [name, how] of Object.entries(step.pick ?? {})) {
+          const value = pickValue(last, how)
+          if (value === null) { missed = name; break }
+          found[name] = value
+        }
+        if (missed !== null) {
+          pickMissed = true
+          const out = await failed(`step ${i + 1} (${step.tool}${after}) found nothing for its pick "${missed}"`)
+          if (out) return out
+          continue
+        }
+        Object.assign(values, found)
+        break
+      }
+    }
+    return { text: last.slice(0, WATCH_TEXT_MAX) }
+  }
   try {
-    const answer = await Promise.race([
-      $.tool.call({ tool: watch.tool, ...watch.input } as never),
-      $.clock.sleep(WATCH_CALL_MS).then(() => 'timeout' as const),
-    ])
-    if (answer === 'timeout') report = { error: `${watch.tool} didn't answer within ${WATCH_CALL_MS / 1000} s` }
-    else if (answer.deny !== undefined) report = { error: `Claude Code refused the call: ${answer.deny}` }
-    else if (answer.isError === true) report = { error: resultText(answer).slice(0, 500) }
-    else report = { text: resultText(answer).slice(0, WATCH_TEXT_MAX) }
+    const answer = await Promise.race([run(), $.clock.sleep(WATCH_CALL_MS).then(() => 'timeout' as const)])
+    if (answer === 'timeout') { timedOut = true; report = { error: `${watch.steps ? `step ${at + 1} (${steps[at].tool}${tried > 1 ? `, after ${tried} tries` : ''})` : watch.tool} didn't finish within ${WATCH_CALL_MS / 1000} s` } }
+    else report = answer
   } catch (err) {
-    report = { error: err instanceof Error ? err.message : String(err) }
+    report = { error: `${err instanceof Error ? err.message : String(err)}${watch.steps ? ` (step ${at + 1}, ${steps[at].tool})` : ''}` }
+  }
+  // The clean-up call always runs (a tab the steps opened), with a limit of its own; its failure is noted, not the result
+  if (watch.finally) {
+    let note: string | null = null
+    let cleanup: 'ok' | 'failed' | 'unrunnable' = 'ok'
+    let input: Record<string, unknown> | null = null
+    try { input = substitute(watch.finally.input ?? {}, values) as Record<string, unknown> } catch (err) {
+      // Only a pick that found nothing, or a step that ran past the limit (its tab may open after all), may have left a tab open.
+      // If an earlier step failed, nothing was opened: no note, and it doesn't count
+      if (pickMissed || timedOut) {
+        cleanup = 'unrunnable'
+        note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
+      }
+    }
+    if (input) try {
+      const answer = await Promise.race([
+        $.tool.call({ tool: watch.finally.tool, ...input } as never),
+        $.clock.sleep(WATCH_FINALLY_MS).then(() => 'timeout' as const),
+      ])
+      if (answer === 'timeout') note = `finally ${watch.finally.tool} didn't finish within ${WATCH_FINALLY_MS / 1000} s`
+      else if (answer.deny !== undefined) note = `finally ${watch.finally.tool} couldn't run: ${answer.deny}`
+      else if (answer.isError === true) note = `finally ${watch.finally.tool} failed: ${resultText(answer).slice(0, 200)}`
+      if (note) cleanup = 'failed'
+    } catch (err) {
+      cleanup = 'failed'
+      note = `finally ${watch.finally.tool} didn't run (a tab may have been left open): ${err instanceof Error ? err.message : String(err)}`
+    }
+    if (note && 'error' in report) report = { error: `${report.error}; ${note}` }
+    // A clean-up failure after a good read keeps the text and adds the note; the next check tries again
+    else if (note) report = { ...report, note }
+    report = { ...report, cleanup }
   }
   return reportWatch($, watch.watch_id, report).then((r) => r.queued_run !== null).catch(() => false)
+}
+
+/** How long a watch's clean-up call may take. */
+export const WATCH_FINALLY_MS = 10_000
+
+/** Replaces {{name}} in every string of an input with a picked value; a name never picked is an error. A string that is exactly one reference to a plain number becomes a number (a tab id), text around it stays a string. */
+export function substitute(input: unknown, values: Record<string, string>): unknown {
+  if (typeof input === 'string') {
+    const only = /^\{\{\s*([^}]*?)\s*\}\}$/.exec(input)
+    if (only && only[1] in values && /^-?\d+(\.\d+)?$/.test(values[only[1]]) && String(Number(values[only[1]])) === values[only[1]]) return Number(values[only[1]])
+    return input.replace(/\{\{\s*([^}]*?)\s*\}\}/g, (_m, name: string) => {
+      if (!(name in values)) throw new Error(`{{${name}}} was never picked`)
+      return values[name]
+    })
+  }
+  if (Array.isArray(input)) return input.map((v) => substitute(v, values))
+  if (input && typeof input === 'object') return Object.fromEntries(Object.entries(input).map(([k, v]) => [k, substitute(v, values)]))
+  return input
+}
+
+/** A value out of a step's answer text: a regex's one group, or a JSON path (a.b[0].c); null when there is none. */
+export function pickValue(text: string, how: { regex: string } | { json: string }): string | null {
+  if ('regex' in how) {
+    const m = new RegExp(how.regex).exec(text)
+    return m && m[1] !== undefined && m[1] !== '' ? m[1] : null
+  }
+  let node: unknown
+  try { node = JSON.parse(text) } catch { return null }
+  for (const part of how.json.match(/[^.[\]]+/g) ?? []) {
+    if (node === null || typeof node !== 'object') return null
+    node = (node as Record<string, unknown>)[part]
+  }
+  return typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean' ? String(node) : null
 }
 
 /** Starts a claimed run in a subagent; a run that can't start is marked failed. */

@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 14
+export const SCHEMA_VERSION = 16
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -488,13 +488,18 @@ export function runMigrations(db: Database): void {
   try { db.exec('ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT') } catch { /* already exists */ }
   // Schema version 8: a watch can fire on change
   try { db.exec("ALTER TABLE goal_watches ADD COLUMN fires TEXT NOT NULL DEFAULT 'new' CHECK (fires IN ('new', 'change'))") } catch { /* already exists */ }
+  // Schema version 15: a tool watch can be a sequence of calls (steps) with a final clean-up call
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN steps TEXT') } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN finally_call TEXT') } catch { /* already exists */ }
+  // Schema version 16: clean-up calls of a steps watch that failed in a row (a tab may have been left open)
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
   // Schema version 12: a watch can set the goal's status
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN status_rules TEXT') } catch { /* already exists */ }
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     -- Not on every check: only when what the pane shows changes
-    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
+    CREATE TRIGGER IF NOT EXISTS trg_goal_watches_update_revision AFTER UPDATE OF name, kind, command, tool, tool_input, steps, finally_call, match, every_minutes, fires, status_rules, last_fired_at, last_error ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_delete_revision AFTER DELETE ON goal_watches
     BEGIN UPDATE plans SET revision = revision + 1 WHERE id = OLD.plan_id; END;

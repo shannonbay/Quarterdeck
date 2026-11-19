@@ -213,7 +213,9 @@ export type ClaimedRun = {
 }
 
 /** A goal's tool watch that is due: call `tool` with `input` and report what it answered. */
-export type ToolWatch = { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown> }
+export type WatchCall = { tool: string; input?: Record<string, unknown> }
+export type WatchStep = WatchCall & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string; retry?: number }
+export type ToolWatch = { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown>; steps?: WatchStep[]; finally?: WatchCall }
 
 /** One scheduler pass. `toolWatches` false asks for runs only (a second pass right after checking watches). */
 export async function tick($: Engine, holder: string, trackedRunIds: string[], toolWatches = true): Promise<{ leader: boolean; claimed: ClaimedRun[]; toolWatches: ToolWatch[] }> {
@@ -224,7 +226,7 @@ export async function tick($: Engine, holder: string, trackedRunIds: string[], t
 }
 
 /** What a tool watch's call answered; `queued_run` is set when something new queued a run. */
-export async function reportWatch($: Engine, watchId: string, report: { text: string } | { error: string }): Promise<{ queued_run: string | null }> {
+export async function reportWatch($: Engine, watchId: string, report: ({ text: string; note?: string } | { error: string }) & { cleanup?: 'ok' | 'failed' | 'unrunnable' }): Promise<{ queued_run: string | null }> {
   return call($, 'watch_report', { watch_id: watchId, ...report })
 }
 

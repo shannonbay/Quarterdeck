@@ -20,8 +20,9 @@ import { execFileSync } from 'child_process'
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { homedir, userInfo } from 'os'
-import { dirname, join } from 'path'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { defaultDbPath } from '@quarterdeck/core'
 
 export const SESSION_NAME = 'Quarterdeck goals'
 export const TASK_NAME = 'Quarterdeck goals runner'
@@ -549,9 +550,16 @@ export function currentBuild(scriptDir: string = dirname(fileURLToPath(import.me
   return existsSync(bundle) ? `${version}+${Math.round(statSync(bundle).mtimeMs)}` : version
 }
 
-/** Called by the MCP server at start-up: tells the launcher where the current CLI is. Does nothing until the standing session is set up. */
-export function recordCliPath(serverDir: string, dir: string = runnerDir()): void {
+/**
+ * Called by the MCP server at start-up: tells the launcher where the current CLI is. Does nothing
+ * until the standing session is set up, or when this server's database isn't the one the launcher's
+ * CLI opens (QUARTERDECK_DB set, as for a test): the launcher runs the CLI without that setting, so
+ * it would open the person's own database with this build's code and migrate it.
+ */
+export function recordCliPath(serverDir: string, dir: string = runnerDir(), env: NodeJS.ProcessEnv = process.env): void {
   try {
+    const home = dirname(dirname(dir))
+    if (resolve(defaultDbPath(env, home)) !== resolve(defaultDbPath({}, home))) return
     const cli = join(serverDir, 'quarterdeck-cli.mjs')
     if (!existsSync(join(dir, 'launch.mjs')) || !existsSync(cli)) return
     const file = join(dir, 'cli-path')
