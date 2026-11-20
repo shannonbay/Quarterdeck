@@ -191,6 +191,7 @@ export function insertRun(db: Database, planId: string, trigger: TriggerKind, st
     ended_at: status === 'skipped' ? now : null,
     input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: null,
     now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null, untrusted_root: null,
+    request: null, request_untrusted: 0,
   }
   db.prepare(`
     INSERT INTO goal_runs (id, plan_id, trigger, status, session_id, summary, skip_reason, items_created, items_resolved, started_at, ended_at)

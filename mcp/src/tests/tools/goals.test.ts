@@ -6,7 +6,7 @@ import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun } from '../../db.js'
+import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun, getEvents } from '../../db.js'
 import { setOpenPlan } from '../../session.js'
 import { RememberSchema } from '../../schema.js'
 import { zodToJsonSchema } from 'zod-to-json-schema'
@@ -254,6 +254,21 @@ describe('goal tools', () => {
     const b = await run_goal({ goal_id: id })
     expect(a.run.status).toBe('queued')
     expect(b.run.id).toBe(a.run.id)
+  })
+
+  it('run_goal records the run, and stores a prompt as untrusted so the run proposes its auto actions', async () => {
+    const id = makeGoal()
+    const plain = await run_goal({ goal_id: id })
+    expect(getEvents(id).find((e) => e.event_type === 'run_requested')?.payload).toMatchObject({ run_id: plain.run.id, prompt: null })
+    startRun(plain.run.id, null)
+    const asked = await run_goal({ goal_id: id, prompt: 'Look at the refund' })
+    expect(asked.run.id).not.toBe(plain.run.id)
+    expect(getEvents(id).filter((e) => e.event_type === 'run_requested').map((e) => e.payload)).toContainEqual(expect.objectContaining({ run_id: asked.run.id, prompt: 'Look at the refund' }))
+    startRun(asked.run.id, null)
+    const brief = buildBrief(id, asked.run.id)
+    expect(brief.run!.request).toEqual({ text: 'Look at the refund', untrusted: true })
+    expect(brief.run!.untrusted).toMatchObject({ source: 'run request' })
+    expect(brief.memory).toEqual([])
   })
 })
 

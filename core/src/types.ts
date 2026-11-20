@@ -366,6 +366,10 @@ export interface GoalRun {
   untrusted_source: string | null
   /** The original outside read behind `untrusted_source` (itself for a direct read; what the memory first came from for a mark inherited from memory). */
   untrusted_root: string | null
+  /** What the person asked of this one run (Run with a prompt); null for a plain run. */
+  request: string | null
+  /** 1 when any part of the request came from where the person did not see it (the MCP server's run_goal). */
+  request_untrusted: number
 }
 
 export type MemoryKind = 'fact' | 'rule' | 'preference'

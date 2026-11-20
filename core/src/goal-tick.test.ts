@@ -5,7 +5,7 @@ import {
   takeLease, releaseLease, leaseHolder, claimRun, schedulerPass, expireStaleRuns, decideItem, attachAgent, guardToolCallForRun,
   buildOverview, overviewWithEtag, LEASE_MS, insertRun, endRun, updateTask, reviveIfDone, insertMemory,
   SCHEMA_VERSION, dbSchemaVersion, schemaOutdated, runMigrations, setSchedule, cronNext,
-  buildBrief, deleteGoal, restoreGoal,
+  buildBrief, deleteGoal, restoreGoal, queueRunWithRequest, setRunHold, startRun,
 } from './index.js'
 
 let db: Database
@@ -419,5 +419,53 @@ describe('schema version', () => {
     const r = await schedulerPass(db, { holder: 'A' })
     expect(r).toEqual({ leader: false, claimed: [], expired: [], outdated: true })
     expect(buildOverview(db).outdated).toBe(true)
+  })
+})
+
+describe('Run with a prompt (#143)', () => {
+  const queued = (r: ReturnType<typeof queueRunWithRequest>) => { if (!('run' in r)) throw new Error(r.reason); return r.run }
+
+  it('starts a run whose brief carries the prompt, trusted, and writes no memory', () => {
+    const run = queued(queueRunWithRequest(db, 'g1', '  Look at the invoices first  '))
+    startRun(db, run.id, null)
+    const brief = buildBrief(db, 'g1', run.id)
+    expect(brief.run!.request).toEqual({ text: 'Look at the invoices first' })
+    expect(brief.run!.untrusted).toBeNull()
+    expect(listMemory(db, 'g1')).toEqual([])
+  })
+
+  it('queues a new run behind a running one instead of joining it', () => {
+    const running = queueRun(db, 'g1')
+    startRun(db, running.id, null)
+    const run = queued(queueRunWithRequest(db, 'g1', 'Check the refund'))
+    expect(run.id).not.toBe(running.id)
+    expect(getRun(db, running.id)!.request).toBeNull()
+    expect(buildBrief(db, 'g1', run.id).run!.request).toEqual({ text: 'Check the refund' })
+  })
+
+  it('joins a still-queued run, adding each prompt in order', () => {
+    const first = queued(queueRunWithRequest(db, 'g1', 'One'))
+    const second = queued(queueRunWithRequest(db, 'g1', 'Two'))
+    expect(second.id).toBe(first.id)
+    expect(second.request).toBe('One\n\nTwo')
+  })
+
+  it('marks the run untrusted when any part of its request is', () => {
+    queued(queueRunWithRequest(db, 'g1', 'Trusted part'))
+    const run = queued(queueRunWithRequest(db, 'g1', 'Outside part', { untrusted: true }))
+    startRun(db, run.id, null)
+    const brief = buildBrief(db, 'g1', run.id)
+    expect(brief.run!.request).toEqual({ text: 'Trusted part\n\nOutside part', untrusted: true })
+    expect(brief.run!.untrusted).toMatchObject({ source: 'run request' })
+  })
+
+  it('says why and queues nothing when the daily limit is reached or a usage hold is on', () => {
+    updateGoal(db, 'g1', { limits: { ...getGoal(db, 'g1')!.limits, max_runs_per_day: 1 } })
+    insertRun(db, 'g1', 'manual', 'completed')
+    expect(queueRunWithRequest(db, 'g1', 'Again')).toEqual({ reason: 'The daily run limit is reached (1).' })
+    updateGoal(db, 'g1', { limits: { ...getGoal(db, 'g1')!.limits, max_runs_per_day: 48 } })
+    setRunHold(db, { until: '2099-01-01T00:00:00.000Z', reason: 'usage limit' })
+    expect(queueRunWithRequest(db, 'g1', 'Again')).toMatchObject({ reason: expect.stringContaining('on hold') })
+    expect(listRuns(db, 'g1').filter((r) => r.status === 'queued')).toEqual([])
   })
 })

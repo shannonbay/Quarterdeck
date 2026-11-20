@@ -71,6 +71,7 @@ export const insertRun = (planId: string, trigger: core.TriggerKind, status?: co
 export const markRunUntrusted = (runId: string, source: string, root?: string) => core.markRunUntrusted(db, runId, source, root)
 export const endRun = (runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown) => core.endRun(db, runId, summary, status, statusCheck, statusTone)
 export const queueRun = (planId: string) => core.queueRun(db, planId, 'manual')
+export const queueRunWithRequest = (planId: string, text: string, opts: { untrusted?: boolean } = {}) => core.queueRunWithRequest(db, planId, text, opts)
 export const getOpenGoalRun = (planId: string) => core.getOpenRun(db, planId)
 export const countItems = (planId: string) => db.prepare(
   "SELECT SUM(CASE WHEN status IN ('pending','active') THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN review_requested_at IS NOT NULL THEN 1 ELSE 0 END) AS awaiting_review FROM tasks WHERE plan_id = ? AND archived_at IS NULL",
