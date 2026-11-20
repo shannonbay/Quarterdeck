@@ -55,7 +55,7 @@ It started with one prompt: `/goal-new Sell my as-new (unused) birdcage on Faceb
 4. The next morning two buyers wanted it: one that afternoon, one on Saturday. It laid out both, suggested the sooner one with Saturday as a backup, and let me choose. It sent my address only after I gave it the address to send.
 5. Once I confirmed the buyer had collected it and paid, it marked the listing sold and sent the other four a short note.
 
-It sold for the asking price the day after the prompt. My part was approving each reply, choosing the buyer and giving the address; the agent never messaged anyone on its own.
+It sold for the asking price the day after the prompt. My part was approving each reply, choosing the buyer and giving the address; the agent never messaged anyone on its own. And no, it didn't give buyers a recipe for cake.
 
 The whole sale on video (2 minutes, with sound and captions):
 
