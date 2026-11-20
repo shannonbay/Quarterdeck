@@ -11,7 +11,7 @@ import {
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
-  NEWS_LATER,
+  NEWS_LATER, FLIPPER_LATER, FLIPPER_RULES,
 } from '../hooks/templates'
 import { goal, NOW, proposal } from './fixtures'
 
@@ -667,6 +667,40 @@ test('the news digest template: daily, sonnet, email proposed, discovery capped'
   }
   expect(t.ask!.laterText).toBe(NEWS_LATER)
   expect(NEWS_LATER).toContain('wait for my answer before building a digest')
+})
+
+test('the Marketplace Flipper template: one setup question, rules for any country, every action proposed (#129)', async () => {
+  const t = TEMPLATES.find((x) => x.label === 'Marketplace Flipper')!
+  expect(t.name).toBe('Marketplace Flipper')
+  expect(t.model).toBe('sonnet')
+  expect(t.modelReason).toBeTruthy()
+  expect(t.schedule).toEqual({ kind: 'interval', minutes: 1440 })
+  expect(t.watches).toBeUndefined() // the first run proposes them
+  expect(t.autonomy).toEqual({ 'marketplace.message': 'propose', 'marketplace.buy': 'propose', 'marketplace.list': 'propose', 'browser.act': 'propose' })
+  expect(t.tool_map).toEqual(Object.fromEntries(
+    ['computer', 'form_input', 'javascript_tool', 'browser_batch', 'file_upload', 'upload_image'].map((tool) => [`mcp__claude-in-chrome__${tool}`, 'browser.act']),
+  ))
+  expect(t.needs).toContain('Claude in Chrome, signed in to Facebook')
+  expect(t.needs).toContain("Facebook's terms forbid automated data collection")
+  // one question listing every part, with a filled-in example, and the later choice
+  for (const part of ['home area', 'budget', 'minimum profit', 'vehicle', 'free']) expect(t.ask!.question).toContain(part)
+  expect(t.ask!.question).toContain('e.g. ')
+  expect(t.ask!.later).toBe('Ask me in the first run')
+  const answer = 'Leeds, 20 km; £200; £30 or 40%; van, 9 L/100 km; weekends'
+  expect(t.ask!.fill(answer)).toContain(answer)
+  expect(t.ask!.laterText).toBe(FLIPPER_LATER)
+  expect(FLIPPER_LATER).toContain('ask_person')
+  expect(FLIPPER_LATER).toContain('wait for my answer before proposing watches or deals')
+  expect(t.instructions).toBe(FLIPPER_RULES)
+  // the first run proposes tested watches, applying the inbox and tab id lessons
+  for (const rule of ['propose_watch', 'every 30 minutes', 'tested', 'ignore pattern', 'tabId', 'Open at most 5 listings a run', 'downloading its image links',
+    'Fridges travel upright', 'Never share my street address', 'browser.act', 'Buy Now', 'never let capital go below zero']) {
+    expect(FLIPPER_RULES).toContain(rule)
+  }
+  // no hard-coded currency, country or city in what the goal is given, and no promise of profit
+  const given = [t.objective, t.needs, FLIPPER_RULES, FLIPPER_LATER, t.ask!.fill('x')].join(' ')
+  expect(given).not.toMatch(/[$£€¥]|NZ|New Zealand|Wellington|Trade Me/)
+  expect(`${t.objective} ${t.needs}`).not.toMatch(/guarantee|will make|profit/i)
 })
 
 test('the issue fixer reads inline review comments through pr_inline_comments, which marks the run untrusted; every gh api call is off (#68)', () => {
