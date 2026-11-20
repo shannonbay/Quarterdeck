@@ -5,7 +5,7 @@
  * (see plugins/quarterdeck-goals/hooks/guard.ts); agents use the goal tools.
  */
 import {
-  schedulerPass, releaseLease, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
+  schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
@@ -13,7 +13,7 @@ import {
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
   FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
-  RunProgressSchema, GetItemSchema,
+  RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
 import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
 import { existsSync } from 'fs'
@@ -35,7 +35,12 @@ export async function goals_tick(args: unknown) {
     trackedRunIds: new Set(input.tracked_run_ids),
     maxConcurrent: input.max_concurrent,
     toolWatches: input.tool_watches,
+    rateLimits: input.rate_limits,
   })
+  // The session's usage windows were all below 100%: the hold no longer applies (another account)
+  if (pass.hold_cleared?.plan_id) {
+    record(pass.hold_cleared.plan_id, pass.hold_cleared.plan_id, 'run_hold_cleared', { reason: 'usage windows below 100%', until: pass.hold_cleared.until }, { via: 'plugin' })
+  }
   for (const run of pass.claimed) {
     record(run.goal_id, run.goal_id, 'agent_started', { run_id: run.run_id, trigger: run.trigger, holder: input.holder }, { via: 'plugin' })
   }
@@ -116,6 +121,14 @@ export async function set_goal_status(args: unknown) {
   updateGoal(input.goal_id, { status: input.status })
   record(input.goal_id, input.goal_id, 'goal_updated', { status: input.status }, human)
   return { goal_id: input.goal_id, status: input.status }
+}
+
+/** The person lifts the usage-limit hold (switched accounts, say); if the limit still applies, the next run sets it again. */
+export async function clear_run_hold(args: unknown) {
+  ClearRunHoldSchema.parse(args ?? {})
+  const hold = clearRunHold()
+  if (hold?.plan_id && getGoal(hold.plan_id)) record(hold.plan_id, hold.plan_id, 'run_hold_cleared', { until: hold.until }, human)
+  return { cleared: hold !== null }
 }
 
 export async function attach_agent(args: unknown) {

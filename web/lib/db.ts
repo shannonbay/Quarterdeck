@@ -85,6 +85,8 @@ export const verifyEventSecret = (planId: string, secret: string) => core.verify
 export const runHealthCheck = (planId: string) => core.runHealthCheck(getDb(), planId)
 export const listHealth = (planId: string, limit?: number) => core.listHealth(getDb(), planId, limit)
 export const healthDue = core.healthDue
+export const getRunHold = () => core.getRunHold(getDb())
+export const clearRunHold = () => core.clearRunHold(getDb())
 export const listToolCalls = (planId: string, limit?: number) => core.listToolCalls(getDb(), planId, limit)
 
 /** Number of recent decisions per category, and the suggestion threshold. */

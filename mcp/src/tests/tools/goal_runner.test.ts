@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
-  create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report,
+  create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, getRun, getGoal, getEvents, updateGoal, insertMemory, getMemory } from '../../db.js'
+import { createGoal, queueRun, getRun, getGoal, getEvents, updateGoal, insertMemory, getMemory, getRunHold } from '../../db.js'
 import { tmpdir } from 'os'
 import { getOpenPlan, getOpenRun, withScope } from '../../session.js'
 import type { PassResult } from '@quarterdeck/core'
@@ -402,5 +402,36 @@ describe('goal model', () => {
     await expect(create_goal({ name: 'Bad', objective: 'x', working_dir: tmpdir(), model: 'two words' })).rejects.toThrow(/isn't a model/)
     const goal = makeGoal()
     await expect(update_goal({ goal_id: goal, model: 'two words' })).rejects.toThrow(/isn't a model/)
+  })
+})
+
+describe('clear_run_hold (#104)', () => {
+  it('lifts the usage-limit hold and records it against the goal whose run set it', async () => {
+    const id = makeGoal('goal_hold')
+    const run = await claim(id)
+    await report_run_end({ run_id: run.run_id, answer: "You've hit your 5-hour limit" })
+    expect(getRunHold()).toMatchObject({ plan_id: id })
+    expect(await clear_run_hold({})).toEqual({ cleared: true })
+    expect(getRunHold()).toBeNull()
+    const ev = getEvents(id).filter((e) => e.event_type === 'run_hold_cleared')
+    expect(ev).toHaveLength(1)
+    expect(ev[0].actor).toBe('human')
+  })
+
+  it('changes nothing when there is no hold', async () => {
+    expect(await clear_run_hold({})).toEqual({ cleared: false })
+  })
+
+  it('goals_tick lifts the hold when every usage window is below 100%, and records it', async () => {
+    const id = makeGoal('goal_hold_auto')
+    const run = await claim(id)
+    await report_run_end({ run_id: run.run_id, answer: "You've hit your 5-hour limit" })
+    await goals_tick({ holder: 'session-A', rate_limits: [{ percent_used: 100 }] })
+    expect(getRunHold()).not.toBeNull()
+    await goals_tick({ holder: 'session-A', rate_limits: [{ percent_used: 12 }, { percent_used: 40 }] })
+    expect(getRunHold()).toBeNull()
+    const ev = getEvents(id).filter((e) => e.event_type === 'run_hold_cleared')
+    expect(ev).toHaveLength(1)
+    expect(ev[0].actor).toBe('agent')
   })
 })

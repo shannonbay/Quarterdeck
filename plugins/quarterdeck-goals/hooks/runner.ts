@@ -10,7 +10,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { RunEntry } from '../types'
-import { attachAgent, cancelRunRecord, failRun, releaseLease, reportWatch, resultText, tick, type ClaimedRun, type ToolWatch, type WatchStep } from './api'
+import { attachAgent, cancelRunRecord, failRun, releaseLease, reportWatch, resultText, tick, usageWindows, type ClaimedRun, type ToolWatch, type WatchStep } from './api'
 import { addRun, getNotice, getRuns, getSnapshot, removeRun, setGuardMissing, setNotice, setPlanMode } from './state'
 import { planModeBlocked, spawnModel } from './model'
 import { serverToolNames } from './names'
@@ -27,6 +27,9 @@ export const GUARD_MISSING = "Goal runs are paused: the quarterdeck-guard plugin
 /** Shown instead of "Offline" while plan mode refuses this plugin's calls. */
 export const PLAN_MODE_ON = 'Plan mode is on: goals wait (or run in the standing session) until it ends (Shift+Tab to leave it).'
 /** At start-up and after /reload-plugins the guard's tool can register a moment after ours: say nothing until it has been missing this long. */
+/** The last pass found goal runs held by the usage limit. */
+let lastPassHeld = false
+
 export const GUARD_GRACE_MS = 10_000
 const GUARD_RECHECK_MS = 2_000
 
@@ -36,6 +39,7 @@ export const HUMAN_ONLY_TOOLS = serverToolNames(
   'decide_item',
   'cancel_run',
   'set_goal_status',
+  'clear_run_hold',
   'attach_agent',
   'fail_run',
   'guard_check',
@@ -142,7 +146,10 @@ async function pass($: Engine): Promise<void> {
   if (guarded && (await getNotice($)) === GUARD_MISSING) await setNotice($, null)
   if (!guarded) return
   const runs = await getRuns($)
-  const { claimed, toolWatches } = await tick($, await $.session.id(), Object.values(runs).map((r) => r.runId))
+  // After a pass that found runs held, the session's usage windows go with the next: all below 100% lifts the hold (another account)
+  const rateLimits = lastPassHeld ? await usageWindows($) : null
+  const { claimed, toolWatches, held } = await tick($, await $.session.id(), Object.values(runs).map((r) => r.runId), true, rateLimits)
+  lastPassHeld = held
   for (const run of claimed) await start($, run)
   // After the runs, so a slow connector never holds a run back
   let fresh = false

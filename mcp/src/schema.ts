@@ -171,7 +171,10 @@ export const GoalsTickSchema = z.object({
   max_concurrent: z.number().int().min(1).max(10).optional().describe('Most runs at once across all goals (default 3)'),
   release: z.boolean().optional().describe('Give the scheduler lease up instead of running a pass (the session is ending)'),
   tool_watches: z.boolean().optional().describe('The caller checks tool watches: the due ones come back in tool_watches, to call and answer with watch_report'),
+  rate_limits: z.array(z.object({ percent_used: z.number() })).optional().describe("The session's usage windows: when there is at least one and none is at 100%, a usage-limit hold is lifted"),
 })
+
+export const ClearRunHoldSchema = z.object({})
 
 export const WatchReportSchema = z.object({
   watch_id: z.string(),

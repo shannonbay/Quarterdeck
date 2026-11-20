@@ -49,6 +49,7 @@ const HUMAN_ONLY = new Set([
   'decide_item',
   'cancel_run',
   'set_goal_status',
+  'clear_run_hold',
   'attach_agent',
   'fail_run',
   'guard_check',

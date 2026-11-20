@@ -15,7 +15,7 @@ import { archiveResolved, decideTick, failRun, nextIntervalRun, queueRun, queueR
 import { healthDue, runHealthCheck } from './health.js'
 import { checkCommandWatch, countUnqueuedWatchEvents, listWatches, markWatchEventsQueued, takeDueToolWatches, watchDue, type ToolWatchCall } from './watches.js'
 import type { GoalRun, Task } from './types.js'
-import { getRunHold, type RunHold } from './goal-changes.js'
+import { clearRunHold, getRunHold, usageWindowsClear, type RunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { checkStatuses } from './status-check.js'
 import { applyWatchRequest, isWatchRequest, rejectWatchRequest } from './watch-requests.js'
@@ -259,6 +259,8 @@ export interface PassResult {
   outdated?: true
   /** Tool watches that are due: the caller calls each tool and reports its answer (reportToolWatch). */
   tool_watches?: ToolWatchCall[]
+  /** The hold this pass lifted because the session's usage windows were all below 100% (the caller records it). */
+  hold_cleared?: RunHold
 }
 
 export interface PassOptions {
@@ -272,6 +274,8 @@ export interface PassOptions {
   ignoreLease?: boolean
   /** The caller can call tools (the plugin): due tool watches are handed to it in `tool_watches`. */
   toolWatches?: boolean
+  /** The session's usage windows (the plugin): all below 100% lifts a usage-limit hold. Left out, a hold stands. */
+  rateLimits?: { percent_used: number }[]
 }
 
 /** One scheduler pass: lease, stale runs, health checks, watches, then claim every due run. */
@@ -303,6 +307,8 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
   const withWatches = (r: PassResult): PassResult => (toolWatches.length ? { ...r, tool_watches: toolWatches } : r)
 
   // While the person's usage limit is reached, due runs wait (they stay due) until the reset
+  // A hold lifts by itself once the session's own usage windows show the limit no longer applies (another account)
+  const holdCleared = usageWindowsClear(opts.rateLimits) && getRunHold(db, now) ? clearRunHold(db) : null
   const hold = getRunHold(db, now)
   if (hold) return withWatches({ leader: true, claimed: [], expired, hold })
 
@@ -347,7 +353,7 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
     // A curation run does none of the goal's work, so it leaves the schedule's clock alone
     if ((run && decision.trigger !== 'curate') || decision.trigger === 'interval' || decision.trigger === 'cron') updateGoal(db, plan.id, { next_run_at: nextIntervalRun(db, plan.id, now) })
   }
-  return withWatches({ leader: true, claimed, expired })
+  return withWatches({ leader: true, claimed, expired, ...(holdCleared ? { hold_cleared: holdCleared } : {}) })
 }
 
 // ── Human decisions ───────────────────────────────────────────────────────────

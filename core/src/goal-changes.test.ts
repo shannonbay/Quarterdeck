@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, getGoal, getPlan, listMemory, insertMemory, queueRun, getRun, claimRun, schedulerPass, buildOverview,
-  applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
+  applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, clearRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
 } from './index.js'
 
 let db: Database
@@ -140,6 +140,38 @@ describe('the usage limit', () => {
     const after = await schedulerPass(db, { holder: 'A', now: new Date(2099, 0, 5, 20, 11) })
     expect(after.claimed).toHaveLength(1)
     expect(getRunHold(db, new Date(2099, 0, 5, 20, 11))).toBeNull()
+  })
+
+  it('records the goal whose run set it; clearing returns the hold, and with none changes nothing', () => {
+    const t = new Date(2099, 0, 5, 19, 30)
+    const run = claimRun(db, 'g1', { holder: 'A', now: t })!
+    reportRunEnd(db, run.run_id, { answer: "You've hit your 5-hour limit · resets 8:10pm" }, t)
+    expect(getRunHold(db, t)).toMatchObject({ plan_id: 'g1' })
+    expect(clearRunHold(db)).toMatchObject({ plan_id: 'g1' })
+    expect(getRunHold(db, t)).toBeNull()
+    expect(clearRunHold(db)).toBeNull()
+  })
+
+  it("a pass lifts it when the session's usage windows are all below 100%, and claims due runs in that pass", async () => {
+    const t = new Date(2099, 0, 5, 19, 30)
+    setRunHold(db, { until: new Date(2099, 0, 5, 20, 10).toISOString(), reason: 'limit', plan_id: 'g1' })
+    queueRun(db, 'g1')
+    const pass = await schedulerPass(db, { holder: 'A', now: t, rateLimits: [{ percent_used: 12 }, { percent_used: 99.5 }] })
+    expect(pass.hold).toBeUndefined()
+    expect(pass.hold_cleared).toMatchObject({ plan_id: 'g1' })
+    expect(pass.claimed).toHaveLength(1)
+    expect(getRunHold(db, t)).toBeNull()
+  })
+
+  it('a pass keeps it with a window at 100%, or with no windows given or an empty list', async () => {
+    const t = new Date(2099, 0, 5, 19, 30)
+    setRunHold(db, { until: new Date(2099, 0, 5, 20, 10).toISOString(), reason: 'limit', plan_id: 'g1' })
+    queueRun(db, 'g1')
+    for (const rateLimits of [[{ percent_used: 10 }, { percent_used: 100 }], undefined, []]) {
+      const pass = await schedulerPass(db, { holder: 'A', now: t, rateLimits })
+      expect(pass).toMatchObject({ claimed: [], hold: expect.objectContaining({ reason: 'limit' }) })
+      expect(pass.hold_cleared).toBeUndefined()
+    }
   })
 
   it('another error fails the run with its message; an ordinary turn changes nothing', () => {

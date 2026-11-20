@@ -33,6 +33,7 @@ export type EventType =
   | 'memory_deleted'
   | 'memory_restored'
   | 'memory_curated'
+  | 'run_hold_cleared'
 
 interface RecordEventOptions {
   planId: string
