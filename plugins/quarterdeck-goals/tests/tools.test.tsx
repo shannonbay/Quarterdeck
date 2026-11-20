@@ -21,6 +21,15 @@ test('goals_status summarises every goal for Claude, with item ids', async ($, o
   expect(text).toContain('Now: Waiting for its first run')
 })
 
+test('goal_detail asks the overview for that goal alone, not every goal card (#121)', async ($, on) => {
+  engine(on)
+  const fake = fakeQuarterdeck(on, [inbox(), goal({ id: 'g2', name: 'Invoices', instructions: 'Pay the invoices that match a purchase order' } as never)])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'invoices' } as never)
+  expect(String(res.result)).toContain('Pay the invoices that match a purchase order')
+  expect(fake.of('goals_overview').some((c) => c.input.only === true && JSON.stringify(c.input.detail) === '["g2"]' && c.input.full_instructions === true)).toBe(true)
+})
+
 const OLD_JOBS = { id: 'g9', name: 'Old jobs', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' }
 const DELETED_LINE = '"Old jobs" was deleted on 2026-11-06; it is purged on 2026-12-06 unless restored. Restore it from Recently deleted in the goals pane.'
 

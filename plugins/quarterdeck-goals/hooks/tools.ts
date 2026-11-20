@@ -216,14 +216,14 @@ export function deletedText(d: DeletedGoal): string {
 
 /** A goal's full detail, with its instructions uncut: goal_detail shows them, and update_goal checks instructions_edits against them. */
 async function withDetail($: Engine, goal: GoalCard): Promise<GoalCard> {
-  const res = await fetchOverview($, null, [goal.id], true)
+  const res = await fetchOverview($, null, [goal.id], true, true)
   const full = res.changed ? res.goals.find((g) => g.id === goal.id) : undefined
   return full ? toCard(full) : goal
 }
 
 /** A deleted goal's full detail (#105), so goal_detail can show its history and memory without restoring it; null when the server can't give it. */
 async function deletedDetail($: Engine, gone: DeletedGoal): Promise<GoalCard | null> {
-  const res = await fetchOverview($, null, [gone.id], true)
+  const res = await fetchOverview($, null, [gone.id], true, true)
   const full = res.changed ? res.deletedDetail.find((g) => g.id === gone.id) : undefined
   return full ? toCard(full) : null
 }
