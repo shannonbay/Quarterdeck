@@ -44,6 +44,10 @@ It started with one prompt: `/goal-new Sell my as-new (unused) birdcage on Faceb
 
 It sold for the asking price the day after the prompt. My part was approving each reply, choosing the buyer and giving the address; the agent never messaged anyone on its own.
 
+The whole sale on video (2 minutes, with sound and captions):
+
+[![I created a Claude Code agent to sell my birdcage from a single prompt (video)](https://img.youtube.com/vi/ufErT8vSRDw/maxresdefault.jpg)](https://www.youtube.com/watch?v=ufErT8vSRDw)
+
 ### A goal that never finishes: Flipper
 
 Selling one thing is a one-off goal, which moves to **Done** once nothing is left open. The Flipper goal is the standing kind: grow a NZ$200 budget by buying underpriced things on Facebook Marketplace and Trade Me and reselling them for a profit. Watches on Marketplace's free, furniture and appliance listings and on Trade Me start a run when something new is listed. Each run sorts the new titles by name and price alone, opens at most five, looks at every photo, and skips anything that needs a repair, like a freezer whose lid doesn't seal. A deal worth proposing comes with comparable sales, a resale estimate, the fuel for the round trip, the expected profit, a suggested offer and a pick-up time that fits my week. A ledger in its memory keeps the capital, the stock and each flip.
