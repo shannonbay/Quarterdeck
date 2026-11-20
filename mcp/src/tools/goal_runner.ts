@@ -44,7 +44,7 @@ export async function goals_tick(args: unknown) {
 
 export async function goals_overview(args: unknown) {
   const input = GoalsOverviewSchema.parse(args)
-  const { body, etag } = overviewWithEtag(input.detail ?? 'all', standingSessionId(), input.full_instructions === true)
+  const { body, etag } = overviewWithEtag(input.detail ?? 'all', standingSessionId(), input.full_instructions === true, input.only === true)
   return overviewAnswer(input.etag, body, etag, availableUpdate())
 }
 

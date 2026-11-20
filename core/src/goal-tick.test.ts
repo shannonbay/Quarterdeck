@@ -278,6 +278,27 @@ describe('guardToolCallForRun', () => {
 })
 
 describe('buildOverview', () => {
+  it('with only, gives just the goals in detail, whatever other goals there are (#121)', () => {
+    const add = (id: string) => createGoal(db, { id, name: `Goal ${id}`, description: null, status: 'active', working_dir: '/tmp', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+      { objective: 'o'.repeat(500), instructions: 'i'.repeat(5000) })
+    add('a1'); add('a2')
+    const o = buildOverview(db, ['a1'], null, true, true)
+    expect(o.goals.map((g) => g.id)).toEqual(['a1'])
+    expect(o.goals[0]).toMatchObject({ detail: true, instructions: 'i'.repeat(5000) })
+    const size = JSON.stringify(o).length
+    add('a3'); add('a4')
+    expect(JSON.stringify(buildOverview(db, ['a1'], null, true, true)).length).toBe(size)
+    // Without only, every goal still comes, as a card
+    expect(buildOverview(db, ['a1'], null, true).goals).toHaveLength(5)
+    // No deleted list; a deleted goal named in detail still comes in deleted_detail
+    deleteGoal(db, 'a2')
+    expect(buildOverview(db, ['a1'], null, true, true)).not.toHaveProperty('deleted')
+    expect(buildOverview(db, ['a1'], null, true)).toHaveProperty('deleted')
+    const gone = buildOverview(db, ['a2'], null, true, true)
+    expect(gone.goals).toEqual([])
+    expect(gone.deleted_detail!.map((g) => g.id)).toEqual(['a2'])
+  })
+
   it('stays small however much runs write: long text is clipped', () => {
     const long = 'x'.repeat(5000)
     for (let i = 0; i < 12; i++) {

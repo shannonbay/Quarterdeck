@@ -245,8 +245,13 @@ const CARD_CONTEXT = 1
 /**
  * `fullInstructions`: give the instructions uncut. The pane's view cuts them; Claude's goal_detail and
  * update_goal need the whole text to read it and to check an edit (instructions_edits) against it.
+ *
+ * `only`: with ids in `detail`, answer with just those goals (no cards for other goals, no `deleted` list),
+ * so goal_detail and update_goal on one goal don't carry every goal (#121).
  */
-export function buildOverview(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false) {
+export function buildOverview(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false, only = false) {
+  const asked = (id: string) => detail === 'all' || detail.includes(id)
+  const just = only && detail !== 'all'
   const all = listGoals(db)
   // Done one-offs (retired) are listed too, the newest few; other retired goals are not
   const done = all.filter(({ goal }) => goal.status === 'retired' && goal.one_off)
@@ -316,6 +321,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
       }
     }
   const goals = [...all.filter(({ goal }) => goal.status !== 'retired'), ...done]
+    .filter(({ plan }) => !just || asked(plan.id))
     .sort((a, b) => a.plan.name.localeCompare(b.plan.name))
     .map(entry)
     .map((g) => {
@@ -337,7 +343,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
     })
   const standing = standingSession !== null && leaseHolder(db) === standingSession
   // Deleted goals, newest first, for the pane's "Recently deleted" (Restore / Delete permanently)
-  const deleted = listGoals(db, { deleted: 'only' })
+  const deleted = just ? [] : listGoals(db, { deleted: 'only' })
     .sort((a, b) => (b.goal.deleted_at ?? '').localeCompare(a.goal.deleted_at ?? ''))
     .map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at!, purge_at: purgeDate(goal) }))
   // A deleted goal named in detail comes with its full detail (goal_detail reads its history and memory
@@ -356,7 +362,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
 export type Overview = ReturnType<typeof buildOverview>
 
 /** The overview's JSON and a strong ETag for it (quoted, as HTTP sends it). */
-export function overviewWithEtag(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false): { body: string; etag: string } {
-  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions))
+export function overviewWithEtag(db: Database, detail: OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false, only = false): { body: string; etag: string } {
+  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions, only))
   return { body, etag: `"${createHash('sha256').update(body).digest('base64url').slice(0, 27)}"` }
 }
