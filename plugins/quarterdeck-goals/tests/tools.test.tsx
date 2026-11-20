@@ -369,6 +369,19 @@ test('/goal-new news digest, ask me in the first run', async ($, on) => {
   expect(instructions).toContain('wait for my answer before building a digest')
 })
 
+test('/goal-new creates the Marketplace Flipper from a typed setup, every action proposed (#129)', async ($, on) => {
+  const { asked } = engine(on, { answers: ['More…', 'More…', 'More…', 'More…', 'Marketplace Flipper', 'Leeds, 20 km; 200; 30 or 40%; van; weekends'] })
+  const fake = fakeQuarterdeck(on, [])
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(asked.at(-1)).toContain('How should it flip?')
+  expect(made.text).toContain('Created the goal "Marketplace Flipper"')
+  const input = fake.of('create_goal')[0]?.input as Record<string, unknown>
+  expect(String(input.instructions)).toMatch(/^My setup (.*): Leeds, 20 km; 200; 30 or 40%; van; weekends. Watches: /)
+  expect(input.autonomy).toEqual({ 'marketplace.message': 'propose', 'marketplace.buy': 'propose', 'marketplace.list': 'propose', 'browser.act': 'propose' })
+  expect(input.tool_map).toMatchObject({ 'mcp__claude-in-chrome__computer': 'browser.act', 'mcp__claude-in-chrome__upload_image': 'browser.act' })
+})
+
 test('the job scan template asks what to look for and puts the answer in its instructions', async ($, on) => {
   const { asked } = engine(on, { answer: 'Weekly job scan' }) // the fake gives the same answer to both questions
   const fake = fakeQuarterdeck(on, [])

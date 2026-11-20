@@ -45,6 +45,9 @@ export type Template = {
 
 const DAY = 1440
 
+/** The Chrome tools that act on a page (the flipper's `browser.act`); reading tools stay unmapped. */
+const CHROME_WRITE_TOOLS = ['computer', 'form_input', 'javascript_tool', 'browser_batch', 'file_upload', 'upload_image']
+
 /** Tool rules for Gmail tools, whichever Gmail connector or server the session has. */
 function gmail(rules: Record<string, string>): Record<string, string> {
   return Object.fromEntries(Object.entries(rules).flatMap(([tool, category]) => [
@@ -723,7 +726,26 @@ export const TEMPLATES: Template[] = [
     tool_map: reviewRules(),
     needs: "the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. It reviews pull requests from the repo's owner, members and collaborators; testing one runs its code, so for anyone else's it asks you first",
   },
+  {
+    label: 'Marketplace Flipper',
+    name: 'Marketplace Flipper',
+    objective: 'Try to grow a small budget by buying underpriced items on Facebook Marketplace and reselling them, with every buy, message and listing approved by me',
+    instructions: '', // set below: FLIPPER_RULES
+    schedule: { kind: 'interval', minutes: DAY },
+    model: 'sonnet',
+    modelReason: 'it sorts listings and proposes buys, messages and listings you approve',
+    autonomy: { 'marketplace.message': 'propose', 'marketplace.buy': 'propose', 'marketplace.list': 'propose', 'browser.act': 'propose' },
+    tool_map: Object.fromEntries(CHROME_WRITE_TOOLS.map((tool) => [`mcp__claude-in-chrome__${tool}`, 'browser.act'])),
+    needs: "Claude in Chrome, signed in to Facebook. Facebook's terms forbid automated data collection, so its watches look at Marketplace only every 30 minutes, and you approve each one; every message, buy and listing waits for your approval",
+    ask: {
+      question: 'How should it flip? Type it under Other: your home area and how far you will travel, the starting budget, the minimum profit worth a trip, your vehicle (fuel use, any trailer) and when you are free for pick-ups and drop-offs, e.g. Wellington, 30 km; NZ$300; NZ$40 or 40% of the buy price, whichever is more; Corolla wagon, 7 L/100 km, no trailer; weekday evenings and Saturday mornings.',
+      later: 'Ask me in the first run',
+      laterText: '', // set below: FLIPPER_LATER is declared after the templates
+      fill: (answer) => `My setup (home area and travel distance; starting budget; minimum profit per trip; vehicle, fuel use and trailer; free times): ${answer}.`,
+    },
+  },
 ]
+
 
 /** A watch's jq test for a trusted author (escaped for the double quotes cmd.exe needs). */
 const ASSOC_WATCH = `(.author_association | IN(${TRUSTED_ASSOCIATIONS.map((a) => `\\"${a}\\"`).join(',')}))`
@@ -1151,7 +1173,39 @@ export const NEWS_LATER = [
   NEWS_RULES,
 ].join(' ') + " I'll answer by discussing this goal."
 
+/**
+ * What every Marketplace Flipper run follows, for any country and currency:
+ * the rules the maintainer's own flipping goal learned by trial and error.
+ */
+export const FLIPPER_RULES = [
+  "Watches: in your first run (and any later run while they aren't approved yet), open Facebook Marketplace's free, furniture and appliances listings and the Marketplace inbox for my area in Claude in Chrome, sorted newest first, and look at how their lines actually read there (the currency, how places are written).",
+  'Propose one Claude in Chrome tool watch for each with propose_watch, every 30 minutes, with a pattern you have tested on that page. Never hard-code a currency or a place you have not seen on the page.',
+  'In each watch, pick the tab id from tabs_create_mcp or tabs_context_mcp in an earlier step and pass it as tabId to every later page call (get_page_text and the rest).',
+  "Give the inbox watch an ignore pattern that drops my own sent messages (the openings you use, such as \"Hi <first name>, \" and \"Hi, is the \", and Facebook's \"You marked\" and \"reacted to your message\" lines), and start every message you send with one of those openings, so my own replies don't start runs.",
+  'You may also propose a Gmail tool watch for emails about a deal.',
+  'Triage: sort new lines into skip, maybe and open by title and price alone. Open at most 5 listings a run. Never record skipped listings in memory.',
+  'Look at every photo of a listing you open by downloading its image links (screenshots are guarded). Skip damage that affects how an item works.',
+  'Whiteware: only items listed as working. The message asks for it to be running at pick-up, and the pick-up includes a check. Fridges travel upright.',
+  "Free items first, since they go fast. For a moving sale, check the seller's other listings and offer a bundle.",
+  'Only propose a buy whose likely resale, less the buy price and the fuel for the trip (from my vehicle and fuel use), clears my minimum profit.',
+  'Keep a ledger in one memory (capital, stock, and each flip with its buy and sell price), replaced when it changes, and never let capital go below zero.',
+  "Never share my street address. Open only the chats about this goal's own deals: opening a chat marks it seen.",
+  'Propose each message as marketplace.message, each buy as marketplace.buy and each listing for resale as marketplace.list, and wait for my approval.',
+  'Sending a message in the browser also needs a browser.act approval, so propose a browser.act item with the same text alongside each marketplace.message item.',
+  'Chrome blocks Buy Now from a background run: when a buy is approved, ask me (add_item with ask_person) to buy it myself, with the link.',
+  "Arrange pick-ups and drop-offs within my free times. Don't promise a seller or buyer anything I haven't approved.",
+].join(' ')
+
+/** The instructions for a flipper whose setup the person will give later. */
+export const FLIPPER_LATER = [
+  'My setup: not set yet.',
+  'In your first run, add one item with ask_person asking for my home area and how far I will travel, my starting budget, the minimum profit worth a trip, my vehicle (fuel use, any trailer) and when I am free for pick-ups and drop-offs, and wait for my answer before proposing watches or deals.',
+].join(' ') + " I'll answer by discussing this goal."
+
 // Texts declared after the list, put in place
+const flipper = TEMPLATES.find((t) => t.name === 'Marketplace Flipper')!
+flipper.instructions = FLIPPER_RULES
+flipper.ask!.laterText = FLIPPER_LATER
 const jobScan = TEMPLATES.find((t) => t.name === 'Weekly Job Scan')!
 jobScan.ask!.laterText = ASK_LATER
 TEMPLATES.find((t) => t.name === 'Daily News Digest')!.ask!.laterText = NEWS_LATER
