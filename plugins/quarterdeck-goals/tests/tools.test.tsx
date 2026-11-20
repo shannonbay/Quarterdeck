@@ -400,6 +400,75 @@ test('a goal typed under Other goes the usual way', async ($, on) => {
   expect(fake.of('create_goal')[0]?.input).toMatchObject({ name: 'Inbox', objective: 'keep my inbox under 20 unread' })
 })
 
+const REFUSED = 'Quarterdeck was updated in another session and this session still runs the older version'
+const LONG = 'keep my inbox under 20 unread: archive newsletters, flag invoices from Acme and draft replies to anyone who asks about Thursday'
+
+test('while outdated, /goal-new, /goal-new <objective> and new_goal refuse before asking anything (#133)', async ($, on) => {
+  const { asked } = engine(on, { answer: 'Daily' })
+  const fake = fakeQuarterdeck(on, [], { outdated: true })
+  await $.session.start(START)
+  const alone = await $.command.run(typed('goal-new', ''))
+  expect(alone.text).toContain("Couldn't create the goal: Quarterdeck was updated in another session")
+  const withObjective = await $.command.run(typed('goal-new', `Inbox: ${LONG}`))
+  expect(withObjective.text).toContain("Couldn't create the goal: Quarterdeck was updated in another session")
+  expect(withObjective.text).toContain(`Your objective was: ${LONG}`)
+  const tool = await $.tool.call({ tool: 'mcp__quarterdeck-goals__new_goal', objective: LONG } as never)
+  expect(String(tool.result)).toContain('Quarterdeck was updated in another session')
+  expect(String(tool.result)).toContain(LONG)
+  expect(asked).toEqual([])
+  expect(fake.of('create_goal')).toEqual([])
+})
+
+test('when creating fails, /goal-new quotes the objective and puts the command back in an empty prompt, unsent (#133)', async ($, on) => {
+  const { box, clock, prompts } = engine(on, { answer: 'Daily' })
+  fakeQuarterdeck(on, [], { errors: { create_goal: REFUSED } })
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', `Inbox: ${LONG}`))
+  expect(made.text).toContain(`Couldn't create the goal: ${REFUSED}`)
+  expect(made.text).toContain(`Your objective was: ${LONG}`)
+  expect(made.text).toContain("It's back in your prompt.")
+  expect(box.draft).toBe('') // not while the command runs
+  await clock.advance(1_000)
+  await clock.settle()
+  expect(box.draft).toBe(`/goal-new Inbox: ${LONG}`)
+  expect(prompts).toEqual([])
+})
+
+test('when creating fails, an objective typed under Other is quoted and refilled; a draft is left alone (#133)', async ($, on) => {
+  const { box, clock } = engine(on, { answer: `Inbox: ${LONG}` })
+  fakeQuarterdeck(on, [], { errors: { create_goal: REFUSED } })
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toContain(`Your objective was: ${LONG}`)
+  box.draft = 'something else I started typing'
+  await clock.advance(1_000)
+  await clock.settle()
+  expect(box.draft).toBe('something else I started typing')
+})
+
+test('when new_goal fails, its error quotes the objective and the prompt is not touched (#133)', async ($, on) => {
+  const { box, clock, prompts } = engine(on, { answer: 'Daily' })
+  fakeQuarterdeck(on, [], { errors: { create_goal: REFUSED } })
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__new_goal', name: 'Inbox', objective: LONG } as never)
+  expect(String(res.result)).toContain(REFUSED)
+  expect(String(res.result)).toContain(`Your objective was: ${LONG}`)
+  expect(String(res.result)).not.toContain('back in your prompt')
+  await clock.advance(1_000)
+  await clock.settle()
+  expect(box.draft).toBe('')
+  expect(prompts).toEqual([])
+})
+
+test('when a template create fails, the answer to its question is quoted (#133)', async ($, on) => {
+  engine(on, { answer: 'Weekly job scan' }) // picks the template, then answers its question
+  fakeQuarterdeck(on, [], { errors: { create_goal: REFUSED } })
+  await $.session.start(START)
+  const made = await $.command.run(typed('goal-new', ''))
+  expect(made.text).toContain(`Couldn't create the goal: ${REFUSED}`)
+  expect(made.text).toContain('Your answer was: Weekly job scan')
+})
+
 test('the job scan also asks for a CV: find the latest, a typed path, or skip', async ($, on) => {
   const answers = ['Weekly job scan', 'senior engineer, remote, $150k+', 'Find my latest CV']
   const { asked } = engine(on, { answers })

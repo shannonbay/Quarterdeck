@@ -12,7 +12,8 @@ import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
 import { describeTodo, describeTodos, findTodo } from './todos'
-import { act, actFailure, refresh, refreshTodos } from './sync'
+import { act, actFailure, OUTDATED_NOTICE, refresh, refreshTodos } from './sync'
+import { getSnapshot } from './state'
 import { phoneHint, readLastAlert, readLastPoll, readTrace } from './alerts'
 import { CV_FIND, CV_QUESTION, CV_SKIP, cvInstructions, FIRST_CHOICES, FORGE_CHOICES, FORGE_QUESTION, FORGE_TEMPLATES, forgeAnswer, forgeDecision, MORE, NEEDS_REFINEMENT_LABEL, REFINED_LABEL, REPO_CI, REPO_GOALS, REPO_LABEL, TEMPLATES, type Template } from './templates'
 
@@ -401,6 +402,8 @@ export async function goalCommand($: Engine, command: 'goal-run' | 'goal-pause' 
  * A template's own question (the job scan's criteria) completes it.
  */
 async function newFromTemplate($: Engine): Promise<string> {
+  // Refused before any question, so nothing typed is lost to the server's refusal at the end (#133)
+  if ((await getSnapshot($)).outdated) return `Couldn't create the goal: ${OUTDATED_NOTICE}`
   let picked: string
   try {
     // A question holds 4 choices: a few templates, then More… for the next page
@@ -454,7 +457,9 @@ async function newFromTemplate($: Engine): Promise<string> {
   try {
     created = await createFromTemplate($, template, answer, instructions, cwd)
   } catch (err) {
-    return `Couldn't create the goal: ${err instanceof Error ? err.message : String(err)}`
+    // The typed answer is quoted so it survives the failure (#133); no command takes a template and its answer
+    const typed = template.ask && answer !== template.ask.later ? ` Your answer was: ${answer}` : ''
+    return `Couldn't create the goal: ${errorText(err)}${typed}`
   }
   await kick($)
   await refresh($)
@@ -576,6 +581,18 @@ function orList(names: string[]): string {
   return names.length < 3 ? names.join(' or ') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
 }
 
+/** An error's message, for an answer. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** Puts text in the prompt box when it is empty; a draft is left alone. Never submits. */
+async function refillPrompt($: Engine, text: string): Promise<void> {
+  const { text: draft } = await $.prompt.read()
+  if (draft.trim()) return
+  await $.prompt.fill({ text, mode: 'replace' })
+}
+
 /** How long after /goal-new answers its watch prompt goes into the conversation. */
 const WATCH_PROMPT_DELAY_MS = 500
 
@@ -595,6 +612,8 @@ export async function newGoal($: Engine, args: string): Promise<string> {
  * creates nothing. The watch set-up comes back in the answer rather than as a prompt.
  */
 async function createNewGoal($: Engine, given: string | null, objective: string, byClaude: boolean): Promise<{ created: boolean; text: string }> {
+  // Refused before the schedule question while this session runs an older Quarterdeck (#133)
+  if ((await getSnapshot($)).outdated) return { created: false, text: `Couldn't create the goal: ${OUTDATED_NOTICE} Your objective was: ${objective}` }
   const cwd = await $.session.root()
   const suggestion = await suggestSchedule($, given, objective)
   const name = given ?? suggestion.title ?? fallbackTitle(objective)
@@ -605,7 +624,12 @@ async function createNewGoal($: Engine, given: string | null, objective: string,
   try {
     await createGoal($, { name, objective, working_dir: cwd, schedule: choice.schedule, one_off: choice.oneOff, model })
   } catch (err) {
-    return { created: false, text: `Couldn't create the goal: ${err instanceof Error ? err.message : String(err)}` }
+    const failed = `Couldn't create the goal: ${errorText(err)} Your objective was: ${objective}`
+    if (byClaude) return { created: false, text: failed }
+    // The command goes back into an empty prompt once this one has answered (a command can't touch the
+    // prompt while it runs), never over a draft and never sent. The answer above already holds the text.
+    $.clock.after(WATCH_PROMPT_DELAY_MS, () => void refillPrompt($, `/goal-new ${name}: ${objective}`).catch(() => {}))
+    return { created: false, text: `${failed} It's back in your prompt.` }
   }
   await kick($) // a new interval or a one-off has a run due now
   await refresh($)
