@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { refineRules, triageRules } from '../../plugins/quarterdeck-goals/hooks/templates'
+import { refineRules, triageRules, githubRules, TRUSTED_ASSOCIATIONS } from '../../plugins/quarterdeck-goals/hooks/templates'
+import { TRUSTED } from '../../mcp/src/tools/trusted'
 import { tmpdir } from 'os'
 import type { Database } from './sqlite.js'
 import {
@@ -189,32 +190,26 @@ describe('goal guard', () => {
     expect(matchToolCategory({ 'Bash(gh issue view*)': 'untrusted' }, 'Bash', { command: 'gh issue view 3' })).toBe('untrusted')
   })
 
-  it("lets the Issue Fixer read a PR's inline comments, but no gh api write (inlineReadRules in the goals plugin)", () => {
-    const read = 'Bash(gh api repos/*/pulls/*/comments*)'
-    const map: Record<string, string> = { 'Bash(gh api*)': 'github.write', [read]: 'untrusted' }
-    for (const f of ['--method', '-X', '-f', '--input']) {
-      map[`${read.slice(0, -1)}${f}*)`] = 'github.write'
-    }
-    map['Bash(gh api repos/* -*/pulls/*/comments*)'] = 'github.write'
+  it("refuses every gh api form to the Issue Fixer, the inline comment read included: it reads through pr_inline_comments (#68)", () => {
+    const map = githubRules('code.merge')
     const jq = `--jq '[.[] | select(.author_association | IN("OWNER")) | {path, line, author: .user.login, body}]'`
-    expect(matchToolCategory(map, 'Bash', { command: `gh api repos/octo/my-app/pulls/65/comments ${jq}` })).toBe('untrusted')
-    // the placeholders fall to gh api* (commandParts splits at the braces)
-    expect(matchToolCategory(map, 'Bash', { command: `gh api repos/{owner}/{repo}/pulls/65/comments ${jq}` })).toBe('github.write')
     for (const c of [
-      'gh api repos/o/r/pulls/65/comments --method POST -f body=hi', 'gh api repos/o/r/pulls/65/comments -X POST -f body=hi',
-      'gh api repos/o/r/pulls/65/comments -XPOST', 'gh api repos/o/r/pulls/65/comments -F body=hi',
-      'gh api repos/o/r/pulls/65/comments --field body=hi', 'gh api repos/o/r/pulls/65/comments --raw-field body=hi',
-      'gh api repos/o/r/pulls/65/comments --input c.json', 'gh api repos/o/r/pulls/comments/9 -X DELETE',
-      'gh api repos/o/r/pulls/65/merge -X PUT', 'gh api user',
-      // a write flag before a later /pulls/<n>/comments text (review on #67)
-      'gh api repos/o/r/issues/1/comments -f body=see/pulls/1/comments', 'gh api repos/o/r/pulls/9/merge -X PUT --jq .x/pulls/1/comments',
-      'gh api repos/o/r/pulls/1/comments/5 -X DELETE --jq .a/pulls/1/comments',
-      'gh api repos/o/r/issues/1/comments -F body=see/pulls/1/comments', 'gh api repos/o/r/issues/1/comments --field body=x/pulls/1/comments',
-      'gh api repos/o/r/issues/1/comments -iX POST --jq .a/pulls/1/comments',
-    ]) expect([c, matchToolCategory(map, 'Bash', { command: c })]).toEqual([c, 'github.write'])
-    // a repo or owner name containing -f / -x is still a read (review on #67)
-    for (const r of ['octo/data-fetch', 'octo/react-fiber', 'my-xorg/app', 'octo/tool-x'])
-      expect([r, matchToolCategory(map, 'Bash', { command: `gh api repos/${r}/pulls/65/comments ${jq}` })]).toEqual([r, 'untrusted'])
+      // the old read, and the forms of it that write, clustered short flags included (#68)
+      `gh api repos/octo/my-app/pulls/65/comments ${jq}`, `gh api repos/{owner}/{repo}/pulls/65/comments ${jq}`,
+      'gh api repos/o/r/pulls/1/comments -iX POST', 'gh api repos/o/r/pulls/1/comments -pf body=x',
+      'gh api repos/o/r/pulls/1/comments -XPOST', 'gh api repos/o/r/pulls/1/comments -X POST -f body=hi',
+      'gh api repos/o/r/pulls/1/comments --input c.json', 'gh api repos/o/r/pulls/65/comments --method POST -f body=hi',
+      'gh api repos/o/r/pulls/65/comments -F body=hi', 'gh api repos/o/r/pulls/comments/9 -X DELETE',
+      ...['octo/data-fetch', 'octo/react-fiber', 'my-xorg/app'].map((r) => `gh api repos/${r}/pulls/65/comments ${jq}`),
+      // every other gh api call
+      'gh api repos/o/r/pulls/9/merge -X PUT', 'gh api user', 'gh api graphql -f query=x',
+    ]) {
+      for (const tool of ['Bash', 'PowerShell']) expect([c, tool, matchToolCategory(map, tool, { command: c })]).toEqual([c, tool, 'github.write'])
+    }
+  })
+
+  it("trusts the same people in the Issue Fixer's server tools as in its watches and reads", () => {
+    expect([...TRUSTED]).toEqual(TRUSTED_ASSOCIATIONS)
   })
 
   it("lets the PR reviewer's reviews endpoint past gh api* only with the repo written out (reviewRules in the goals plugin)", () => {

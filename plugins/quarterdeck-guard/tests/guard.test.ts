@@ -200,6 +200,14 @@ test("one-click unsubscribe goes through the goal's guard, and carries the run o
   expect(scopes).toEqual([])
 })
 
+test("the inline comment read goes through the goal's guard, like the other Quarterdeck tools that reach outside (#68)", async ($, on) => {
+  const { inputs } = world(on)
+  on('tool.call', { tool: 'mcp__quarterdeck__pr_inline_comments' }, () => ({ result: '{"comments":[]}' }) as never)
+  await $.session.start(START)
+  await $.tool.call(call({ tool: 'mcp__quarterdeck__pr_inline_comments', repo: 'o/r', pr: 1, agentId: 'run-agent' }))
+  expect(inputs).toHaveLength(1)
+})
+
 test('with the server from the quarterdeck-goals plugin, its tools are named mcp__plugin_quarterdeck-goals_quarterdeck__* and the same rules apply', async ($, on) => {
   const P = 'mcp__plugin_quarterdeck-goals_quarterdeck__'
   const { scopes } = world(on, P)

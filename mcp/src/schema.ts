@@ -215,6 +215,11 @@ export const ResolveReviewThreadSchema = z.object({
   comment_ids: z.array(z.number().int().positive()).min(1).max(50).describe("Ids of inline review comments you read and addressed with a change you pushed; the thread each belongs to is resolved"),
 })
 
+export const PrInlineCommentsSchema = z.object({
+  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('The repo as owner/name (from git remote get-url origin)'),
+  pr: z.number().int().positive().describe('The pull request number'),
+})
+
 export const DetectForgeSchema = z.object({
   working_dir: z.string().min(1).describe("The repo's folder (absolute path)"),
 })

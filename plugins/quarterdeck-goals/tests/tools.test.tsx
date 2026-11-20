@@ -494,7 +494,8 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
   // Tried under both sh and cmd.exe: only trusted authors' comments and reviews, as "<number> <id>", and no jq $variables
   expect(input.watches['comments on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"issue-fix/\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select((.authorAssociation | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))) | .id] | .[0] + \\" \\" + .[1:][]"')
   expect(input.instructions).toContain('pr-comment:<id>')
-  expect(input.instructions).toContain('pulls/<number>/comments')
+  expect(input.instructions).toContain('pr_inline_comments')
+  expect(input.instructions).not.toContain('pulls/<number>/comments') // the inline read is a server tool now (#68)
   expect(input.instructions).toContain('baseRefName')
   expect(input.instructions).toContain('git merge origin/<base>')
   expect(input.instructions).toContain('Never rebase')

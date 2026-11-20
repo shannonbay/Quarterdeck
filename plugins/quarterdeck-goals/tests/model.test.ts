@@ -7,7 +7,7 @@ import {
   statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
-  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
+  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
@@ -669,18 +669,16 @@ test('the news digest template: daily, sonnet, email proposed, discovery capped'
   expect(NEWS_LATER).toContain('wait for my answer before building a digest')
 })
 
-test('the issue fixer reads inline review comments with the repo written out; the read is untrusted, its write forms are off', () => {
+test('the issue fixer reads inline review comments through pr_inline_comments, which marks the run untrusted; every gh api call is off (#68)', () => {
   const t = TEMPLATES.find((x) => x.name === 'Issue Fixer')!
-  const read = 'gh api repos/*/pulls/*/comments*'
+  expect(t.tool_map[PR_INLINE_TOOL]).toBe('untrusted')
+  expect(TEMPLATES.find((x) => x.name === 'PR Reviewer')!.tool_map[PR_INLINE_TOOL]).toBeUndefined()
   for (const tool of ['Bash', 'PowerShell']) {
-    expect(t.tool_map[`${tool}(${read})`]).toBe('untrusted')
-    for (const flag of ['--method', '-X', '-f', '--input']) {
-      expect(t.autonomy[t.tool_map[`${tool}(${read}${flag}*)`]]).toBe('off')
-    }
-    expect(t.autonomy[t.tool_map[`${tool}(gh api repos/* -*/pulls/*/comments*)`]]).toBe('off') // any flag before the path text
     expect(t.autonomy[t.tool_map[`${tool}(gh api*)`]]).toBe('off')
+    expect(Object.keys(t.tool_map).filter((k) => k.startsWith(`${tool}(gh api `))).toEqual([])
   }
-  expect(ISSUE_FIX_WORK).toContain('gh api repos/<owner>/<name>/pulls/<number>/comments --jq')
+  expect(ISSUE_FIX_WORK).toContain('pr_inline_comments')
+  expect(ISSUE_FIX_WORK).not.toContain('/comments --jq')
   expect(ISSUE_FIX_WORK).not.toContain('repos/{owner}/{repo}/pulls')
 })
 

@@ -43,7 +43,7 @@ import {
   WatchReportSchema,
   RunProgressSchema,
   DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema,
-  UnsubscribeOneClickSchema, ResolveReviewThreadSchema, DetectForgeSchema,
+  UnsubscribeOneClickSchema, ResolveReviewThreadSchema, PrInlineCommentsSchema, DetectForgeSchema,
   TodoListSchema,
   TodoAddSchema,
   TodoSetSchema,
@@ -70,6 +70,7 @@ import {
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
 import { unsubscribe_one_click } from './tools/unsubscribe.js'
 import { resolve_review_thread } from './tools/resolve_review_thread.js'
+import { pr_inline_comments } from './tools/pr_inline_comments.js'
 import { detect_forge } from './tools/detect_forge.js'
 import { handleListResources, handleReadResource } from './resources.js'
 import { getRun } from './db.js'
@@ -226,6 +227,12 @@ const TOOLS = [
     description: "Marks the review threads of a pull request resolved, given the ids of inline review comments in them, once you have pushed a change that answers those comments. Only threads started by the repo's owner, members or collaborators on an open pull request; it posts nothing. In a goal run, only as the goal's rules allow.",
     inputSchema: zodToJsonSchema(ResolveReviewThreadSchema),
     handler: resolve_review_thread,
+  },
+  {
+    name: 'pr_inline_comments',
+    description: "A pull request's inline review comments (id, path, line, author, body), only those from the repo's owner, members and collaborators. Read-only: it posts nothing. In a goal run, only as the goal's rules allow; it reads outside text.",
+    inputSchema: zodToJsonSchema(PrInlineCommentsSchema),
+    handler: (args: unknown) => pr_inline_comments(args),
   },
   {
     name: 'detect_forge',

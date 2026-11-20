@@ -26,7 +26,7 @@ test("the issue fixer's instructions read issues and pull requests through its f
     expect(text).not.toContain(GITHUB.issueRead)
   }
   const work = issueFixWork(other)
-  expect(work).toContain("read its feedback with OTHER-PR-READ, and a review's inline comments with OTHER-INLINE-READ ")
+  expect(work).toContain("read its feedback with OTHER-PR-READ, and a review's inline comments with OTHER-INLINE-READ;")
   expect(work).toContain('status_check (kind other_pr,')
   for (const github of [GITHUB.prRead, GITHUB.prInlineRead, 'kind github_pr']) expect(work).not.toContain(github)
   // The GitHub goal keeps the gh commands it had.
@@ -117,7 +117,9 @@ test('a fixer status names its forge\'s pull request check, github_pr by default
 test('the GitHub forge carries the read commands, unchanged and trusting only the owner, members and collaborators (#44)', async () => {
   expect(GITHUB.issueRead).toBe(`gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {author: .author.login, body}]}'`)
   expect(GITHUB.prRead).toBe(`gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, author: .author.login, state, body}]}'`)
-  expect(GITHUB.prInlineRead).toBe(`gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) | {id, path, line, author: .user.login, body}]'`)
+  // GitHub's inline comment read goes through the server tool, which no flag can turn into a write (#68).
+  expect(GITHUB.prInlineRead).toContain('pr_inline_comments')
+  expect(GITHUB.prInlineRead).not.toContain('gh api')
 })
 
 test("the refiner's and triage's tool rules name the forge's commands, not gh's (#44)", async () => {
@@ -153,11 +155,10 @@ test("the refiner's and triage's tool rules name the forge's commands, not gh's 
   expect(fixer['Bash(xx mr discussions*)']).toBe('untrusted')
   expect(fixer['Bash(xx mr discussions *--post*)']).toBe('xx.write')
   // GitHub's keep their gh commands.
+  // GitHub has no rule for the inline read (#68): every gh api call falls to gh api*, the write category.
   const ghFixer = githubRules('code.merge')
-  expect(ghFixer['Bash(gh api repos/*/pulls/*/comments*)']).toBe('untrusted')
-  for (const k of ['gh api repos/*/pulls/*/comments*--method*', 'gh api repos/*/pulls/*/comments*-X*', 'gh api repos/*/pulls/*/comments*-f*', 'gh api repos/*/pulls/*/comments*--input*', 'gh api repos/* -*/pulls/*/comments*']) {
-    expect(ghFixer[`Bash(${k})`]).toBe('github.write')
-  }
+  expect(Object.keys(ghFixer).filter((k) => k.includes('gh api') && k !== 'Bash(gh api*)' && k !== 'PowerShell(gh api*)')).toEqual([])
+  expect(ghFixer['Bash(gh api*)']).toBe('github.write')
   const ghReview = reviewRules()
   expect(ghReview['Bash(gh api repos/*/pulls/*/reviews*)']).toBe('github.review')
   for (const k of ['gh pr view*', 'gh pr diff*', 'gh pr checkout*']) expect(ghReview[`Bash(${k})`]).toBe('untrusted')
