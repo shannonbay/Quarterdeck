@@ -1,6 +1,6 @@
 # Quarterdeck
 
-Quarterdeck gives Claude Code standing goals: things you want kept true, like "unsubscribe me from mailing lists I never read", "find me the three best new job ads each week" or "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the Goals pane beside your chat. It remembers what you decided, so a rejection with "too formal" shapes later runs.
+Quarterdeck gives Claude Code standing goals: things you want kept true, like "sell my birdcage on Facebook Marketplace", "find me the three best new job ads each week" or "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the Goals pane beside your chat. It remembers what you decided, so a rejection with "too formal" shapes later runs.
 
 Start with `/goal-new`: pick a ready-made goal or type your own.
 
