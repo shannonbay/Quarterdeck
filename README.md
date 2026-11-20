@@ -4,6 +4,23 @@
 
 **Quarterdeck keeps Claude on top of things for you.**
 
+One prompt, `/goal-new Sell my birdcage on Facebook Marketplace`, and it sold for the asking price the next day. Claude wrote and posted the listing, answered five buyers and lined up the pick-up, and every message waited for my OK first.
+
+![The birdcage sale: the /goal-new prompt, the listing waiting for approval in the Goals pane, the listing live on Facebook, approved replies to buyers, two buyers wanting it at once, the sale confirmed, and the listing marked out of stock](docs/birdcage-sale.gif)
+
+*[How the sale went](#example-selling-a-birdcage) · [the whole sale on video](https://www.youtube.com/watch?v=ufErT8vSRDw) (2 min) · [an agent fixing issues on this repo](https://www.youtube.com/watch?v=okKu9MnWZ5Y) (80 s). Buyers' names are changed and older chats blurred; the opening was re-created with a cleaner prompt, and the rest is screenshots from the real sale.*
+
+Install it in two commands (you need Claude Code and Node.js 22.13+), then type `/goal-new` in Claude Code:
+
+```bash
+claude plugin marketplace add shannonbay/Quarterdeck#release
+claude plugin install quarterdeck-goals@quarterdeck --scope user
+```
+
+More in the [Quickstart](#quickstart).
+
+## What it is
+
 It's a Claude Code plugin that turns Claude into a personal assistant: it keeps looking after the things you hand it, asks before it does anything you haven't allowed, and remembers what you decided.
 
 You give it **goals**: "sell my birdcage on facebook marketplace", "fix new issues on my repo", "find me the three best new job ads each week", "turn NZ$200 into more by flipping Marketplace bargains", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
@@ -30,11 +47,7 @@ Start with `/goal-new`: pick a ready-made goal (maintain my repo, which sets up 
 
 ## Example: selling a birdcage
 
-It started with one prompt: `/goal-new Sell my as-new (unused) birdcage on Facebook Marketplace. I live in Tawa, Wellington. The photos are the two newest pictures in my Pictures folder. Price $50, pick-up only.`
-
-![The birdcage sale: the /goal-new prompt, the listing waiting for approval in the Goals pane, the listing live on Facebook, approved replies to buyers, two buyers wanting it at once, the sale confirmed, and the listing marked out of stock](docs/birdcage-sale.gif)
-
-*The buyers' names are changed and older chats are blurred. The opening was re-created with a cleaner prompt; the rest is screenshots from the real sale.*
+It started with one prompt: `/goal-new Sell my as-new (unused) birdcage on Facebook Marketplace. I live in Tawa, Wellington. The photos are the two newest pictures in my Pictures folder. Price $50, pick-up only.` The GIF at the top shows it.
 
 1. The first run found the two photos, wrote the listing (dimensions in centimetres, category, condition) and proposed posting it. Nothing went up until I approved it in the Goals pane.
 2. Approved, the next run filled in Facebook's form through Claude in Chrome, published the listing and turned down Facebook's offer to boost it for a fee.
