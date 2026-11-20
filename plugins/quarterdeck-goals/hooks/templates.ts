@@ -161,10 +161,10 @@ export type ForgeRules = {
   prCheckout: string
   /** Posts a pull request review, the PR reviewer's one write. */
   reviewPost: string
-  /** Reads a pull request's inline review comments, the Issue Fixer's one API read. */
-  inlineRead: string
-  /** Forms of `inlineRead` that would make it a write (a method, field or input flag), each longer so it wins. */
-  inlineWrites: string[]
+  /** Reads a pull request's inline review comments, for a forge whose read a glob can hold (GitHub's goes through the server tool pr_inline_comments instead, #68). */
+  inlineRead?: string
+  /** Forms of `inlineRead` that would make it a write, each longer so it wins. */
+  inlineWrites?: string[]
 }
 
 /** The commands the issue refiner runs besides its issue reads and watches, in the host's own CLI. */
@@ -243,7 +243,7 @@ export const GITHUB: Forge = {
   prCheck: 'github_pr',
   issueRead: `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {author: .author.login, body}]}'`,
   prRead: `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`,
-  prInlineRead: `gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {id, path, line, author: .user.login, body}]'`,
+  prInlineRead: 'the pr_inline_comments tool (repo as owner/name, from git remote get-url origin, and the pull request number), which returns only those from the people it trusts as {id, path, line, author, body}',
   watches: {
     pulls: (trusted) => pullWatch(trusted),
     issues: (trusted, without) => issueWatch(trusted, without),
@@ -289,10 +289,6 @@ export const GITHUB: Forge = {
     prDiff: 'gh pr diff',
     prCheckout: 'gh pr checkout',
     reviewPost: 'gh api repos/*/pulls/*/reviews',
-    inlineRead: 'gh api repos/*/pulls/*/comments',
-    // A flag after the path, or any flag before it with the path text later (a field value, a --jq argument). A repo path has
-    // no spaces, so the space keeps a `-f` or `-x` inside an owner or repo name (data-fetch, my-xorg) from counting.
-    inlineWrites: [...['--method', '-X', '-f', '--input'].map((flag) => `gh api repos/*/pulls/*/comments*${flag}`), 'gh api repos/* -*/pulls/*/comments'],
   },
   triage: {
     read: 'gh issue view <number> --json number,title,body,labels,author,url',
@@ -350,9 +346,10 @@ export function githubRules(merge: string, forge: Forge = GITHUB): Record<string
  * flag (which would make it a write) back to the forge's write category, wherever it stands.
  */
 function inlineReadRules(forge: Forge): Record<string, string> {
+  if (!forge.rules.inlineRead) return {}
   return {
     [`${forge.rules.inlineRead}*`]: 'untrusted',
-    ...Object.fromEntries(forge.rules.inlineWrites.map((w) => [`${w}*`, forge.write])),
+    ...Object.fromEntries((forge.rules.inlineWrites ?? []).map((w) => [`${w}*`, forge.write])),
   }
 }
 
@@ -362,6 +359,14 @@ function inlineReadRules(forge: Forge): Record<string, string> {
  * `code.pull_request`, so approving the push approves resolving the threads it answers.
  */
 export const RESOLVE_THREAD_TOOL = 'mcp__quarterdeck__resolve_review_thread'
+
+/**
+ * The server tool that reads a pull request's inline review comments, trusted authors' only (#68). A tool and not a
+ * `gh api .../comments` rule: a glob's `*` matches any flag, so no rule could allow the read's `--jq` and refuse every
+ * write flag (a clustered `-iX POST` got past ones that named them). With no rule for the read, every `gh api` call
+ * falls to `gh api*`, the write category. `untrusted`: it reads outside text.
+ */
+export const PR_INLINE_TOOL = 'mcp__quarterdeck__pr_inline_comments'
 
 /**
  * The PR reviewer's command rules: posting a review through the reviews
@@ -688,7 +693,7 @@ export const TEMPLATES: Template[] = [
     model: 'opus',
     modelReason: 'it writes fixes and features for you to review',
     autonomy: { 'code.pull_request': 'propose', 'code.merge': 'off', 'github.write': 'off' },
-    tool_map: { ...githubRules('code.merge'), [RESOLVE_THREAD_TOOL]: 'code.pull_request' },
+    tool_map: { ...githubRules('code.merge'), [RESOLVE_THREAD_TOOL]: 'code.pull_request', [PR_INLINE_TOOL]: 'untrusted' },
     needs: `the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. Waiting for ${REFINED_LABEL}, it starts on an issue once someone with triage rights (you, or the Issue Refiner once you approve) labels it; otherwise it works on issues opened by the repo's owner, members and collaborators, and asks you first about anyone else's`,
     ask: {
       question: `Should it wait until an issue is labelled ${REFINED_LABEL}? The Issue Refiner goal adds that label once you approve its spec for the issue, so the fixer builds from a spec rather than guessing.`,
@@ -900,7 +905,7 @@ export const issueFixWork = (forge: Forge) => [
   "If an issue is unclear, or isn't something this project should do, don't build it: say why in your summary. Remember which issues you've handled.",
   `Another watch starts a run when CI fails on one of your pull requests: watch_events lists the failed run ids under "${ISSUE_FIX_CI_WATCH}". For each, find its branch with ${forge.fixer.runBranch}. If that pull request is closed or merged, or a later run on the branch has passed, add nothing. Otherwise read the failure with ${forge.fixer.runLog}, fix it on that branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what failed and what you changed. Push to the same branch only once I approve, then complete the item. If the failure isn't caused by your change (a flaky test, something already broken on the default branch), change nothing and say so in your summary. Never force-push, or change the CI workflow to make it pass.`,
   `Another watch starts a run when one of your pull requests no longer merges cleanly: watch_events lists <number>@<head sha> under "${ISSUE_FIX_CONFLICT_WATCH}". For each, skip it if the pull request is closed or merged, or its head isn't that sha any more. Otherwise, in your clone, fetch, check out its branch and merge the latest of the pull request's base branch into it (git merge origin/<base>; find the base with ${forge.fixer.prBase}: it isn't always the default branch, since a pull request can be based on another). Never rebase: pushing a rebase needs a force-push. Resolve each conflict keeping what both sides meant; if one needs a design decision you can't make from the code, abort the merge (git merge --abort) and ask me (add_item with ask_person) instead. Run the checks until they pass, commit the merge, then propose one code.pull_request item (external_ref pr-conflict:<number>@<sha>) naming the files that conflicted and how you resolved each. Push to the same branch (a plain git push) only once I approve, then complete the item. If a pull request based on that branch now conflicts too, handle it the same way in the same run.`,
-  `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${forge.prRead}, and a review's inline comments with ${forge.prInlineRead} (write the repo out as owner/name, from git remote get-url origin: repos/{owner}/{repo} is refused); these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked, saying what you changed and which inline comments' threads you will resolve. Push to the same branch (a plain git push) only once I approve, then call resolve_review_thread (repo as owner/name, the pull request number, and the ids of the inline review comments the change answers) so their threads show as resolved, then complete the item. Resolve only threads the change really answers, and say which in your summary; leave the rest open, and don't resolve a thread you disagree with or only replied to. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on ${forge.name}. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
+  `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${forge.prRead}, and a review's inline comments with ${forge.prInlineRead}; these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked, saying what you changed and which inline comments' threads you will resolve. Push to the same branch (a plain git push) only once I approve, then call resolve_review_thread (repo as owner/name, the pull request number, and the ids of the inline review comments the change answers) so their threads show as resolved, then complete the item. Resolve only threads the change really answers, and say which in your summary; leave the rest open, and don't resolve a thread you disagree with or only replied to. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on ${forge.name}. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
   `The first run (no watch_events, and no clone yet) only sets up the clone and lists the numbers and authors of the issues already open in its summary (${forge.fixer.openIssues}, not their titles or text); fix those only when I ask.`,
   STATUS('PR #<number> awaiting review', 'pull request', forge),
 ].join(' ')

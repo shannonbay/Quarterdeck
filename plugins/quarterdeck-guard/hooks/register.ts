@@ -234,7 +234,7 @@ function reportProgress($: Engine, runId: string, event: 'tool' | 'waiting' | 's
  * Quarterdeck tools with an effect outside the computer: a run may use them only
  * as the goal's guard allows (its tool rules map them to an action category).
  */
-const GUARDED_QUARTERDECK = new Set(['unsubscribe_one_click', 'resolve_review_thread'])
+const GUARDED_QUARTERDECK = new Set(['unsubscribe_one_click', 'resolve_review_thread', 'pr_inline_comments'])
 const isGuardedQuarterdeck = (tool: string) => GUARDED_QUARTERDECK.has(serverTool(tool) ?? '')
 
 /**

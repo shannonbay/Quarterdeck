@@ -14,9 +14,7 @@ import { ResolveReviewThreadSchema } from '../schema.js'
 import { defaultRunFile, type RunFile } from '@quarterdeck/core'
 import { getOpenPlan } from '../session.js'
 import { record } from '../history.js'
-
-/** GitHub's author_association for the repo's owner, members and collaborators (the same people the Issue Fixer's watches trust: TRUSTED_ASSOCIATIONS in the goals plugin's templates). */
-const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR']
+import { TRUSTED } from './trusted.js'
 
 const THREADS_QUERY = 'query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state reviewThreads(first:100){nodes{id isResolved comments(first:100){nodes{databaseId authorAssociation}}}}}}}'
 const RESOLVE_MUTATION = 'mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}'
