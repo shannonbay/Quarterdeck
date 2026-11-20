@@ -193,6 +193,26 @@ export async function checkWatches(db: Database, planIds: string[], now: Date = 
 }
 
 /**
+ * Checks a goal's baselined command watches, due or not, as a run that no watch started
+ * (manual, schedule, decision) is claimed, within `budgetMs`. What they already show
+ * becomes that run's watch_events, so the re-check as it ends sees only what changed
+ * during it and doesn't queue a watch run for what it already handled. Out of time, the
+ * watches not reached are left for their ordinary check. Returns how many it checked; the
+ * caller marks what they found queued once the run is claimed (unclaimed, it rides on that run).
+ */
+export async function checkWatchesAtClaim(db: Database, planId: string, now: Date = new Date(), budgetMs = WATCH_BUDGET_MS): Promise<number> {
+  const started = Date.now()
+  let checked = 0
+  for (const watch of listWatches(db, planId)) {
+    if (watch.kind !== 'command' || !watch.baseline_at) continue
+    if (Date.now() - started >= budgetMs) break
+    await checkCommandWatch(db, watch.id, now).catch(() => { /* the watch or its goal went away meanwhile */ })
+    checked++
+  }
+  return checked
+}
+
+/**
  * Queues a run (trigger 'watch') for a goal whose watches saw something new.
  * Each event queues at most one run: with a run already queued it rides on
  * that one, and with a run going it waits for the pass after it ends.
@@ -273,6 +293,7 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
   }
 
   // Then watches: something new queues a run, which also starts in this pass
+  const watchesStarted = Date.now()
   await checkWatches(db, goals.map(({ plan }) => plan.id), now)
   for (const { plan } of goals) queueForWatchEvents(db, plan.id, now)
   // Then status checks: a status that no longer holds changes (or shows stale) without a run
@@ -308,8 +329,16 @@ export async function schedulerPass(db: Database, opts: PassOptions): Promise<Pa
       continue
     }
     if (running >= max) continue // stays due; the next pass picks it up
+    // A run no watch started first takes what the goal's watches already show (sharing the pass's watch time)
+    let checkedAtClaim = 0
+    if (decision.trigger !== 'watch' && decision.trigger !== 'curate') {
+      const left = WATCH_BUDGET_MS - (Date.now() - watchesStarted)
+      if (left > 0) checkedAtClaim = await checkWatchesAtClaim(db, plan.id, now, left)
+    }
     const run = claimRun(db, plan.id, { holder: opts.holder, queuedRunId: decision.queuedRunId, trigger: decision.trigger, now })
     if (run) {
+      // Its brief takes what the claim-time check found: none of it queues a run of its own
+      if (checkedAtClaim) markWatchEventsQueued(db, plan.id, now)
       claimed.push(run)
       running++
     }

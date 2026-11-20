@@ -6,7 +6,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, getGoal, getOpenRun, listRuns, buildBrief, claimRun, endRun, failRun, schedulerPass,
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
-  takeWatchEvents, checkWatches, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal, purgeGoal,
+  takeWatchEvents, checkWatches, checkWatchesAtClaim, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal, purgeGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
   matchLines, commandLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
@@ -302,6 +302,64 @@ describe('the scheduler pass', () => {
     await selfLoop('d')
     expect(getGoal(db, 'g1')!.status).toBe('paused')
     expect(getWatch(db, w.id)!.last_fired_at).not.toBeNull()
+  })
+
+  it('a Run now takes what a not-yet-due watch already shows, and no watch run follows it', async () => {
+    items('a')
+    const w = setWatch(db, 'g1', 'x', { command: LIST, every_minutes: 1000 })
+    await checkWatches(db, ['g1'])
+    items('a', '100') // the line appears before the watch is due again
+    queueRun(db, 'g1', 'manual')
+    const { claimed } = await schedulerPass(db, { holder: 'A' })
+    expect(claimed).toHaveLength(1)
+    expect(buildBrief(db, 'g1', claimed[0].run_id).watch_events).toEqual([{ watch: 'x', new: ['100'], omitted: 0 }])
+    expect(getWatch(db, w.id)!.last_checked_at).not.toBeNull()
+    endRun(db, claimed[0].run_id, 'handled 100')
+    expect((await schedulerPass(db, { holder: 'A' })).claimed).toEqual([])
+    expect(getOpenRun(db, 'g1')).toBeUndefined()
+    expect(getRun(db, claimed[0].run_id)!.self_caused).toBe(0)
+  })
+
+  it('a line that appears during a run still starts a self-caused watch run after it', async () => {
+    items('a')
+    setWatch(db, 'g1', 'x', { command: LIST, every_minutes: 1000 })
+    await checkWatches(db, ['g1'])
+    queueRun(db, 'g1', 'manual')
+    const first = (await schedulerPass(db, { holder: 'A' })).claimed[0]
+    buildBrief(db, 'g1', first.run_id)
+    items('a', 'b')
+    endRun(db, first.run_id, 'done')
+    const next = (await schedulerPass(db, { holder: 'A' })).claimed
+    expect(next).toHaveLength(1)
+    expect(getRun(db, next[0].run_id)!.trigger).toBe('watch')
+    expect(buildBrief(db, 'g1', next[0].run_id).watch_events).toEqual([{ watch: 'x', new: ['b'], omitted: 0 }])
+    expect(getRun(db, next[0].run_id)!.self_caused).toBe(1)
+  })
+
+  it('a watch run does not check watches at claim, and a watch with no baseline is never checked there', async () => {
+    items('a')
+    const w = setWatch(db, 'g1', 'x', { command: LIST, every_minutes: 1000 })
+    expect(await checkWatchesAtClaim(db, 'g1')).toBe(0) // no baseline yet: its first check stays the baseline
+    expect(getWatch(db, w.id)!.baseline_at).toBeNull()
+    await checkWatches(db, ['g1'])
+    items('a', 'b')
+    queueRun(db, 'g1', 'watch')
+    const checkedAt = getWatch(db, w.id)!.last_checked_at
+    const { claimed } = await schedulerPass(db, { holder: 'A' })
+    expect(claimed).toHaveLength(1)
+    expect(getWatch(db, w.id)!.last_checked_at).toBe(checkedAt)
+    expect(buildBrief(db, 'g1', claimed[0].run_id).watch_events ?? []).toEqual([])
+  })
+
+  it('the claim-time check stops starting watches once out of time', async () => {
+    items('a')
+    setWatch(db, 'g1', 'x', { command: LIST })
+    await checkWatches(db, ['g1'])
+    items('a', 'b')
+    expect(await checkWatchesAtClaim(db, 'g1', new Date(), 0)).toBe(0)
+    expect(listWatchEvents(db, 'g1')).toEqual([])
+    expect(await checkWatchesAtClaim(db, 'g1')).toBe(1)
+    expect(listWatchEvents(db, 'g1').map((e) => e.line)).toEqual(['b'])
   })
 
   it('a watch run started by an ordinary check is not self-caused', async () => {
