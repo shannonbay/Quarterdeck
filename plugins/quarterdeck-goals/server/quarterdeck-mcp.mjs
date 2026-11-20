@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.30.3, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.31.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -7300,7 +7300,8 @@ function runMigrations(db2) {
     CREATE TABLE IF NOT EXISTS goal_run_hold (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
       until  TEXT NOT NULL,
-      reason TEXT NOT NULL
+      reason TEXT NOT NULL,
+      plan_id TEXT
     );
   `);
   db2.exec(`
@@ -7396,6 +7397,10 @@ function runMigrations(db2) {
     } catch {
     }
   }
+  try {
+    db2.exec("ALTER TABLE goal_run_hold ADD COLUMN plan_id TEXT");
+  } catch {
+  }
   if (dbSchemaVersion(db2) < 17) db2.exec("DROP TRIGGER IF EXISTS trg_goal_watches_update_revision");
   db2.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
@@ -7439,7 +7444,7 @@ var SCHEMA_VERSION, OUTDATED_MESSAGE;
 var init_migrate = __esm({
   "../core/src/migrate.ts"() {
     "use strict";
-    SCHEMA_VERSION = 19;
+    SCHEMA_VERSION = 20;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -9723,7 +9728,7 @@ function applyGoalChanges(db2, planId, changes) {
   return done;
 }
 function getRunHold(db2, now = /* @__PURE__ */ new Date()) {
-  const row = db2.prepare("SELECT until, reason FROM goal_run_hold WHERE id = 1").get();
+  const row = db2.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
   if (!row) return null;
   if (row.until <= now.toISOString()) {
     db2.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
@@ -9732,7 +9737,16 @@ function getRunHold(db2, now = /* @__PURE__ */ new Date()) {
   return row;
 }
 function setRunHold(db2, hold) {
-  db2.prepare("INSERT INTO goal_run_hold (id, until, reason) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason").run(hold.until, hold.reason);
+  db2.prepare("INSERT INTO goal_run_hold (id, until, reason, plan_id) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason, plan_id = excluded.plan_id").run(hold.until, hold.reason, hold.plan_id ?? null);
+}
+function clearRunHold(db2) {
+  const row = db2.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
+  if (!row) return null;
+  db2.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
+  return row;
+}
+function usageWindowsClear(rateLimits) {
+  return !!rateLimits && rateLimits.length > 0 && rateLimits.every((w) => typeof w.percent_used === "number" && w.percent_used < 100);
 }
 function isUsageLimit(text) {
   return LIMIT.test(text);
@@ -9766,7 +9780,7 @@ function reportRunEnd(db2, runId, input, now = /* @__PURE__ */ new Date()) {
   const answer = input.answer.trim();
   if (isUsageLimit(answer)) {
     const until = (parseLimitReset(answer, now) ?? new Date(now.getTime() + DEFAULT_HOLD_MS)).toISOString();
-    const hold = { until, reason: answer.split("\n")[0].slice(0, 200) };
+    const hold = { until, reason: answer.split("\n")[0].slice(0, 200), plan_id: run.plan_id };
     updateRun(db2, runId, { status: "skipped", skip_reason: `usage limit reached: ${hold.reason}`, ended_at: now.toISOString() });
     releaseWatchEvents(db2, runId, { requeue: true });
     setRunHold(db2, hold);
@@ -10423,6 +10437,18 @@ async function checkWatches(db2, planIds, now = /* @__PURE__ */ new Date(), budg
   }
   return checked;
 }
+async function checkWatchesAtClaim(db2, planId, now = /* @__PURE__ */ new Date(), budgetMs = WATCH_BUDGET_MS) {
+  const started = Date.now();
+  let checked = 0;
+  for (const watch of listWatches(db2, planId)) {
+    if (watch.kind !== "command" || !watch.baseline_at) continue;
+    if (Date.now() - started >= budgetMs) break;
+    await checkCommandWatch(db2, watch.id, now).catch(() => {
+    });
+    checked++;
+  }
+  return checked;
+}
 function queueForWatchEvents(db2, planId, now = /* @__PURE__ */ new Date()) {
   if (countUnqueuedWatchEvents(db2, planId) === 0) return null;
   const open = getOpenRun(db2, planId);
@@ -10453,11 +10479,13 @@ async function schedulerPass(db2, opts) {
     await checkHealth(db2, goal.plan_id).catch(() => {
     });
   }
+  const watchesStarted = Date.now();
   await checkWatches(db2, goals.map(({ plan }) => plan.id), now);
   for (const { plan } of goals) queueForWatchEvents(db2, plan.id, now);
   await checkStatuses(db2, goals.map(({ plan }) => plan.id), now);
   const toolWatches = opts.toolWatches ? takeDueToolWatches(db2, goals.map(({ plan }) => plan.id), now) : [];
   const withWatches = (r) => toolWatches.length ? { ...r, tool_watches: toolWatches } : r;
+  const holdCleared = usageWindowsClear(opts.rateLimits) && getRunHold(db2, now) ? clearRunHold(db2) : null;
   const hold = getRunHold(db2, now);
   if (hold) return withWatches({ leader: true, claimed: [], expired, hold });
   let running = db2.prepare("SELECT COUNT(*) n FROM goal_runs WHERE status = 'running'").get().n;
@@ -10482,14 +10510,20 @@ async function schedulerPass(db2, opts) {
       continue;
     }
     if (running >= max) continue;
+    let checkedAtClaim = 0;
+    if (decision.trigger !== "watch" && decision.trigger !== "curate") {
+      const left = WATCH_BUDGET_MS - (Date.now() - watchesStarted);
+      if (left > 0) checkedAtClaim = await checkWatchesAtClaim(db2, plan.id, now, left);
+    }
     const run = claimRun(db2, plan.id, { holder: opts.holder, queuedRunId: decision.queuedRunId, trigger: decision.trigger, now });
     if (run) {
+      if (checkedAtClaim) markWatchEventsQueued(db2, plan.id, now);
       claimed.push(run);
       running++;
     }
     if (run && decision.trigger !== "curate" || decision.trigger === "interval" || decision.trigger === "cron") updateGoal(db2, plan.id, { next_run_at: nextIntervalRun(db2, plan.id, now) });
   }
-  return withWatches({ leader: true, claimed, expired });
+  return withWatches({ leader: true, claimed, expired, ...holdCleared ? { hold_cleared: holdCleared } : {} });
 }
 function clipText2(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}\u2026`;
@@ -10700,7 +10734,9 @@ function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (summary) return { state: "idle", text: `Last run: ${summary}`, at: null };
   return { state: "idle", text: "Waiting for its first run", at: null };
 }
-function buildOverview(db2, detail = "all", standingSession = null, fullInstructions = false) {
+function buildOverview(db2, detail = "all", standingSession = null, fullInstructions = false, only = false) {
+  const asked = (id) => detail === "all" || detail.includes(id);
+  const just = only && detail !== "all";
   const all = listGoals(db2);
   const done = all.filter(({ goal }) => goal.status === "retired" && goal.one_off).sort((a, b) => (b.goal.last_run_at ?? "").localeCompare(a.goal.last_run_at ?? "")).slice(0, DONE);
   const entry = ({ plan, goal }) => {
@@ -10783,7 +10819,7 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
       watch_failing: watches.some(watchFailing)
     };
   };
-  const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
+  const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].filter(({ plan }) => !just || asked(plan.id)).sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
     const waiting = g.needs_you.length;
     if (detail === "all" || detail.includes(g.id)) return { ...g, detail: true, needs_you_count: waiting };
     return {
@@ -10811,7 +10847,7 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
     };
   });
   const standing = standingSession !== null && leaseHolder(db2) === standingSession;
-  const deleted = listGoals(db2, { deleted: "only" }).sort((a, b) => (b.goal.deleted_at ?? "").localeCompare(a.goal.deleted_at ?? "")).map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at, purge_at: purgeDate(goal) }));
+  const deleted = just ? [] : listGoals(db2, { deleted: "only" }).sort((a, b) => (b.goal.deleted_at ?? "").localeCompare(a.goal.deleted_at ?? "")).map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at, purge_at: purgeDate(goal) }));
   const named = detail === "all" ? [] : listGoals(db2, { deleted: "only" }).filter(({ plan }) => detail.includes(plan.id));
   const deletedDetail = named.map((d) => {
     const g = entry(d);
@@ -10826,8 +10862,8 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
     ...standing ? { standing: true } : {}
   };
 }
-function overviewWithEtag(db2, detail = "all", standingSession = null, fullInstructions = false) {
-  const body = JSON.stringify(buildOverview(db2, detail, standingSession, fullInstructions));
+function overviewWithEtag(db2, detail = "all", standingSession = null, fullInstructions = false, only = false) {
+  const body = JSON.stringify(buildOverview(db2, detail, standingSession, fullInstructions, only));
   return { body, etag: `"${createHash("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
 var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
@@ -23524,8 +23560,10 @@ var GoalsTickSchema = external_exports.object({
   tracked_run_ids: external_exports.array(external_exports.string()).default([]).describe("Runs this holder is tracking itself; never expired by the pass"),
   max_concurrent: external_exports.number().int().min(1).max(10).optional().describe("Most runs at once across all goals (default 3)"),
   release: external_exports.boolean().optional().describe("Give the scheduler lease up instead of running a pass (the session is ending)"),
-  tool_watches: external_exports.boolean().optional().describe("The caller checks tool watches: the due ones come back in tool_watches, to call and answer with watch_report")
+  tool_watches: external_exports.boolean().optional().describe("The caller checks tool watches: the due ones come back in tool_watches, to call and answer with watch_report"),
+  rate_limits: external_exports.array(external_exports.object({ percent_used: external_exports.number() })).optional().describe("The session's usage windows: when there is at least one and none is at 100%, a usage-limit hold is lifted")
 });
+var ClearRunHoldSchema = external_exports.object({});
 var WatchReportSchema = external_exports.object({
   watch_id: external_exports.string(),
   text: external_exports.string().optional().describe("The tool's answer as text"),
@@ -23536,7 +23574,8 @@ var WatchReportSchema = external_exports.object({
 var GoalsOverviewSchema = external_exports.object({
   etag: external_exports.string().optional().describe("The etag from the last overview; an unchanged overview answers { changed: false }"),
   detail: external_exports.array(external_exports.string()).optional().describe("Goal ids to give in full (runs, memory, open items, instructions, tool rules); the rest are cards. Left out: every goal in full"),
-  full_instructions: external_exports.boolean().optional().describe("Give the instructions uncut (otherwise long ones are cut, as the pane shows them)")
+  full_instructions: external_exports.boolean().optional().describe("Give the instructions uncut (otherwise long ones are cut, as the pane shows them)"),
+  only: external_exports.boolean().optional().describe("With detail: answer with only the goals in detail (no cards for other goals, no deleted list); a deleted goal named there still comes in deleted_detail")
 });
 var DecideItemSchema = external_exports.object({
   goal_id: external_exports.string(),
@@ -23559,6 +23598,10 @@ var ResolveReviewThreadSchema = external_exports.object({
   repo: external_exports.string().regex(/^[\w.-]+\/[\w.-]+$/).describe("The repo as owner/name (from git remote get-url origin)"),
   pr: external_exports.number().int().positive().describe("The pull request number"),
   comment_ids: external_exports.array(external_exports.number().int().positive()).min(1).max(50).describe("Ids of inline review comments you read and addressed with a change you pushed; the thread each belongs to is resolved")
+});
+var PrInlineCommentsSchema = external_exports.object({
+  repo: external_exports.string().regex(/^[\w.-]+\/[\w.-]+$/).describe("The repo as owner/name (from git remote get-url origin)"),
+  pr: external_exports.number().int().positive().describe("The pull request number")
 });
 var DetectForgeSchema = external_exports.object({
   working_dir: external_exports.string().min(1).describe("The repo's folder (absolute path)")
@@ -23804,8 +23847,9 @@ var countItems = (planId) => db.prepare(
   "SELECT SUM(CASE WHEN status IN ('pending','active') THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN review_requested_at IS NOT NULL THEN 1 ELSE 0 END) AS awaiting_review FROM tasks WHERE plan_id = ? AND archived_at IS NULL"
 ).get(planId);
 var schedulerPass2 = (opts) => schedulerPass(db, opts);
+var clearRunHold2 = () => clearRunHold(db);
 var releaseLease2 = (holder) => releaseLease(db, holder);
-var overviewWithEtag2 = (detail = "all", standingSession = null, fullInstructions = false) => overviewWithEtag(db, detail, standingSession, fullInstructions);
+var overviewWithEtag2 = (detail = "all", standingSession = null, fullInstructions = false, only = false) => overviewWithEtag(db, detail, standingSession, fullInstructions, only);
 var decideItem2 = (planId, taskId, input) => decideItem(db, planId, taskId, input);
 var failRun2 = (runId, status, reason) => failRun(db, runId, status, reason);
 var attachAgent2 = (runId, agentId) => attachAgent(db, runId, agentId);
@@ -24790,8 +24834,12 @@ async function goals_tick(args) {
     holder: input.holder,
     trackedRunIds: new Set(input.tracked_run_ids),
     maxConcurrent: input.max_concurrent,
-    toolWatches: input.tool_watches
+    toolWatches: input.tool_watches,
+    rateLimits: input.rate_limits
   });
+  if (pass.hold_cleared?.plan_id) {
+    record3(pass.hold_cleared.plan_id, pass.hold_cleared.plan_id, "run_hold_cleared", { reason: "usage windows below 100%", until: pass.hold_cleared.until }, { via: "plugin" });
+  }
   for (const run of pass.claimed) {
     record3(run.goal_id, run.goal_id, "agent_started", { run_id: run.run_id, trigger: run.trigger, holder: input.holder }, { via: "plugin" });
   }
@@ -24799,7 +24847,7 @@ async function goals_tick(args) {
 }
 async function goals_overview(args) {
   const input = GoalsOverviewSchema.parse(args);
-  const { body, etag } = overviewWithEtag2(input.detail ?? "all", standingSessionId(), input.full_instructions === true);
+  const { body, etag } = overviewWithEtag2(input.detail ?? "all", standingSessionId(), input.full_instructions === true, input.only === true);
   return overviewAnswer(input.etag, body, etag, availableUpdate());
 }
 function overviewAnswer(asked, body, etag, update) {
@@ -24858,6 +24906,12 @@ async function set_goal_status(args) {
   updateGoal2(input.goal_id, { status: input.status });
   record3(input.goal_id, input.goal_id, "goal_updated", { status: input.status }, human);
   return { goal_id: input.goal_id, status: input.status };
+}
+async function clear_run_hold(args) {
+  ClearRunHoldSchema.parse(args ?? {});
+  const hold = clearRunHold2();
+  if (hold?.plan_id && getGoal2(hold.plan_id)) record3(hold.plan_id, hold.plan_id, "run_hold_cleared", { until: hold.until }, human);
+  return { cleared: hold !== null };
 }
 async function attach_agent(args) {
   const input = AttachAgentSchema.parse(args);
@@ -25066,7 +25120,11 @@ async function unsubscribe_one_click(args, post = fetch) {
 
 // src/tools/resolve_review_thread.ts
 init_src();
+
+// src/tools/trusted.ts
 var TRUSTED = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+// src/tools/resolve_review_thread.ts
 var THREADS_QUERY = "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state reviewThreads(first:100){nodes{id isResolved comments(first:100){nodes{databaseId authorAssociation}}}}}}}";
 var RESOLVE_MUTATION = "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}";
 async function resolve_review_thread(args, run = defaultRunFile) {
@@ -25113,6 +25171,37 @@ async function resolve_review_thread(args, run = defaultRunFile) {
   const goal = getOpenPlan();
   if (goal && resolved.length) record3(goal, goal, "review_threads_resolved", { repo, pr, threads: resolved.map((r) => r.thread) });
   return { resolved: resolved.length, threads: resolved, already_resolved: already, skipped };
+}
+
+// src/tools/pr_inline_comments.ts
+init_src();
+function parsePages(text) {
+  const out = [];
+  let depth = 0, start = -1, inString = false, escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "[" || c === "{") {
+      if (depth++ === 0) start = i;
+    } else if ((c === "]" || c === "}") && --depth === 0) {
+      const page = JSON.parse(text.slice(start, i + 1));
+      if (!Array.isArray(page)) throw new Error(`Unexpected answer from GitHub: ${text.slice(start, Math.min(i + 1, start + 200))}`);
+      out.push(...page);
+    }
+  }
+  return out;
+}
+async function pr_inline_comments(args, run = defaultRunFile) {
+  const { repo, pr } = PrInlineCommentsSchema.parse(args);
+  const answer = await run("gh", ["api", `repos/${repo}/pulls/${pr}/comments`, "--paginate"]);
+  const comments = parsePages(answer).filter((c) => TRUSTED.includes(c.author_association)).map((c) => ({ id: c.id, path: c.path, line: c.line ?? c.original_line ?? null, author: c.user?.login ?? null, body: c.body }));
+  return { repo, pr, comments };
 }
 
 // src/tools/detect_forge.ts
@@ -25243,6 +25332,7 @@ var REFUSED_WHEN_OUTDATED = /* @__PURE__ */ new Set([
   "restore_goal",
   "purge_goal",
   "set_goal_status",
+  "clear_run_hold",
   "set_schedule",
   "delete_memory",
   "restore_memory",
@@ -25405,6 +25495,12 @@ var TOOLS = [
     handler: resolve_review_thread
   },
   {
+    name: "pr_inline_comments",
+    description: "A pull request's inline review comments (id, path, line, author, body), only those from the repo's owner, members and collaborators. Read-only: it posts nothing. In a goal run, only as the goal's rules allow; it reads outside text.",
+    inputSchema: zodToJsonSchema(PrInlineCommentsSchema),
+    handler: (args) => pr_inline_comments(args)
+  },
+  {
     name: "detect_forge",
     description: "Which git host a folder's repo is on (github, gitlab, or null when it has no origin remote or neither CLI knows the host), and whether that host's CLI (gh, glab) is installed and signed in. Read-only. For the quarterdeck-goals plugin's /goal-new.",
     inputSchema: zodToJsonSchema(DetectForgeSchema),
@@ -25441,6 +25537,7 @@ var TOOLS = [
     ["get_item", "One goal item's full title, notes and action summary, which the overview clips.", GetItemSchema, get_item],
     ["cancel_run", "Cancels a goal's run in progress.", CancelRunSchema, cancel_run],
     ["set_goal_status", "Pauses or resumes a goal.", SetGoalStatusSchema, set_goal_status],
+    ["clear_run_hold", "Lifts the usage-limit hold on goal runs for the human (switched accounts); a run that still hits the limit sets it again.", ClearRunHoldSchema, clear_run_hold],
     ["delete_goal", "Deletes a goal for the human (after they confirm): it is hidden and paused, and can be restored until it is purged after the retention period.", DeleteGoalSchema, delete_goal],
     ["restore_goal", "Restores a deleted goal for the human; it comes back paused.", RestoreGoalSchema, restore_goal],
     ["purge_goal", "Erases a deleted goal for good, for the human (after they confirm again).", PurgeGoalSchema, purge_goal],

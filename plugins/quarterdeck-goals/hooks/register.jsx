@@ -65,8 +65,8 @@ async function call($, name, input = {}) {
     throw new Error(/persisted-output|Output too large/.test(text) ? `Quarterdeck's answer to ${name} was too large to read (Claude Code saved it to a file). Update Quarterdeck, or tell its developer.` : `Unexpected answer from quarterdeck: ${text.slice(0, 200)}`);
   }
 }
-async function fetchOverview($, etag, detail = [], fullInstructions = false) {
-  const res = await call($, "goals_overview", { ...etag ? { etag } : {}, detail: [...detail], ...fullInstructions && { full_instructions: true } });
+async function fetchOverview($, etag, detail = [], fullInstructions = false, only = false) {
+  const res = await call($, "goals_overview", { ...etag ? { etag } : {}, detail: [...detail], ...fullInstructions && { full_instructions: true }, ...only && { only: true } });
   if (!res.changed) return { changed: false };
   return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null, deleted: res.deleted ?? [], deletedDetail: res.deleted_detail ?? [] };
 }
@@ -107,6 +107,9 @@ async function cancelRunRecord($, goalId) {
 async function setGoalStatus($, goalId, status) {
   await call($, "set_goal_status", { goal_id: goalId, status });
 }
+async function clearRunHold($) {
+  return call($, "clear_run_hold", {});
+}
 async function deleteMemory($, goalId, memoryId) {
   await call($, "delete_memory", { goal_id: goalId, memory_id: memoryId });
 }
@@ -122,14 +125,23 @@ async function setSchedule($, goalId, schedule, oneOff = false) {
 async function createGoal($, input) {
   return call($, "create_goal", input);
 }
-async function tick($, holder, trackedRunIds, toolWatches = true) {
+async function usageWindows($) {
+  try {
+    const { rateLimits } = await $.session.usage();
+    return Array.isArray(rateLimits) ? rateLimits.map((w) => ({ percent_used: w.percentUsed })) : null;
+  } catch {
+    return null;
+  }
+}
+async function tick($, holder, trackedRunIds, toolWatches = true, rateLimits = null) {
   const r = await call($, "goals_tick", {
     holder,
     tracked_run_ids: trackedRunIds,
     max_concurrent: settings.maxConcurrent,
-    ...toolWatches && { tool_watches: true }
+    ...toolWatches && { tool_watches: true },
+    ...rateLimits && { rate_limits: rateLimits }
   });
-  return { leader: r.leader, claimed: r.claimed ?? [], toolWatches: r.tool_watches ?? [] };
+  return { leader: r.leader, claimed: r.claimed ?? [], toolWatches: r.tool_watches ?? [], held: !!r.hold };
 }
 async function reportWatch($, watchId, report) {
   return call($, "watch_report", { watch_id: watchId, ...report });
@@ -1058,6 +1070,7 @@ var ENDED = /* @__PURE__ */ new Set(["completed", "failed", "killed"]);
 var GUARD_TOOL = "mcp__quarterdeck-guard__status";
 var GUARD_MISSING = "Goal runs are paused: the quarterdeck-guard plugin (it keeps runs within their goal) isn't loaded. Run /reload-plugins; if this stays, install it with: claude plugin install quarterdeck-guard@quarterdeck";
 var PLAN_MODE_ON = "Plan mode is on: goals wait (or run in the standing session) until it ends (Shift+Tab to leave it).";
+var lastPassHeld = false;
 var GUARD_GRACE_MS = 1e4;
 var GUARD_RECHECK_MS = 2e3;
 var HUMAN_ONLY_TOOLS = serverToolNames(
@@ -1065,6 +1078,7 @@ var HUMAN_ONLY_TOOLS = serverToolNames(
   "decide_item",
   "cancel_run",
   "set_goal_status",
+  "clear_run_hold",
   "attach_agent",
   "fail_run",
   "guard_check",
@@ -1156,7 +1170,9 @@ async function pass($) {
   if (guarded && await getNotice($) === GUARD_MISSING) await setNotice($, null);
   if (!guarded) return;
   const runs2 = await getRuns($);
-  const { claimed, toolWatches } = await tick($, await $.session.id(), Object.values(runs2).map((r) => r.runId));
+  const rateLimits = lastPassHeld ? await usageWindows($) : null;
+  const { claimed, toolWatches, held } = await tick($, await $.session.id(), Object.values(runs2).map((r) => r.runId), true, rateLimits);
+  lastPassHeld = held;
   for (const run of claimed) await start($, run);
   let fresh = false;
   for (const watch of toolWatches) fresh = await checkToolWatch($, watch) || fresh;
@@ -1565,7 +1581,8 @@ var OUTDATED_REFUSES = /* @__PURE__ */ new Set([
   "model",
   "update",
   "restore",
-  "purge"
+  "purge",
+  "hold-clear"
 ]);
 var OUTDATED_NOTICE = "Quarterdeck was updated in another session, and this session still runs the older version: press Reload now (above), or run /reload-plugins, first.";
 async function actFailure($, fallback) {
@@ -1870,7 +1887,10 @@ async function renderPane($, e) {
           {action($, e, { key: "update-install", label: view.doing === "update-install" ? "Sending…" : "Ask Claude to install it", onPress: () => void askToUpdate($, s.update) })}
         </Box>}
       {s.standing && <Text dimColor>The standing session is starting goal runs, so they also run with this window closed.</Text>}
-      {s.hold && <Text color="yellow">Goal runs are on hold until {holdUntilText(s.hold.until, view.now)}: the usage limit is reached. Due runs start after that.</Text>}
+      {s.hold && <Box flexDirection="column">
+          <Text color="yellow">Goal runs are on hold until {holdUntilText(s.hold.until, view.now)}: the usage limit is reached. Due runs start after that. Switched accounts? Clear the hold.</Text>
+          <Box>{action($, e, { key: "hold-clear", label: view.doing === "hold-clear" ? "Clearing…" : "Clear hold", onPress: () => void act($, "hold-clear", "clear the hold", async () => void await clearRunHold($)) })}</Box>
+        </Box>}
       {phone2 === "no_transport" && <Box>
           <Text color="yellow">Alerts can't reach your phone: Remote Control isn't connected in this session. </Text>
           {action($, e, { key: "phone-connect", label: view.doing === "phone-connect" ? "Connecting…" : "Connect", onPress: () => void act($, "phone-connect", "connect Remote Control", async () => {
@@ -2543,6 +2563,7 @@ async function discuss($, g, run, question) {
 
 // templates.ts
 var DAY = 1440;
+var CHROME_WRITE_TOOLS = ["computer", "form_input", "javascript_tool", "browser_batch", "file_upload", "upload_image"];
 function gmail(rules) {
   return Object.fromEntries(Object.entries(rules).flatMap(([tool, category]) => [
     [`mcp__*Gmail*__${tool}`, category],
@@ -2593,7 +2614,7 @@ var GITHUB = {
   prCheck: "github_pr",
   issueRead: `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {author: .author.login, body}]}'`,
   prRead: `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`,
-  prInlineRead: `gh api repos/<owner>/<name>/pulls/<number>/comments --jq '[.[] | select(.author_association | IN(${TRUSTED_JQ})) | {id, path, line, author: .user.login, body}]'`,
+  prInlineRead: "the pr_inline_comments tool (repo as owner/name, from git remote get-url origin, and the pull request number), which returns only those from the people it trusts as {id, path, line, author, body}",
   watches: {
     pulls: (trusted) => pullWatch(trusted),
     issues: (trusted, without) => issueWatch(trusted, without),
@@ -2638,11 +2659,7 @@ var GITHUB = {
     prView: "gh pr view",
     prDiff: "gh pr diff",
     prCheckout: "gh pr checkout",
-    reviewPost: "gh api repos/*/pulls/*/reviews",
-    inlineRead: "gh api repos/*/pulls/*/comments",
-    // A flag after the path, or any flag before it with the path text later (a field value, a --jq argument). A repo path has
-    // no spaces, so the space keeps a `-f` or `-x` inside an owner or repo name (data-fetch, my-xorg) from counting.
-    inlineWrites: [...["--method", "-X", "-f", "--input"].map((flag) => `gh api repos/*/pulls/*/comments*${flag}`), "gh api repos/* -*/pulls/*/comments"]
+    reviewPost: "gh api repos/*/pulls/*/reviews"
   },
   triage: {
     read: "gh issue view <number> --json number,title,body,labels,author,url",
@@ -2680,12 +2697,14 @@ function githubRules(merge, forge = GITHUB) {
   });
 }
 function inlineReadRules(forge) {
+  if (!forge.rules.inlineRead) return {};
   return {
     [`${forge.rules.inlineRead}*`]: "untrusted",
-    ...Object.fromEntries(forge.rules.inlineWrites.map((w) => [`${w}*`, forge.write]))
+    ...Object.fromEntries((forge.rules.inlineWrites ?? []).map((w) => [`${w}*`, forge.write]))
   };
 }
 var RESOLVE_THREAD_TOOL = "mcp__quarterdeck__resolve_review_thread";
+var PR_INLINE_TOOL = "mcp__quarterdeck__pr_inline_comments";
 function reviewRules(forge = GITHUB) {
   return shell({
     ...writeRules(forge),
@@ -2960,7 +2979,7 @@ var TEMPLATES = [
     model: "opus",
     modelReason: "it writes fixes and features for you to review",
     autonomy: { "code.pull_request": "propose", "code.merge": "off", "github.write": "off" },
-    tool_map: { ...githubRules("code.merge"), [RESOLVE_THREAD_TOOL]: "code.pull_request" },
+    tool_map: { ...githubRules("code.merge"), [RESOLVE_THREAD_TOOL]: "code.pull_request", [PR_INLINE_TOOL]: "untrusted" },
     needs: `the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. Waiting for ${REFINED_LABEL}, it starts on an issue once someone with triage rights (you, or the Issue Refiner once you approve) labels it; otherwise it works on issues opened by the repo's owner, members and collaborators, and asks you first about anyone else's`,
     ask: {
       question: `Should it wait until an issue is labelled ${REFINED_LABEL}? The Issue Refiner goal adds that label once you approve its spec for the issue, so the fixer builds from a spec rather than guessing.`,
@@ -2991,6 +3010,26 @@ var TEMPLATES = [
     autonomy: { "github.review": "propose", "github.write": "off" },
     tool_map: reviewRules(),
     needs: "the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. It reviews pull requests from the repo's owner, members and collaborators; testing one runs its code, so for anyone else's it asks you first"
+  },
+  {
+    label: "Marketplace Flipper",
+    name: "Marketplace Flipper",
+    objective: "Try to grow a small budget by buying underpriced items on Facebook Marketplace and reselling them, with every buy, message and listing approved by me",
+    instructions: "",
+    // set below: FLIPPER_RULES
+    schedule: { kind: "interval", minutes: DAY },
+    model: "sonnet",
+    modelReason: "it sorts listings and proposes buys, messages and listings you approve",
+    autonomy: { "marketplace.message": "propose", "marketplace.buy": "propose", "marketplace.list": "propose", "browser.act": "propose" },
+    tool_map: Object.fromEntries(CHROME_WRITE_TOOLS.map((tool) => [`mcp__claude-in-chrome__${tool}`, "browser.act"])),
+    needs: "Claude in Chrome, signed in to Facebook. Facebook's terms forbid automated data collection, so its watches look at Marketplace only every 30 minutes, and you approve each one; every message, buy and listing waits for your approval",
+    ask: {
+      question: "How should it flip? Type it under Other: your home area and how far you will travel, the starting budget, the minimum profit worth a trip, your vehicle (fuel use, any trailer) and when you are free for pick-ups and drop-offs, e.g. Wellington, 30 km; NZ$300; NZ$40 or 40% of the buy price, whichever is more; Corolla wagon, 7 L/100 km, no trailer; weekday evenings and Saturday mornings.",
+      later: "Ask me in the first run",
+      laterText: "",
+      // set below: FLIPPER_LATER is declared after the templates
+      fill: (answer) => `My setup (home area and travel distance; starting budget; minimum profit per trip; vehicle, fuel use and trailer; free times): ${answer}.`
+    }
   }
 ];
 var ASSOC_WATCH = `(.author_association | IN(${TRUSTED_ASSOCIATIONS.map((a) => `\\"${a}\\"`).join(",")}))`;
@@ -3076,7 +3115,7 @@ var issueFixWork = (forge) => [
   "If an issue is unclear, or isn't something this project should do, don't build it: say why in your summary. Remember which issues you've handled.",
   `Another watch starts a run when CI fails on one of your pull requests: watch_events lists the failed run ids under "${ISSUE_FIX_CI_WATCH}". For each, find its branch with ${forge.fixer.runBranch}. If that pull request is closed or merged, or a later run on the branch has passed, add nothing. Otherwise read the failure with ${forge.fixer.runLog}, fix it on that branch in your clone, run the checks that failed until they pass, and propose one code.pull_request item (external_ref ci-run:<id>) saying what failed and what you changed. Push to the same branch only once I approve, then complete the item. If the failure isn't caused by your change (a flaky test, something already broken on the default branch), change nothing and say so in your summary. Never force-push, or change the CI workflow to make it pass.`,
   `Another watch starts a run when one of your pull requests no longer merges cleanly: watch_events lists <number>@<head sha> under "${ISSUE_FIX_CONFLICT_WATCH}". For each, skip it if the pull request is closed or merged, or its head isn't that sha any more. Otherwise, in your clone, fetch, check out its branch and merge the latest of the pull request's base branch into it (git merge origin/<base>; find the base with ${forge.fixer.prBase}: it isn't always the default branch, since a pull request can be based on another). Never rebase: pushing a rebase needs a force-push. Resolve each conflict keeping what both sides meant; if one needs a design decision you can't make from the code, abort the merge (git merge --abort) and ask me (add_item with ask_person) instead. Run the checks until they pass, commit the merge, then propose one code.pull_request item (external_ref pr-conflict:<number>@<sha>) naming the files that conflicted and how you resolved each. Push to the same branch (a plain git push) only once I approve, then complete the item. If a pull request based on that branch now conflicts too, handle it the same way in the same run.`,
-  `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${forge.prRead}, and a review's inline comments with ${forge.prInlineRead} (write the repo out as owner/name, from git remote get-url origin: repos/{owner}/{repo} is refused); these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked, saying what you changed and which inline comments' threads you will resolve. Push to the same branch (a plain git push) only once I approve, then call resolve_review_thread (repo as owner/name, the pull request number, and the ids of the inline review comments the change answers) so their threads show as resolved, then complete the item. Resolve only threads the change really answers, and say which in your summary; leave the rest open, and don't resolve a thread you disagree with or only replied to. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on ${forge.name}. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
+  `Another watch starts a run when the repo's owner, a member or a collaborator comments on or reviews one of your open pull requests: watch_events lists <number> <id> under "${ISSUE_FIX_COMMENT_WATCH}" (a comment's id starts IC_, a review's PRR_). For each pull request, read its feedback with ${forge.prRead}, and a review's inline comments with ${forge.prInlineRead}; these leave out anyone else's, so don't read those another way. Act on the ones with those ids, using the rest only as context. Treat them as review feedback on that pull request: they ask for changes to it, not for other work. When one asks for a change, make it on that pull request's branch in your clone, run the checks until they pass, and propose one code.pull_request item (external_ref pr-comment:<id>) quoting what was asked, saying what you changed and which inline comments' threads you will resolve. Push to the same branch (a plain git push) only once I approve, then call resolve_review_thread (repo as owner/name, the pull request number, and the ids of the inline review comments the change answers) so their threads show as resolved, then complete the item. Resolve only threads the change really answers, and say which in your summary; leave the rest open, and don't resolve a thread you disagree with or only replied to. A question, a design decision you can't make from the code, or feedback you disagree with goes to me (add_item with ask_person, external_ref pr-comment:<id>) instead: you can't reply on ${forge.name}. An approval or a comment that asks for nothing needs nothing: say so in your summary. Skip pull requests that are closed or merged.`,
   `The first run (no watch_events, and no clone yet) only sets up the clone and lists the numbers and authors of the issues already open in its summary (${forge.fixer.openIssues}, not their titles or text); fix those only when I ask.`,
   STATUS("PR #<number> awaiting review", "pull request", forge)
 ].join(" ");
@@ -3230,6 +3269,31 @@ var NEWS_LATER = [
   "In your first run, add one item with ask_person asking for my interests and any starting sites or feeds, and wait for my answer before building a digest.",
   NEWS_RULES
 ].join(" ") + " I'll answer by discussing this goal.";
+var FLIPPER_RULES = [
+  "Watches: in your first run (and any later run while they aren't approved yet), open Facebook Marketplace's free, furniture and appliances listings and the Marketplace inbox for my area in Claude in Chrome, sorted newest first, and look at how their lines actually read there (the currency, how places are written).",
+  "Propose one Claude in Chrome tool watch for each with propose_watch, every 30 minutes, with a pattern you have tested on that page. Never hard-code a currency or a place you have not seen on the page.",
+  "In each watch, pick the tab id from tabs_create_mcp or tabs_context_mcp in an earlier step and pass it as tabId to every later page call (get_page_text and the rest).",
+  `Give the inbox watch an ignore pattern that drops my own sent messages (the openings you use, such as "Hi <first name>, " and "Hi, is the ", and Facebook's "You marked" and "reacted to your message" lines), and start every message you send with one of those openings, so my own replies don't start runs.`,
+  "You may also propose a Gmail tool watch for emails about a deal.",
+  "Triage: sort new lines into skip, maybe and open by title and price alone. Open at most 5 listings a run. Never record skipped listings in memory.",
+  "Look at every photo of a listing you open by downloading its image links (screenshots are guarded). Skip damage that affects how an item works.",
+  "Whiteware: only items listed as working. The message asks for it to be running at pick-up, and the pick-up includes a check. Fridges travel upright.",
+  "Free items first, since they go fast. For a moving sale, check the seller's other listings and offer a bundle.",
+  "Only propose a buy whose likely resale, less the buy price and the fuel for the trip (from my vehicle and fuel use), clears my minimum profit.",
+  "Keep a ledger in one memory (capital, stock, and each flip with its buy and sell price), replaced when it changes, and never let capital go below zero.",
+  "Never share my street address. Open only the chats about this goal's own deals: opening a chat marks it seen.",
+  "Propose each message as marketplace.message, each buy as marketplace.buy and each listing for resale as marketplace.list, and wait for my approval.",
+  "Sending a message in the browser also needs a browser.act approval, so propose a browser.act item with the same text alongside each marketplace.message item.",
+  "Chrome blocks Buy Now from a background run: when a buy is approved, ask me (add_item with ask_person) to buy it myself, with the link.",
+  "Arrange pick-ups and drop-offs within my free times. Don't promise a seller or buyer anything I haven't approved."
+].join(" ");
+var FLIPPER_LATER = [
+  "My setup: not set yet.",
+  "In your first run, add one item with ask_person asking for my home area and how far I will travel, my starting budget, the minimum profit worth a trip, my vehicle (fuel use, any trailer) and when I am free for pick-ups and drop-offs, and wait for my answer before proposing watches or deals."
+].join(" ") + " I'll answer by discussing this goal.";
+var flipper = TEMPLATES.find((t) => t.name === "Marketplace Flipper");
+flipper.instructions = FLIPPER_RULES;
+flipper.ask.laterText = FLIPPER_LATER;
 var jobScan = TEMPLATES.find((t) => t.name === "Weekly Job Scan");
 jobScan.ask.laterText = ASK_LATER;
 TEMPLATES.find((t) => t.name === "Daily News Digest").ask.laterText = NEWS_LATER;
@@ -3432,12 +3496,12 @@ function deletedText(d) {
   return `"${d.name}" was deleted on ${d.deletedAt.slice(0, 10)}; ${purge}. Restore it from Recently deleted in the goals pane.`;
 }
 async function withDetail($, goal) {
-  const res = await fetchOverview($, null, [goal.id], true);
+  const res = await fetchOverview($, null, [goal.id], true, true);
   const full = res.changed ? res.goals.find((g) => g.id === goal.id) : void 0;
   return full ? toCard(full) : goal;
 }
 async function deletedDetail($, gone) {
-  const res = await fetchOverview($, null, [gone.id], true);
+  const res = await fetchOverview($, null, [gone.id], true, true);
   const full = res.changed ? res.deletedDetail.find((g) => g.id === gone.id) : void 0;
   return full ? toCard(full) : null;
 }

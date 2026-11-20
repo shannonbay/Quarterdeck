@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.30.3, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.31.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -509,7 +509,8 @@ function runMigrations(db) {
     CREATE TABLE IF NOT EXISTS goal_run_hold (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
       until  TEXT NOT NULL,
-      reason TEXT NOT NULL
+      reason TEXT NOT NULL,
+      plan_id TEXT
     );
   `);
   db.exec(`
@@ -605,6 +606,10 @@ function runMigrations(db) {
     } catch {
     }
   }
+  try {
+    db.exec("ALTER TABLE goal_run_hold ADD COLUMN plan_id TEXT");
+  } catch {
+  }
   if (dbSchemaVersion(db) < 17) db.exec("DROP TRIGGER IF EXISTS trg_goal_watches_update_revision");
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
@@ -666,7 +671,7 @@ var init_migrate = __esm({
       "trg_goal_watches_update_revision",
       "trg_goal_watches_delete_revision"
     ];
-    SCHEMA_VERSION = 19;
+    SCHEMA_VERSION = 20;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -3036,7 +3041,7 @@ function applyGoalChanges(db, planId, changes) {
   return done;
 }
 function getRunHold(db, now = /* @__PURE__ */ new Date()) {
-  const row = db.prepare("SELECT until, reason FROM goal_run_hold WHERE id = 1").get();
+  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
   if (!row) return null;
   if (row.until <= now.toISOString()) {
     db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
@@ -3045,10 +3050,16 @@ function getRunHold(db, now = /* @__PURE__ */ new Date()) {
   return row;
 }
 function setRunHold(db, hold) {
-  db.prepare("INSERT INTO goal_run_hold (id, until, reason) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason").run(hold.until, hold.reason);
+  db.prepare("INSERT INTO goal_run_hold (id, until, reason, plan_id) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason, plan_id = excluded.plan_id").run(hold.until, hold.reason, hold.plan_id ?? null);
 }
 function clearRunHold(db) {
+  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
+  if (!row) return null;
   db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
+  return row;
+}
+function usageWindowsClear(rateLimits) {
+  return !!rateLimits && rateLimits.length > 0 && rateLimits.every((w) => typeof w.percent_used === "number" && w.percent_used < 100);
 }
 function isUsageLimit(text) {
   return LIMIT.test(text);
@@ -3082,7 +3093,7 @@ function reportRunEnd(db, runId, input, now = /* @__PURE__ */ new Date()) {
   const answer = input.answer.trim();
   if (isUsageLimit(answer)) {
     const until = (parseLimitReset(answer, now) ?? new Date(now.getTime() + DEFAULT_HOLD_MS)).toISOString();
-    const hold = { until, reason: answer.split("\n")[0].slice(0, 200) };
+    const hold = { until, reason: answer.split("\n")[0].slice(0, 200), plan_id: run.plan_id };
     updateRun(db, runId, { status: "skipped", skip_reason: `usage limit reached: ${hold.reason}`, ended_at: now.toISOString() });
     releaseWatchEvents(db, runId, { requeue: true });
     setRunHold(db, hold);
@@ -3739,6 +3750,18 @@ async function checkWatches(db, planIds, now = /* @__PURE__ */ new Date(), budge
   }
   return checked;
 }
+async function checkWatchesAtClaim(db, planId, now = /* @__PURE__ */ new Date(), budgetMs = WATCH_BUDGET_MS) {
+  const started = Date.now();
+  let checked = 0;
+  for (const watch of listWatches(db, planId)) {
+    if (watch.kind !== "command" || !watch.baseline_at) continue;
+    if (Date.now() - started >= budgetMs) break;
+    await checkCommandWatch(db, watch.id, now).catch(() => {
+    });
+    checked++;
+  }
+  return checked;
+}
 function queueForWatchEvents(db, planId, now = /* @__PURE__ */ new Date()) {
   if (countUnqueuedWatchEvents(db, planId) === 0) return null;
   const open = getOpenRun(db, planId);
@@ -3769,11 +3792,13 @@ async function schedulerPass(db, opts) {
     await checkHealth(db, goal.plan_id).catch(() => {
     });
   }
+  const watchesStarted = Date.now();
   await checkWatches(db, goals.map(({ plan }) => plan.id), now);
   for (const { plan } of goals) queueForWatchEvents(db, plan.id, now);
   await checkStatuses(db, goals.map(({ plan }) => plan.id), now);
   const toolWatches = opts.toolWatches ? takeDueToolWatches(db, goals.map(({ plan }) => plan.id), now) : [];
   const withWatches = (r) => toolWatches.length ? { ...r, tool_watches: toolWatches } : r;
+  const holdCleared = usageWindowsClear(opts.rateLimits) && getRunHold(db, now) ? clearRunHold(db) : null;
   const hold = getRunHold(db, now);
   if (hold) return withWatches({ leader: true, claimed: [], expired, hold });
   let running = db.prepare("SELECT COUNT(*) n FROM goal_runs WHERE status = 'running'").get().n;
@@ -3798,14 +3823,20 @@ async function schedulerPass(db, opts) {
       continue;
     }
     if (running >= max) continue;
+    let checkedAtClaim = 0;
+    if (decision.trigger !== "watch" && decision.trigger !== "curate") {
+      const left = WATCH_BUDGET_MS - (Date.now() - watchesStarted);
+      if (left > 0) checkedAtClaim = await checkWatchesAtClaim(db, plan.id, now, left);
+    }
     const run = claimRun(db, plan.id, { holder: opts.holder, queuedRunId: decision.queuedRunId, trigger: decision.trigger, now });
     if (run) {
+      if (checkedAtClaim) markWatchEventsQueued(db, plan.id, now);
       claimed.push(run);
       running++;
     }
     if (run && decision.trigger !== "curate" || decision.trigger === "interval" || decision.trigger === "cron") updateGoal(db, plan.id, { next_run_at: nextIntervalRun(db, plan.id, now) });
   }
-  return withWatches({ leader: true, claimed, expired });
+  return withWatches({ leader: true, claimed, expired, ...holdCleared ? { hold_cleared: holdCleared } : {} });
 }
 function clipText2(text, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}\u2026`;
@@ -4016,7 +4047,9 @@ function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (summary) return { state: "idle", text: `Last run: ${summary}`, at: null };
   return { state: "idle", text: "Waiting for its first run", at: null };
 }
-function buildOverview(db, detail = "all", standingSession = null, fullInstructions = false) {
+function buildOverview(db, detail = "all", standingSession = null, fullInstructions = false, only = false) {
+  const asked = (id) => detail === "all" || detail.includes(id);
+  const just = only && detail !== "all";
   const all = listGoals(db);
   const done = all.filter(({ goal }) => goal.status === "retired" && goal.one_off).sort((a, b) => (b.goal.last_run_at ?? "").localeCompare(a.goal.last_run_at ?? "")).slice(0, DONE);
   const entry = ({ plan, goal }) => {
@@ -4099,7 +4132,7 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
       watch_failing: watches.some(watchFailing)
     };
   };
-  const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
+  const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].filter(({ plan }) => !just || asked(plan.id)).sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
     const waiting = g.needs_you.length;
     if (detail === "all" || detail.includes(g.id)) return { ...g, detail: true, needs_you_count: waiting };
     return {
@@ -4127,7 +4160,7 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
     };
   });
   const standing = standingSession !== null && leaseHolder(db) === standingSession;
-  const deleted = listGoals(db, { deleted: "only" }).sort((a, b) => (b.goal.deleted_at ?? "").localeCompare(a.goal.deleted_at ?? "")).map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at, purge_at: purgeDate(goal) }));
+  const deleted = just ? [] : listGoals(db, { deleted: "only" }).sort((a, b) => (b.goal.deleted_at ?? "").localeCompare(a.goal.deleted_at ?? "")).map(({ plan, goal }) => ({ id: plan.id, name: plan.name, deleted_at: goal.deleted_at, purge_at: purgeDate(goal) }));
   const named = detail === "all" ? [] : listGoals(db, { deleted: "only" }).filter(({ plan }) => detail.includes(plan.id));
   const deletedDetail = named.map((d) => {
     const g = entry(d);
@@ -4142,8 +4175,8 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
     ...standing ? { standing: true } : {}
   };
 }
-function overviewWithEtag(db, detail = "all", standingSession = null, fullInstructions = false) {
-  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions));
+function overviewWithEtag(db, detail = "all", standingSession = null, fullInstructions = false, only = false) {
+  const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions, only));
   return { body, etag: `"${createHash2("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
 var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
@@ -4366,6 +4399,7 @@ __export(src_exports, {
   checkHealth: () => checkHealth,
   checkStatuses: () => checkStatuses,
   checkWatches: () => checkWatches,
+  checkWatchesAtClaim: () => checkWatchesAtClaim,
   claimRun: () => claimRun,
   cleanStatusNote: () => cleanStatusNote,
   clearAllData: () => clearAllData,
@@ -4545,6 +4579,7 @@ __export(src_exports, {
   updateRun: () => updateRun,
   updateTask: () => updateTask,
   usableAsAllowRule: () => usableAsAllowRule,
+  usageWindowsClear: () => usageWindowsClear,
   validateStatusCheck: () => validateStatusCheck,
   validateStatusRules: () => validateStatusRules,
   validateStatusTone: () => validateStatusTone,
