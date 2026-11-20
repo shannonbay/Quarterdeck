@@ -31,6 +31,7 @@ import {
   DecideItemSchema, GetItemSchema,
   CancelRunSchema,
   SetGoalStatusSchema,
+  ClearRunHoldSchema,
   AttachAgentSchema,
   FailRunSchema,
   GuardCheckSchema,
@@ -64,7 +65,7 @@ import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
 import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal } from './tools/goals.js'
 import {
-  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
+  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
 } from './tools/goal_runner.js'
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
@@ -271,6 +272,7 @@ const TOOLS = [
     ['get_item', "One goal item's full title, notes and action summary, which the overview clips.", GetItemSchema, get_item],
     ['cancel_run', "Cancels a goal's run in progress.", CancelRunSchema, cancel_run],
     ['set_goal_status', 'Pauses or resumes a goal.', SetGoalStatusSchema, set_goal_status],
+    ['clear_run_hold', 'Lifts the usage-limit hold on goal runs for the human (switched accounts); a run that still hits the limit sets it again.', ClearRunHoldSchema, clear_run_hold],
     ['delete_goal', 'Deletes a goal for the human (after they confirm): it is hidden and paused, and can be restored until it is purged after the retention period.', DeleteGoalSchema, delete_goal],
     ['restore_goal', 'Restores a deleted goal for the human; it comes back paused.', RestoreGoalSchema, restore_goal],
     ['purge_goal', 'Erases a deleted goal for good, for the human (after they confirm again).', PurgeGoalSchema, purge_goal],

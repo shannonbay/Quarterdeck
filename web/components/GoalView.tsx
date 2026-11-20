@@ -35,6 +35,8 @@ interface GoalData {
   health: HealthResult[]
   tool_calls: ToolCallRecord[]
   suggestions: { category: string; approved_in_a_row: number }[]
+  /** The usage-limit hold on all goal runs, if one is in force. */
+  hold: { until: string; reason: string } | null
 }
 
 const MODES = ['off', 'propose', 'auto'] as const
@@ -127,6 +129,13 @@ export function GoalView({ goalId }: { goalId: string }) {
                 : data.schedule ? `${data.schedule.kind === 'interval' ? `Every ${data.schedule.minutes} min${data.schedule.active_hours ? ` (${data.schedule.active_hours})` : ''}` : `Cron ${data.schedule.expr}`} · next run ${goal.status === 'active' ? when(goal.next_run_at) : '— paused'}`
                 : 'Runs only when you click Run now'}
             </p>
+            {data.hold && (
+              <p className="text-xs text-yellow-700 mt-1">
+                Goal runs are on hold until {new Date(data.hold.until).toLocaleString()}: the usage limit is reached. Due runs start after that. Switched accounts? Clear the hold.{' '}
+                <button onClick={() => call('hold-clear', '/api/goals/hold', { method: 'DELETE' })} disabled={busy !== null}
+                  className="underline hover:text-yellow-900 disabled:opacity-50">{busy === 'hold-clear' ? 'Clearing…' : 'Clear hold'}</button>
+              </p>
+            )}
           </div>
           <div className="flex gap-2 flex-shrink-0">
             {goal.deleted_at ? (

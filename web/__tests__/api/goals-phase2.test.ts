@@ -7,6 +7,7 @@ import { GET as GETGoal, PATCH as PATCHGoal } from '@/app/api/goals/[id]/route.j
 import { POST as POSTWebhook, DELETE as DELETEWebhook } from '@/app/api/goals/[id]/webhook/route.js'
 import { POST as POSTTrigger } from '@/app/api/goals/[id]/trigger/route.js'
 import { POST as POSTHealth } from '@/app/api/goals/[id]/health/route.js'
+import { DELETE as DELETEHold } from '@/app/api/goals/hold/route.js'
 import { getDb, getGoal, getOpenRun, getSchedule, listHealth } from '@/lib/db'
 import * as core from '@quarterdeck/core'
 
@@ -109,5 +110,28 @@ describe('promote-to-auto suggestions', () => {
 
     await PATCHGoal(req('PATCH', { autonomy: { 'email.draft_reply': 'auto' } }), p(id))
     expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+  })
+})
+
+describe('usage-limit hold (#104)', () => {
+  it('shows the hold on the goal page and Clear hold lifts it, recorded against the goal that set it', async () => {
+    const id = await goal()
+    const until = new Date(Date.now() + 3_600_000).toISOString()
+    core.setRunHold(getDb(), { until, reason: 'usage limit', plan_id: id })
+    const page = await (await GETGoal(req('GET'), p(id))).json()
+    expect(page.hold).toMatchObject({ until, plan_id: id })
+
+    const res = await DELETEHold(req('DELETE'))
+    expect(await res.json()).toEqual({ cleared: true })
+    expect(core.getRunHold(getDb())).toBeNull()
+    expect((await (await GETGoal(req('GET'), p(id))).json()).hold).toBeNull()
+    const events = getDb().prepare("SELECT actor, payload FROM events WHERE plan_id = ? AND event_type = 'run_hold_cleared'").all(id) as { actor: string; payload: string }[]
+    expect(events).toHaveLength(1)
+    expect(events[0].actor).toBe('human')
+    expect(JSON.parse(events[0].payload)).toMatchObject({ until, via: 'web' })
+  })
+
+  it('with no hold changes nothing', async () => {
+    expect(await (await DELETEHold(req('DELETE'))).json()).toEqual({ cleared: false })
   })
 })

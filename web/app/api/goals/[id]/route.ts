@@ -3,7 +3,7 @@ import { z } from 'zod'
 import {
   getPlan, updatePlan, getGoal, updateGoal, getIntervalTrigger, listRuns, getOpenRun,
   listMemory, getGoalItems, getApprovalStats, MEMORY_BRIEF_CHARS,
-  getSchedule, setSchedule, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions,
+  getSchedule, setSchedule, getRunHold, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions,
 } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
 import { itemView } from '@/lib/goal-views'
@@ -42,6 +42,7 @@ export async function GET(_req: NextRequest, { params }: Params) {
       health: listHealth(id, 30),
       tool_calls: listToolCalls(id, 20),
       suggestions: getAutonomySuggestions(id),
+      hold: getRunHold(),
     })
   } catch (e) {
     return serverError(e)

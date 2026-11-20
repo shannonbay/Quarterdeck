@@ -17,7 +17,7 @@
 import type { EngineInterface, RenderChildren, RenderInput } from 'claude-code'
 
 import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '../types'
-import { answerItem, approve, baseUrl, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
+import { answerItem, approve, baseUrl, clearRunHold, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
 import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
@@ -228,7 +228,12 @@ export async function renderPane($: Engine, e: E) {
         </Box>
       )}
       {s.standing && <Text dimColor>The standing session is starting goal runs, so they also run with this window closed.</Text>}
-      {s.hold && <Text color="yellow">Goal runs are on hold until {holdUntilText(s.hold.until, view.now)}: the usage limit is reached. Due runs start after that.</Text>}
+      {s.hold && (
+        <Box flexDirection="column">
+          <Text color="yellow">Goal runs are on hold until {holdUntilText(s.hold.until, view.now)}: the usage limit is reached. Due runs start after that. Switched accounts? Clear the hold.</Text>
+          <Box>{action($, e, { key: 'hold-clear', label: view.doing === 'hold-clear' ? 'Clearing…' : 'Clear hold', onPress: () => void act($, 'hold-clear', 'clear the hold', async () => void (await clearRunHold($))) })}</Box>
+        </Box>
+      )}
       {phone === 'no_transport' && (
         <Box>
           <Text color="yellow">Alerts can't reach your phone: Remote Control isn't connected in this session. </Text>

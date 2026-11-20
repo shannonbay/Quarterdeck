@@ -168,6 +168,11 @@ export async function setGoalStatus($: Engine, goalId: string, status: 'active' 
   await call($, 'set_goal_status', { goal_id: goalId, status })
 }
 
+/** The person lifts the usage-limit hold on goal runs (pane-only: a run can't lift its own hold). */
+export async function clearRunHold($: Engine): Promise<{ cleared: boolean }> {
+  return call<{ cleared: boolean }>($, 'clear_run_hold', {})
+}
+
 export async function deleteMemory($: Engine, goalId: string, memoryId: string): Promise<void> {
   await call($, 'delete_memory', { goal_id: goalId, memory_id: memoryId })
 }
@@ -226,12 +231,21 @@ export type WatchCall = { tool: string; input?: Record<string, unknown> }
 export type WatchStep = WatchCall & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string; retry?: number }
 export type ToolWatch = { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown>; steps?: WatchStep[]; finally?: WatchCall }
 
+/** The session's usage windows, for the pass to lift a usage-limit hold that no longer applies; null when they can't be read. */
+export async function usageWindows($: Engine): Promise<{ percent_used: number }[] | null> {
+  try {
+    const { rateLimits } = await $.session.usage()
+    return Array.isArray(rateLimits) ? rateLimits.map((w) => ({ percent_used: w.percentUsed })) : null
+  } catch { return null }
+}
+
 /** One scheduler pass. `toolWatches` false asks for runs only (a second pass right after checking watches). */
-export async function tick($: Engine, holder: string, trackedRunIds: string[], toolWatches = true): Promise<{ leader: boolean; claimed: ClaimedRun[]; toolWatches: ToolWatch[] }> {
-  const r = await call<{ leader: boolean; claimed: ClaimedRun[]; tool_watches?: ToolWatch[] }>($, 'goals_tick', {
+export async function tick($: Engine, holder: string, trackedRunIds: string[], toolWatches = true, rateLimits: { percent_used: number }[] | null = null): Promise<{ leader: boolean; claimed: ClaimedRun[]; toolWatches: ToolWatch[]; held: boolean }> {
+  const r = await call<{ leader: boolean; claimed: ClaimedRun[]; tool_watches?: ToolWatch[]; hold?: unknown }>($, 'goals_tick', {
     holder, tracked_run_ids: trackedRunIds, max_concurrent: settings.maxConcurrent, ...(toolWatches && { tool_watches: true }),
+    ...(rateLimits && { rate_limits: rateLimits }),
   })
-  return { leader: r.leader, claimed: r.claimed ?? [], toolWatches: r.tool_watches ?? [] }
+  return { leader: r.leader, claimed: r.claimed ?? [], toolWatches: r.tool_watches ?? [], held: !!r.hold }
 }
 
 /** What a tool watch's call answered; `queued_run` is set when something new queued a run. */

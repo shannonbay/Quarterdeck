@@ -87,7 +87,7 @@ export function stopPolling(): void {
 
 /** The act() keys (before the colon) of the pane's and Claude's goal changes, which the server refuses while outdated. */
 export const OUTDATED_REFUSES = new Set([
-  'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update', 'restore', 'purge',
+  'approve', 'reject', 'answer', 'auto', 'delete', 'cancel', 'schedule', 'run', 'pause', 'resume', 'goal-pause', 'goal-resume', 'trust', 'forget', 'model', 'update', 'restore', 'purge', 'hold-clear',
 ])
 export const OUTDATED_NOTICE = 'Quarterdeck was updated in another session, and this session still runs the older version: press Reload now (above), or run /reload-plugins, first.'
 

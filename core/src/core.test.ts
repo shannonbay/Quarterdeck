@@ -73,6 +73,13 @@ describe('runMigrations', () => {
     expect(at(ended.id)).toBe('2026-01-01T00:00:00.000Z')
     expect(at(open.id)).toBeNull()
   })
+
+  it('adds plan_id to the usage-limit hold, keeping a hold set before it', () => {
+    db.exec('ALTER TABLE goal_run_hold DROP COLUMN plan_id')
+    db.prepare('INSERT INTO goal_run_hold (id, until, reason) VALUES (1, ?, ?)').run('2099-01-01T00:00:00.000Z', 'limit')
+    runMigrations(db)
+    expect(db.prepare('SELECT until, reason, plan_id FROM goal_run_hold').all()).toEqual([{ until: '2099-01-01T00:00:00.000Z', reason: 'limit', plan_id: null }])
+  })
 })
 
 describe('settings from before the rename', () => {

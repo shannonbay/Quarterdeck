@@ -78,6 +78,8 @@ export const countItems = (planId: string) => db.prepare(
 
 // Goal runner (the quarterdeck-goals plugin drives runs through these)
 export const schedulerPass = (opts: core.PassOptions) => core.schedulerPass(db, opts)
+export const clearRunHold = () => core.clearRunHold(db)
+export const getRunHold = () => core.getRunHold(db)
 export const releaseLease = (holder: string) => core.releaseLease(db, holder)
 export const overviewWithEtag = (detail: core.OverviewDetail = 'all', standingSession: string | null = null, fullInstructions = false, only = false) => core.overviewWithEtag(db, detail, standingSession, fullInstructions, only)
 export const decideItem = (planId: string, taskId: string, input: Parameters<typeof core.decideItem>[3]) => core.decideItem(db, planId, taskId, input)

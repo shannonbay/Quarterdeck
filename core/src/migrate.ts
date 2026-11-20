@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 19
+export const SCHEMA_VERSION = 20
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -434,7 +434,8 @@ export function runMigrations(db: Database): void {
     CREATE TABLE IF NOT EXISTS goal_run_hold (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
       until  TEXT NOT NULL,
-      reason TEXT NOT NULL
+      reason TEXT NOT NULL,
+      plan_id TEXT
     );
   `)
 
@@ -508,6 +509,8 @@ export function runMigrations(db: Database): void {
   for (const col of ['inactive_reason', 'inactive_at', 'inactive_ref', 'replaced_by', 'replaces']) {
     try { db.exec(`ALTER TABLE goal_memory ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
   }
+  // Schema version 20: the goal whose run set the usage-limit hold, so clearing it is recorded there (#104)
+  try { db.exec('ALTER TABLE goal_run_hold ADD COLUMN plan_id TEXT') } catch { /* already exists */ }
   // The update trigger's column list grew in 17: an older one is made again below
   if (dbSchemaVersion(db) < 17) db.exec('DROP TRIGGER IF EXISTS trg_goal_watches_update_revision')
   db.exec(`

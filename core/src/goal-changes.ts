@@ -191,11 +191,13 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
 export interface RunHold {
   until: string
   reason: string
+  /** The goal whose run hit the limit (null for a hold set before schema version 20). */
+  plan_id?: string | null
 }
 
 /** The hold on all goal runs, if one is still in force (an expired one is cleared). */
 export function getRunHold(db: Database, now: Date = new Date()): RunHold | null {
-  const row = db.prepare('SELECT until, reason FROM goal_run_hold WHERE id = 1').get() as RunHold | undefined
+  const row = db.prepare('SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1').get() as RunHold | undefined
   if (!row) return null
   if (row.until <= now.toISOString()) {
     db.prepare('DELETE FROM goal_run_hold WHERE id = 1').run()
@@ -205,12 +207,21 @@ export function getRunHold(db: Database, now: Date = new Date()): RunHold | null
 }
 
 export function setRunHold(db: Database, hold: RunHold): void {
-  db.prepare('INSERT INTO goal_run_hold (id, until, reason) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason')
-    .run(hold.until, hold.reason)
+  db.prepare('INSERT INTO goal_run_hold (id, until, reason, plan_id) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason, plan_id = excluded.plan_id')
+    .run(hold.until, hold.reason, hold.plan_id ?? null)
 }
 
-export function clearRunHold(db: Database): void {
+/** Lifts the hold, whatever its time; returns the hold it lifted (null when there was none). */
+export function clearRunHold(db: Database): RunHold | null {
+  const row = db.prepare('SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1').get() as RunHold | undefined
+  if (!row) return null
   db.prepare('DELETE FROM goal_run_hold WHERE id = 1').run()
+  return row
+}
+
+/** True when the session's usage windows show the limit no longer applies: at least one window, none at 100%. */
+export function usageWindowsClear(rateLimits: { percent_used: number }[] | undefined): boolean {
+  return !!rateLimits && rateLimits.length > 0 && rateLimits.every(w => typeof w.percent_used === 'number' && w.percent_used < 100)
 }
 
 const LIMIT = /(hit|reached) (your|the) .{0,30}limit|usage limit|rate limit|out of (credits|usage)/i
@@ -267,7 +278,7 @@ export function reportRunEnd(
   const answer = input.answer.trim()
   if (isUsageLimit(answer)) {
     const until = (parseLimitReset(answer, now) ?? new Date(now.getTime() + DEFAULT_HOLD_MS)).toISOString()
-    const hold = { until, reason: answer.split('\n')[0]!.slice(0, 200) }
+    const hold = { until, reason: answer.split('\n')[0]!.slice(0, 200), plan_id: run.plan_id }
     updateRun(db, runId, { status: 'skipped', skip_reason: `usage limit reached: ${hold.reason}`, ended_at: now.toISOString() })
     // The run never got to its watches' news: it queues a run again once the hold is over
     releaseWatchEvents(db, runId, { requeue: true })

@@ -223,3 +223,14 @@ test('while the usage limit holds runs, the pane says so', async ($, on) => {
   expect((await ui.find({ type: 'Text', text: /on hold until/ }))?.text).toContain('the usage limit is reached')
   await ui.unmount()
 })
+
+test('pressing Clear hold by the hold message lifts it', async ($, on) => {
+  engine(on)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })], { hold: { until: '2026-11-07T20:10:00Z', reason: "You've hit your 5-hour limit" } })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /on hold until/ }))?.text).toContain('Switched accounts? Clear the hold.')
+  await ui.press({ key: 'hold-clear' })
+  expect(fake.of('clear_run_hold')).toHaveLength(1)
+  await ui.unmount()
+})
