@@ -9,7 +9,7 @@ import { create_plan } from '../../tools/create_plan.js'
 import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun, getEvents, endRun } from '../../db.js'
 import { setOpenPlan, withScope } from '../../session.js'
 import { RememberSchema } from '../../schema.js'
-import { zodToJsonSchema } from 'zod-to-json-schema'
+import { toolInputSchema } from '../../json-schema.js'
 
 const now = new Date().toISOString()
 
@@ -202,7 +202,7 @@ describe('goal tools', () => {
   })
 
   it("the remember tool's input schema requires only text (#95)", () => {
-    const schema = zodToJsonSchema(RememberSchema) as { required?: string[] }
+    const schema = toolInputSchema(RememberSchema) as { required?: string[] }
     expect(schema.required).toEqual(['text'])
   })
 
