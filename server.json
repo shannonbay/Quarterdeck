@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.shannonbay/quarterdeck",
+  "description": "Persistent goals for Claude: standing objectives with items, memory and approvals.",
+  "repository": {
+    "url": "https://github.com/shannonbay/Quarterdeck",
+    "source": "github"
+  },
+  "version": "0.32.0",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/shannonbay/Quarterdeck/releases/download/v0.32.0/quarterdeck-0.32.0.mcpb",
+      "version": "0.32.0",
+      "fileSha256": "21cee0390820943644664b14a5f252e5c781470a18ef25cae17d496802f7e71f",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
