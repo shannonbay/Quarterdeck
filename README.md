@@ -25,7 +25,7 @@ It's a Claude Code plugin that turns Claude into a personal assistant: it keeps 
 
 You give it **goals**: "sell my birdcage on facebook marketplace", "fix new issues on my repo", "find me the three best new job ads each week", "turn NZ$200 into more by flipping Marketplace bargains", "clear old installers out of Downloads". Each goal runs on its own schedule in the background of your Claude Code session, on your Claude plan. When it wants to act, it proposes, and you approve or reject from the **Goals pane** beside your chat, or from your phone.
 
-The idea behind it: persistent intent may matter more than persistent memory.
+The idea behind it: persistent intent may matter more than persistent memory. Instead of prompt → act, a goal is an action cycle that keeps going, punctuated only by your approvals and the occasional question.
 
 ![The Goals pane: five goals with their last and next runs and Reschedule, Run now and Pause, then the to-do lists, with an expanded to-do showing Ask, Plan and Start](docs/goals-pane.png)
 
