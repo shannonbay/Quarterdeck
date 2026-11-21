@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, commandAllowRule, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
@@ -235,6 +235,22 @@ test("allowRules lists a Claude Code allow rule for each of a goal's auto tool r
     skipped: ['mcp__*'],
   })
   expect(allowRules({ autonomy: {}, toolMap: { Bash: 'shell' } })).toEqual({ rules: [], skipped: [] })
+
+  // #145: shell command rules Claude Code takes as written are allow rules; the warned-about ones aren't
+  expect(allowRules({
+    autonomy: { 'code.pull_request': 'auto', reads: 'auto', merge: 'propose' },
+    toolMap: {
+      'Bash(git push*)': 'code.pull_request',
+      'PowerShell(gh pr create*)': 'code.pull_request',
+      'Bash(git -C * push*)': 'code.pull_request',
+      'Bash(gh api repos/*/pulls/*/comments*)': 'reads',
+      'Bash(ls*)': 'reads',
+      'Bash(gh pr merge*)': 'merge',
+    },
+  })).toEqual({
+    rules: ['Bash(gh api repos/*/pulls/*/comments*)', 'Bash(git push*)', 'PowerShell(gh pr create*)'],
+    skipped: ['Bash(git -C * push*)', 'Bash(ls*)'],
+  })
 
   const prompt = allowRulesPrompt({ id: 'g1', name: 'Inbox' }, ['Bash'])
   expect(prompt).toContain('"Inbox" (id g1)')
@@ -730,4 +746,17 @@ test('describe marks a failing watch error as outside text', () => {
   const c = toCard({ ...goal({ id: 'g1', name: 'Sale', watches: [{ name: 'inbox', every_minutes: 5, runs: 'steps', last_fired_at: null, failing: true, error }] }), open_item_count: 0 })
   const line = describe(c, NOW).split('\n').find((l) => l.includes('[failing')) ?? ''
   expect(line).toMatch(/outside (text|content)|untrusted/i)
+})
+
+test('commandAllowRule takes a shell rule whose first * comes after a subcommand (same cases as core)', () => {
+  expect(commandAllowRule('Bash(git push*)')).toBe(true)
+  expect(commandAllowRule('PowerShell(gh pr create*)')).toBe(true)
+  expect(commandAllowRule('powershell(gh pr create*)')).toBe(true)
+  expect(commandAllowRule('Bash(gh api repos/*/pulls/*/comments*)')).toBe(true)
+  expect(commandAllowRule('Bash(git status)')).toBe(true)
+  expect(commandAllowRule('Bash(git -C * push*)')).toBe(false)
+  expect(commandAllowRule('Bash(ls*)')).toBe(false)
+  expect(commandAllowRule('Bash(*)')).toBe(false)
+  expect(commandAllowRule('Bash(git --no-pager*)')).toBe(false)
+  expect(commandAllowRule('mcp__gmail__archive*')).toBe(false)
 })

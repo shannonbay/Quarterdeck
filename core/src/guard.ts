@@ -314,14 +314,33 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
 }
 
 /**
+ * Whether a shell command rule (`Bash(...)`, `PowerShell(...)`) is one Claude
+ * Code takes cleanly as an allow rule as written: its first `*` comes after the
+ * program and at least one more word that isn't a flag (a subcommand), as in
+ * `Bash(git push*)` or `Bash(gh api repos/*\/pulls/*\/comments*)`. Claude Code
+ * warns about a `*` right after the program or a flag (`Bash(ls*)`,
+ * `Bash(git -C * push*)`), so those stay out. PowerShell matches
+ * case-insensitively, as the guard does. The pane keeps a copy
+ * (commandAllowRule in plugins/quarterdeck-goals/hooks/model.ts).
+ */
+export function commandAllowRule(pattern: string): boolean {
+  const m = /^(?:Bash|[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll])\(([\s\S]*)\)$/.exec(pattern)
+  if (!m) return false
+  const star = m[1].indexOf('*')
+  if (star < 0) return true
+  const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean)
+  return words.length >= 2 && words.slice(1).some((w) => !w.startsWith('-'))
+}
+
+/**
  * Whether the standing session can start with a tool pattern as an allow rule
- * as it stands: a plain name, or a whole server (`mcp__<server>__*`), the
- * forms Claude Code documents. A glob inside a tool's name (`trash_*`) is left
- * to the names seen, as a rule Claude Code refuses could keep the session from
- * starting at all.
+ * as it stands: a plain name, a whole server (`mcp__<server>__*`), or a shell
+ * command rule commandAllowRule accepts, the forms Claude Code documents. A
+ * glob inside a tool's name (`trash_*`) is left to the names seen, as a rule
+ * Claude Code refuses could keep the session from starting at all.
  */
 export function usableAsAllowRule(pattern: string): boolean {
-  return !pattern.includes('*') || /^mcp__[^*]+?__\*$/.test(pattern)
+  return !pattern.includes('*') || /^mcp__[^*]+?__\*$/.test(pattern) || commandAllowRule(pattern)
 }
 
 /**
