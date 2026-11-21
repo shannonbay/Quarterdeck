@@ -560,7 +560,8 @@ const OWN_SERVER_PREFIXES = ['mcp__plugin_quarterdeck-goals_quarterdeck__', 'mcp
  * permission prompt: one per tool rule whose category is auto. The guard only
  * refuses; whether a tool runs unasked is Claude Code's to say, so the person
  * adds these themselves. A tool rule Claude Code can't take as an allow rule
- * (a glob outside `mcp__<server>__`, such as `mcp__*`) is listed in `skipped`.
+ * (a glob outside `mcp__<server>__`, such as `mcp__*`, or a shell rule
+ * commandAllowRule refuses, such as `Bash(git -C * push*)`) is listed in `skipped`.
  */
 export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: string[]; skipped: string[] } {
   const rules = new Set<string>()
@@ -572,8 +573,9 @@ export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: 
     for (const name of names) {
       const star = name.indexOf('*')
       const server = /^mcp__([^*]+?)__/.exec(name)
-      // Claude Code takes a glob in an allow rule only after a literal mcp__<server>__
-      if (star >= 0 && !(server && star >= server[0].length)) {
+      // Claude Code takes a glob in an allow rule only after a literal mcp__<server>__,
+      // or after a shell command's program and subcommand (commandAllowRule)
+      if (star >= 0 && !(server && star >= server[0].length) && !commandAllowRule(name)) {
         if (!skipped.includes(pattern)) skipped.push(pattern)
         continue
       }
@@ -581,6 +583,22 @@ export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: 
     }
   }
   return { rules: [...rules].sort(), skipped }
+}
+
+/**
+ * Whether a shell command rule is one Claude Code takes cleanly as an allow
+ * rule: its first `*` comes after the program and a subcommand (`Bash(git push*)`),
+ * not right after the program or a flag (`Bash(ls*)`, `Bash(git -C * push*)`).
+ * A copy of commandAllowRule in core/src/guard.ts (the hooks can't import core
+ * at runtime): keep the two in step; both have tests with the same cases.
+ */
+export function commandAllowRule(pattern: string): boolean {
+  const m = /^(?:Bash|[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll])\(([\s\S]*)\)$/.exec(pattern)
+  if (!m) return false
+  const star = m[1].indexOf('*')
+  if (star < 0) return true
+  const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean)
+  return words.length >= 2 && words.slice(1).some((w) => !w.startsWith('-'))
 }
 
 /** The prompt behind the pane's "Ask Claude to add them": Claude shows the change and waits for a yes. */
