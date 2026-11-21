@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, commandAllowRule, lastRefusals, refusalText, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, autoAfterOutsideText, commandAllowRule, lastRefusals, refusalText, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
@@ -773,4 +773,12 @@ test('commandAllowRule takes a shell rule whose first * comes after a subcommand
   expect(commandAllowRule('Bash(*)')).toBe(false)
   expect(commandAllowRule('Bash(git --no-pager*)')).toBe(false)
   expect(commandAllowRule('mcp__gmail__archive*')).toBe(false)
+})
+
+test('autoAfterOutsideText lists the categories kept auto after outside text, and says when one is not auto yet (#159)', () => {
+  expect(autoAfterOutsideText({ autonomy: { 'github.review': 'auto' }, autoAfterOutside: [] })).toBe(null)
+  const text = autoAfterOutsideText({ autonomy: { 'github.review': 'auto', 'email.send': 'propose' }, autoAfterOutside: ['github.review', 'email.send'] })!
+  expect(text).toContain('- github.review: auto, even after reading outside text')
+  expect(text).toContain('- email.send: propose (kept auto after outside text only once it is auto)')
+  expect(text).toContain("lower the risk of disclosure but don't remove it")
 })

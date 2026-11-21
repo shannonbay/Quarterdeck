@@ -291,6 +291,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         status_note: statusNote(goal, runs, watches),
         instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions)!,
         autonomy: goal.autonomy,
+        // Categories kept auto after a run reads outside content (#159)
+        auto_after_outside: goal.auto_after_outside,
         tool_map: goal.tool_map,
         next_run_at: goal.next_run_at,
         schedule: getSchedule(db, plan.id),

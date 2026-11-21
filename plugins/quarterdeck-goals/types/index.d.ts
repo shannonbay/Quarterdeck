@@ -78,6 +78,8 @@ export type GoalCard = {
   instructions: string
   /** Action category → off | propose | auto (unlisted: propose). */
   autonomy: Record<string, string>
+  /** Categories the person keeps auto after a run reads outside content (#159). */
+  autoAfterOutside: string[]
   /** Tool name pattern → action category. */
   toolMap: Record<string, string>
   health: { passed: boolean; value: number | null } | null

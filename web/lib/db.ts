@@ -49,7 +49,7 @@ export const deleteTaskTree = (planId: string, taskId: string) => core.deleteTas
 
 // ─── Persistent goals (shared with MCP via @quarterdeck/core) ───────────────────
 
-export { GoalError, isProposal, DEFAULT_GOAL_LIMITS } from '@quarterdeck/core'
+export { GoalError, isProposal, DEFAULT_GOAL_LIMITS, autoAfterOutsideWarning } from '@quarterdeck/core'
 export type { Goal, GoalRun, GoalMemory, GoalTrigger, IntervalConfig, AutonomyMode, TickDecision } from '@quarterdeck/core'
 export const createGoal = (plan: NewPlan, goal: Omit<core.NewGoal, 'plan_id'>, interval?: core.IntervalConfig) => core.createGoal(getDb(), plan, goal, interval)
 export const getGoal = (planId: string) => core.getGoal(getDb(), planId)
