@@ -273,6 +273,12 @@ export const GuardCheckSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional().describe("The call's command and path fields, for the rule on Quarterdeck's own data"),
 })
 
+export const RunRefusedSchema = z.object({
+  run_id: z.string(),
+  tool_name: z.string().describe('The tool Claude Code refused'),
+  input: z.record(z.unknown()).optional().describe("The call's command and path fields, to match the goal's command rules"),
+})
+
 const GoalScheduleSchema = z.union([
   z.object({
     kind: z.literal('interval'),

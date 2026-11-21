@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, commandAllowRule, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, commandAllowRule, lastRefusals, refusalText, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
@@ -260,6 +260,20 @@ test("allowRules lists a Claude Code allow rule for each of a goal's auto tool r
   const detail = describe(card({ id: 'g1', name: 'Inbox', autonomy: { shell: 'auto' }, tool_map: { Bash: 'shell' } }), NOW)
   expect(detail).toContain('Claude Code allow rules for its auto tools')
   expect(describe(card({ id: 'g2', name: 'Quiet' }), NOW)).not.toContain('allow rules')
+
+  // #145: the rules the last finished run was refused for join the list, and goal_detail names each refusal
+  const runs = [
+    { id: 'r2', status: 'running', trigger: 'manual', summary: null, started_at: NOW, ended_at: null, refused: [{ tool: 'Bash', rule: 'Bash(gh pr create*)' }] },
+    { id: 'r1', status: 'completed', trigger: 'manual', summary: 'done', started_at: NOW, ended_at: NOW, refused: [{ tool: 'Bash', rule: 'Bash(git push*)' }, { tool: 'Bash', rule: null }, { tool: 'mcp__gmail__send_message', rule: 'mcp__gmail__send_message' }] },
+  ]
+  const refusedCard = card({ id: 'g3', name: 'Fixer', autonomy: { shell: 'auto' }, tool_map: { 'Bash(git push*)': 'shell' }, runs })
+  expect(lastRefusals(refusedCard).map((c) => c.rule)).toEqual(['Bash(git push*)', null, 'mcp__gmail__send_message'])
+  expect(allowRules(refusedCard).rules).toEqual(['Bash(git push*)', 'mcp__gmail__send_message'])
+  expect(refusalText({ tool: 'Bash', rule: 'Bash(git push*)' })).toBe('Claude Code refused Bash: add allow rule Bash(git push*)')
+  expect(refusalText({ tool: 'Bash', rule: null })).toMatch(/can't be an allow rule/)
+  const refusedDetail = describe(refusedCard, NOW)
+  expect(refusedDetail).toContain('Claude Code refused mcp__gmail__send_message: add allow rule mcp__gmail__send_message')
+  expect(allowRules(card({ id: 'g4', name: 'None', runs: [] })).rules).toEqual([])
 })
 
 test('modelName reads a model id as the person would say it', async () => {

@@ -30,10 +30,32 @@ function curationRun(): string {
 
 describe('schema', () => {
   it('is version 21, with goals.curated_at and goals.deleted_at', () => {
-    expect(SCHEMA_VERSION).toBe(22)
+    expect(SCHEMA_VERSION).toBe(23)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
     expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
+  })
+
+  it('rebuilds goal_tool_calls from version 23 so decision takes refused, keeping rows, index and trigger', () => {
+    const insert = (id: string, decision: string) => db.prepare("INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at) VALUES (?, 'g1', 'r1', 'Bash', 'code.pull_request', ?, NULL, '2026-11-21T00:00:00Z')").run(id, decision)
+    // A version 22 table: decision allowed only allow and deny
+    db.exec(`DROP TABLE goal_tool_calls;
+      CREATE TABLE goal_tool_calls (id TEXT PRIMARY KEY, plan_id TEXT NOT NULL REFERENCES plans(id), run_id TEXT NOT NULL, tool_name TEXT NOT NULL, category TEXT NOT NULL, decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')), reason TEXT, created_at TEXT NOT NULL);`)
+    insert('c1', 'allow')
+    expect(() => insert('c2', 'refused')).toThrow()
+    db.exec('PRAGMA user_version = 22')
+    runMigrations(db)
+    expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
+    expect(db.prepare('SELECT id, decision FROM goal_tool_calls').all()).toEqual([{ id: 'c1', decision: 'allow' }])
+    const revision = () => (db.prepare("SELECT revision FROM plans WHERE id = 'g1'").get() as { revision: number }).revision
+    const before = revision()
+    insert('c2', 'refused')
+    expect(revision()).toBe(before + 1)
+    expect(() => insert('c3', 'maybe')).toThrow()
+    const names = (db.prepare("SELECT name FROM sqlite_master WHERE tbl_name = 'goal_tool_calls'").all() as { name: string }[]).map((r) => r.name)
+    expect(names).toEqual(expect.arrayContaining(['goal_tool_calls', 'idx_goal_tool_calls', 'trg_goal_tool_calls_insert_revision']))
+    runMigrations(db)
+    expect(db.prepare('SELECT count(*) AS n FROM goal_tool_calls').get()).toEqual({ n: 2 })
   })
 
   it('adds untrusted_root to runs and memory from version 13, leaving existing text alone', () => {
