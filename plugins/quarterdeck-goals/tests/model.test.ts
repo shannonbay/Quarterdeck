@@ -7,7 +7,7 @@ import {
   statusText, summarize, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, commandAllowRule, lastRefusals, refusalText, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
-  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
+  ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_RECOVERED_WATCH, ISSUE_FIX_COMMENT_WATCH,
   ISSUE_REFINE, REFINE_WATCH, REFINE_OTHERS_WATCH, REFINE_REPLY_WATCH, GOAL_SIGN, clarifyReplyWatch, refineRules,
   REFINE_EVERY, REFINE_WAIT, REFINE_INTAKE, REFINE_PICKED_INTAKE, REFINE_PICKED_WATCH, ISSUE_REFINE_WORK,
   ISSUE_TRIAGE, TRIAGE_WATCH, triageRules, triageWatch, needsRefinementWatch, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS,
@@ -511,13 +511,13 @@ test('the issue fixer waits for refined unless told otherwise: one watch on the 
   expect(t.ask!.choices).toEqual(['Start on every new issue'])
   for (const answer of ['', ISSUE_FIX_WAIT]) {
     const watches = t.watches!(answer)
-    expect(Object.keys(watches)).toEqual([ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH])
+    expect(Object.keys(watches)).toEqual([ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_RECOVERED_WATCH, ISSUE_FIX_COMMENT_WATCH])
     const refined = watches[ISSUE_FIX_REFINED_WATCH]!.command
     expect(refined).toContain('issues?state=open&labels=refined&')
     expect(refined).not.toContain('author_association') // the label is the trust signal
     expect(refined).not.toMatch(/\.title|\.body/)
   }
-  expect(Object.keys(t.watches!(ISSUE_FIX_EVERY))).toEqual(['new issues', ISSUE_FIX_OTHERS_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH])
+  expect(Object.keys(t.watches!(ISSUE_FIX_EVERY))).toEqual(['new issues', ISSUE_FIX_OTHERS_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_RECOVERED_WATCH, ISSUE_FIX_COMMENT_WATCH])
   // Each answer puts its own intake before the same work; not waiting is today's fixer
   expect(t.ask!.fill(ISSUE_FIX_WAIT)).toBe(ISSUE_FIX_REFINED_INTAKE)
   expect(t.ask!.laterText).toBe(ISSUE_FIX_REFINED_INTAKE)

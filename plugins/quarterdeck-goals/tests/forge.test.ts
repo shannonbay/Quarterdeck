@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CI_FIX, FORGE_TEMPLATES, forgeAnswer, forgeDecision, ciFix, CLARIFY_LABEL, cleanReview, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CI_FIX, FORGE_TEMPLATES, forgeAnswer, forgeDecision, ciFix, CLARIFY_LABEL, cleanReview, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, baseRecoveredWatch, ISSUE_FIX_RECOVERED_WATCH, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -17,6 +17,27 @@ test('the repo templates take their watch commands from the GitHub forge, unchan
   expect(commands).toContain(GITHUB.watches.fixConflicts())
   expect(GITHUB.watches.fixFailures()).toContain('gh run list --event pull_request --status failure')
   expect(GITHUB.watches.fixConflicts()).toContain('CONFLICTING')
+  expect(fixer.watches!('anything')[ISSUE_FIX_RECOVERED_WATCH]).toEqual({ command: GITHUB.watches.fixBaseRecovered(), every_minutes: 10 })
+  expect(GITHUB.watches.fixBaseRecovered()).toBe(baseRecoveredWatch())
+})
+
+test("the issue fixer's base-recovered watch is one gh call that cmd.exe and sh both read the same way", () => {
+  const watch = baseRecoveredWatch()
+  expect(watch).toMatch(/^gh api "repos\/\{owner\}\/\{repo\}\/actions\/runs\?per_page=100" --jq "/)
+  expect(watch).not.toContain('$') // sh would expand a jq variable inside the double quotes
+  // cmd.exe reads what is inside each jq string literal (between \" pairs) as unquoted
+  const literals = [...watch.matchAll(/\\"([^\\]*)\\"/g)].map((m) => m[1]!)
+  expect(literals).toContain('issue-fix/')
+  for (const l of literals) expect(l).not.toMatch(/[|<>&^]/)
+  expect(watch).toContain('.pull_requests[0].base.ref') // each pull request's own base, so a stacked one compares with its base branch
+})
+
+test('the issue fixer merges a fixed base branch in, from its own watch or the CI watch', () => {
+  const work = issueFixWork(GITHUB)
+  expect(work).toContain(`under "${ISSUE_FIX_RECOVERED_WATCH}"`)
+  expect(work).toContain('external_ref ci-recovered:<branch>@<sha>')
+  expect(work).toContain('gh pr list --head <branch> --state open')
+  expect(work).toContain("the base's CI already passes again, merge the base in")
 })
 
 test("the issue fixer's comment watch leaves out the PR reviewer's clean reviews, by the wording the reviewer is told to use", async () => {
