@@ -586,7 +586,7 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
   expect(asked[4]).toContain('Should it wait until an issue is labelled refined?')
-  expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
+  expect(made.text).toContain('a run starts when its watch sees new issues, new issues from others, failed CI on its pull requests, merge conflicts on its pull requests, base branch CI fixed on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { schedule: unknown; instructions: string; watches: Record<string, { command: string }> }
   expect(input.schedule).toBeNull()
   expect(input.watches['new issues']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not) and (.author_association | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))) | .number"')
@@ -617,9 +617,9 @@ test('the issue fixer offers to wait for refined first; waiting, one watch on th
   await $.session.start(START)
   const made = await $.command.run(typed('goal-new', ''))
   expect(choices[4]?.slice(0, 3)).toEqual(['Wait for refined', 'Start on every new issue', 'Cancel'])
-  expect(made.text).toContain('a run starts when its watch sees refined issues, failed CI on its pull requests, merge conflicts on its pull requests or comments on its pull requests')
+  expect(made.text).toContain('a run starts when its watch sees refined issues, failed CI on its pull requests, merge conflicts on its pull requests, base branch CI fixed on its pull requests or comments on its pull requests')
   const input = fake.of('create_goal')[0]?.input as { instructions: string; watches: Record<string, { command: string }> }
-  expect(Object.keys(input.watches)).toEqual(['refined issues', 'failed CI on its pull requests', 'merge conflicts on its pull requests', 'comments on its pull requests'])
+  expect(Object.keys(input.watches)).toEqual(['refined issues', 'failed CI on its pull requests', 'merge conflicts on its pull requests', 'base branch CI fixed on its pull requests', 'comments on its pull requests'])
   expect(input.watches['refined issues']?.command).toBe('gh api "repos/{owner}/{repo}/issues?state=open&labels=refined&sort=updated&per_page=100" --jq ".[] | select(.pull_request == null and (.labels | map(.name) | index(\\"help wanted\\") | not)) | .number"')
   expect(input.instructions).toMatch(/^A watch starts a run when an open issue is labelled refined/)
   expect(input.instructions).toContain('Build from the refinement')
