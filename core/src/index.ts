@@ -33,3 +33,4 @@ export function openDatabase(path: string = defaultDbPath()): Database {
   return db
 }
 export * from './watch-requests.js'
+export * from './guarded.js'
