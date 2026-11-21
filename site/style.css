@@ -101,6 +101,20 @@ section > p, section > ol, section > ul:not(.chips), section > pre { max-width: 
 .button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .button.ghost:hover { border-color: var(--bronze); color: #fff1d6; }
 
+.hero-prompt blockquote {
+  margin: 0;
+  padding: 4px 0 4px 28px;
+  border-left: 3px solid var(--bronze);
+  font: 400 clamp(1.45rem, 2.5vw, 2.05rem)/1.4 var(--serif);
+  color: #f8e2b8;
+}
+.hero-prompt .cmd {
+  font: 0.82em var(--mono);
+  color: var(--bronze-strong);
+  margin-right: 0.2em;
+}
+.hero-prompt figcaption { padding-left: 31px; margin-top: 18px; font-size: 1rem; }
+
 figure { margin: 0; }
 figure img {
   display: block;
@@ -167,6 +181,7 @@ footer a { color: var(--muted); }
 
 @media (max-width: 860px) {
   .hero { grid-template-columns: 1fr; gap: 32px; }
+  .hero-prompt { order: -1; }
   .grid, .grid.two { grid-template-columns: 1fr; }
   .top nav { gap: 14px; }
   section { padding: 44px 0; }
