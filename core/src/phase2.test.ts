@@ -8,7 +8,7 @@ import {
   parseCron, cronNext, getSchedule, setSchedule, nextScheduledRun, decideTick,
   enableEventTrigger, disableEventTrigger, verifyEventSecret,
   runHealthCheck, listHealth, healthDue, parseHealthValue, buildBrief,
-  matchToolCategory, commandParts, guardToolCallForRun, listToolCalls, standingAllowRules, usableAsAllowRule, readsUntrusted, getRun,
+  matchToolCategory, commandParts, guardToolCallForRun, listToolCalls, standingAllowRules, usableAsAllowRule, commandAllowRule, readsUntrusted, getRun,
   insertMemory, updateMemory, markRunUntrusted, updateRun, MEMORY_BRIEF_CHARS,
   touchesQuarterdeckData, quarterdeckDataPaths, QUARTERDECK_DATA_CATEGORY,
 } from './index.js'
@@ -346,6 +346,42 @@ describe('goal guard', () => {
 
     updateGoal(db, 'g1', { status: 'paused' })
     expect(standingAllowRules(db)).toEqual([])
+  })
+
+  it('takes shell command rules whose first * comes after a subcommand as allow rules (#145)', () => {
+    // The same cases as commandAllowRule's copy in plugins/quarterdeck-goals/tests/model.test.ts
+    expect(commandAllowRule('Bash(git push*)')).toBe(true)
+    expect(commandAllowRule('PowerShell(gh pr create*)')).toBe(true)
+    expect(commandAllowRule('powershell(gh pr create*)')).toBe(true)
+    expect(commandAllowRule('Bash(gh api repos/*/pulls/*/comments*)')).toBe(true)
+    expect(commandAllowRule('Bash(git status)')).toBe(true)
+    expect(commandAllowRule('Bash(git -C * push*)')).toBe(false)
+    expect(commandAllowRule('Bash(ls*)')).toBe(false)
+    expect(commandAllowRule('Bash(*)')).toBe(false)
+    expect(commandAllowRule('Bash(git --no-pager*)')).toBe(false)
+    expect(commandAllowRule('mcp__gmail__archive*')).toBe(false)
+    expect(usableAsAllowRule('Bash(git push*)')).toBe(true)
+    expect(usableAsAllowRule('Bash(git -C * push*)')).toBe(false)
+
+    // The Issue Fixer's rules (push and PRs propose, gh api reads auto) and the
+    // Directory Listings goal's (push and PRs, Bash and PowerShell); one rule off
+    updateGoal(db, 'g1', { tool_map: {
+      'Bash(git push*)': 'code.pull_request',
+      'Bash(gh pr create*)': 'code.pull_request',
+      'PowerShell(git push*)': 'code.pull_request',
+      'PowerShell(gh pr create*)': 'code.pull_request',
+      'Bash(git -C * push*)': 'code.pull_request',
+      'Bash(gh api repos/*/pulls/*/comments*)': 'email.archive',
+      'Bash(ls*)': 'email.archive',
+      'Bash(gh pr merge*)': 'email.delete',
+    } })
+    expect(standingAllowRules(db)).toEqual([
+      'Bash(gh api repos/*/pulls/*/comments*)',
+      'Bash(gh pr create*)',
+      'Bash(git push*)',
+      'PowerShell(gh pr create*)',
+      'PowerShell(git push*)',
+    ])
   })
 
 })

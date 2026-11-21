@@ -25,7 +25,7 @@ export type OverviewGoal = {
   open_run: { id: string; status: string } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
   activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string } }
-  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null }[]
+  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
   needs_you_count?: number
@@ -81,7 +81,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     openItems: g.open_items.map(toItem),
     openItemCount: g.open_item_count,
     openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status } : null,
-    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null })),
+    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
@@ -256,7 +256,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Open items${g.openItemCount > g.openItems.length ? ` (first ${g.openItems.length} of ${g.openItemCount})` : ''}:\n${g.openItems.map((i) => `- item ${i.id}: ${i.title}`).join('\n')}`
       : null,
     g.runs.length > 0
-      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
+      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
       : null,
     g.instructions.trim() ? `Instructions: ${g.instructions.trim()}` : null,
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
@@ -560,7 +560,8 @@ const OWN_SERVER_PREFIXES = ['mcp__plugin_quarterdeck-goals_quarterdeck__', 'mcp
  * permission prompt: one per tool rule whose category is auto. The guard only
  * refuses; whether a tool runs unasked is Claude Code's to say, so the person
  * adds these themselves. A tool rule Claude Code can't take as an allow rule
- * (a glob outside `mcp__<server>__`, such as `mcp__*`) is listed in `skipped`.
+ * (a glob outside `mcp__<server>__`, such as `mcp__*`, or a shell rule
+ * commandAllowRule refuses, such as `Bash(git -C * push*)`) is listed in `skipped`.
  */
 export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: string[]; skipped: string[] } {
   const rules = new Set<string>()
@@ -572,8 +573,9 @@ export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: 
     for (const name of names) {
       const star = name.indexOf('*')
       const server = /^mcp__([^*]+?)__/.exec(name)
-      // Claude Code takes a glob in an allow rule only after a literal mcp__<server>__
-      if (star >= 0 && !(server && star >= server[0].length)) {
+      // Claude Code takes a glob in an allow rule only after a literal mcp__<server>__,
+      // or after a shell command's program and subcommand (commandAllowRule)
+      if (star >= 0 && !(server && star >= server[0].length) && !commandAllowRule(name)) {
         if (!skipped.includes(pattern)) skipped.push(pattern)
         continue
       }
@@ -581,6 +583,22 @@ export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: 
     }
   }
   return { rules: [...rules].sort(), skipped }
+}
+
+/**
+ * Whether a shell command rule is one Claude Code takes cleanly as an allow
+ * rule: its first `*` comes after the program and a subcommand (`Bash(git push*)`),
+ * not right after the program or a flag (`Bash(ls*)`, `Bash(git -C * push*)`).
+ * A copy of commandAllowRule in core/src/guard.ts (the hooks can't import core
+ * at runtime): keep the two in step; both have tests with the same cases.
+ */
+export function commandAllowRule(pattern: string): boolean {
+  const m = /^(?:Bash|[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll])\(([\s\S]*)\)$/.exec(pattern)
+  if (!m) return false
+  const star = m[1].indexOf('*')
+  if (star < 0) return true
+  const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean)
+  return words.length >= 2 && words.slice(1).some((w) => !w.startsWith('-'))
 }
 
 /** The prompt behind the pane's "Ask Claude to add them": Claude shows the change and waits for a yes. */

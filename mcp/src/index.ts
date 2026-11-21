@@ -20,12 +20,13 @@ import {
   ListGoalsSchema,
   GetGoalBriefSchema,
   AddItemSchema,
-  RememberSchema,
+  RememberSchema, RunStepSchema,
   RecallSchema,
   ProposeCurationSchema, ProposeWatchSchema,
   ForgetSchema,
   EndRunSchema,
   RunGoalSchema,
+  RequestRunSchema,
   GoalsTickSchema,
   GoalsOverviewSchema,
   DecideItemSchema, GetItemSchema,
@@ -63,7 +64,7 @@ import { provision_tasks } from './tools/provision_tasks.js'
 import { next_task } from './tools/next_task.js'
 import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
-import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal } from './tools/goals.js'
+import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal, request_run, run_step } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
@@ -188,6 +189,12 @@ const TOOLS = [
     handler: remember,
   },
   {
+    name: 'run_step',
+    description: 'Say which part of the job your run is on, in a few words a person can follow ("Reviewing PR #139: running web tests"): set it as you start each distinct part (a new issue, PR or email, or the next stage of one), not for every call. One line, at most 60 characters. Shown while your run goes on; end_run clears it.',
+    inputSchema: zodToJsonSchema(RunStepSchema),
+    handler: run_step,
+  },
+  {
     name: 'propose_watch',
     description: "Propose a watch that starts a run when something happens (a command whose new output lines start one, or a read-only mcp__ tool call). It waits for the person under Needs you, who sees the exact command; nothing runs until they approve. Use it instead of asking how to watch for X when the trigger is clear.",
     inputSchema: zodToJsonSchema(ProposeWatchSchema),
@@ -269,6 +276,7 @@ const TOOLS = [
   ...([
     ['goals_tick', 'Runs one goal scheduler pass and claims the runs that are due.', GoalsTickSchema, goals_tick],
     ['decide_item', "Records the human's approval or rejection of a goal item.", DecideItemSchema, decide_item],
+    ['request_run', 'Queues a run of a goal with a prompt the human typed or confirmed (Run with a prompt); stored as trusted.', RequestRunSchema, request_run],
     ['get_item', "One goal item's full title, notes and action summary, which the overview clips.", GetItemSchema, get_item],
     ['cancel_run', "Cancels a goal's run in progress.", CancelRunSchema, cancel_run],
     ['set_goal_status', 'Pauses or resumes a goal.', SetGoalStatusSchema, set_goal_status],

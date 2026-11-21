@@ -65,8 +65,8 @@ export const TOOLS = [
   },
   {
     name: 'run_goal',
-    description: 'Queues a run of a Quarterdeck goal now. The person is asked to confirm first.',
-    inputSchema: { type: 'object', properties: { goal: GOAL }, required: ['goal'] },
+    description: 'Queues a run of a Quarterdeck goal now. With prompt, that run is asked to do what it says first (it never becomes memory). The person is asked to confirm first, with the prompt quoted.',
+    inputSchema: { type: 'object', properties: { goal: GOAL, prompt: { type: 'string', description: 'Optional: what this one run should do or look at, in their words' } }, required: ['goal'] },
   },
   {
     name: 'todos',
@@ -324,9 +324,12 @@ ${describe(card, now)}`, isError: false }
   }
 
   if (name === 'run_goal') {
-    if (goal.openRun) return fail(`${goal.name} already has a run ${goal.openRun.status}.`)
-    if (!(await confirmWith($, `Start a run of the goal "${goal.name}" now?`, 'Run it'))) return fail('The person declined; nothing was started.')
-    return (await act($, `run:${goal.id}`, 'start the run', () => runNow($, goal.id)))
+    const prompt = String(input.prompt ?? '').trim()
+    // Without a prompt it would only join the open run; a prompt queues a new run behind it
+    if (goal.openRun && !prompt) return fail(`${goal.name} already has a run ${goal.openRun.status}.`)
+    const question = prompt ? `Start a run of the goal "${goal.name}" now, with this prompt:\n\n${prompt}` : `Start a run of the goal "${goal.name}" now?`
+    if (!(await confirmWith($, question, 'Run it'))) return fail('The person declined; nothing was started.')
+    return (await act($, `run:${goal.id}`, 'start the run', () => runNow($, goal.id, prompt || undefined)))
       ? { text: `Queued a run of ${goal.name}.`, isError: false }
       : fail(await actFailure($, "The run didn't start."))
   }

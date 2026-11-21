@@ -40,6 +40,11 @@ export function getOpenRun(): string | null {
   return current().runId
 }
 
+/** The run named by this call's run_scope, or null for a call without one (#146). */
+export function scopedRunId(): string | null {
+  return scoped.getStore()?.runId ?? null
+}
+
 export function setOpenRun(id: string | null): void {
   current().runId = id
 }

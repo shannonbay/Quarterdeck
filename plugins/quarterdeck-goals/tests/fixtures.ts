@@ -86,7 +86,7 @@ export function question(id: string, title: string, notes?: string): Item {
 export type Call = { tool: string; input: Record<string, unknown> }
 
 const TOOLS = [
-  'goals_overview', 'decide_item', 'run_goal', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
+  'goals_overview', 'decide_item', 'run_goal', 'request_run', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
   'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold',
 ] as const
 
@@ -143,6 +143,9 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
           g!.needs_you = g!.needs_you.filter((t) => t.id !== input.item_id)
           version++
           return ok({ item: { id: input.item_id }, queued_run: null }) as never
+        case 'request_run':
+          version++
+          return ok({ run: { id: `r${++runs}`, status: 'queued' } }) as never
         case 'run_goal':
           if (g!.status === 'retired' && g!.one_off) g!.status = 'active' // a done one-off runs again
           g!.open_run = { id: `r${++runs}`, status: 'queued' }

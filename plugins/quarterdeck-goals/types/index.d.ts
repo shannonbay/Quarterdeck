@@ -15,6 +15,8 @@ export type Run = {
   tokens?: number
   /** The model the run's agent actually used, as its turns reported it (null when unknown). */
   model?: string | null
+  /** What the person asked this one run to do (Run with a prompt); untrusted when it came from where they did not see it (the MCP server's run_goal). */
+  request?: { text: string; untrusted: boolean } | null
 }
 
 /** One memory entry the goal's runs read. */

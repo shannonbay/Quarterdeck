@@ -191,6 +191,7 @@ export function insertRun(db: Database, planId: string, trigger: TriggerKind, st
     ended_at: status === 'skipped' ? now : null,
     input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: null,
     now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null, untrusted_root: null,
+    request: null, request_untrusted: 0, step: null, step_at: null, step_untrusted: null,
   }
   db.prepare(`
     INSERT INTO goal_runs (id, plan_id, trigger, status, session_id, summary, skip_reason, items_created, items_resolved, started_at, ended_at)
@@ -204,7 +205,9 @@ export function getRun(db: Database, runId: string): GoalRun | undefined {
 }
 
 export function updateRun(db: Database, runId: string, fields: Partial<Omit<GoalRun, 'id' | 'plan_id'>>): void {
-  const entries = Object.entries(fields)
+  // A run that stops running never leaves its step on screen (#146)
+  const ended = fields.status !== undefined && fields.status !== 'running' && fields.status !== 'queued'
+  const entries = Object.entries(ended ? { step: null, step_at: null, step_untrusted: null, ...fields } : fields)
   if (!entries.length) return
   db.prepare(`UPDATE goal_runs SET ${entries.map(([k]) => `${k} = ?`).join(', ')} WHERE id = ?`)
     .run(...entries.map(([, v]) => v), runId)

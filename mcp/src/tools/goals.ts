@@ -1,12 +1,12 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
-  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, countItems, touchPlan,
-  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
+  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, queueRunWithRequest, countItems, touchPlan,
+  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch, setRunStep,
 } from '../db.js'
 import { purgeDate } from '@quarterdeck/core'
-import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
+import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun, scopedRunId } from '../session.js'
 import {
-  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema,
+  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema, RequestRunSchema, RunStepSchema,
 } from '../schema.js'
 import { record } from '../history.js'
 
@@ -128,6 +128,21 @@ export async function remember(args: unknown) {
   return { memory: { id: m.id, kind: m.kind, text: m.text, ...(untrusted && { untrusted: true }) } }
 }
 
+/**
+ * A running run says which part of the job it is on (#146). Only its own agent:
+ * the call's run_scope must name the run. Shown in the Goals pane, the status
+ * line and the web goal page while the run goes on; never on the phone or as an alert.
+ */
+export async function run_step(args: unknown) {
+  const { goal_id, run_id, text } = RunStepSchema.parse(args)
+  if (scopedRunId() !== run_id) throw new Error('Only the run itself sets its step: pass run_scope set to your run id.')
+  const run = getRun(run_id)
+  if (!run || run.plan_id !== goal_id) throw new Error(`Run ${run_id} is not a run of goal ${goal_id}.`)
+  const r = setRunStep(run_id, text)
+  if (r.changed) record(goal_id, goal_id, 'step_set', { run_id, text: r.step })
+  return { step: r.step, changed: r.changed, ...(r.untrusted && { untrusted: true }) }
+}
+
 /** A run proposes a watch: it waits under Needs you and nothing runs until the person approves it. */
 export async function propose_watch(args: unknown) {
   const { name, reason, ...spec } = ProposeWatchSchema.parse(args)
@@ -189,11 +204,31 @@ export async function end_run(args: unknown) {
   }
 }
 
+/** Queues a run, with the prompt as its request when there is one, and records it. */
+function queueRequested(goalId: string, prompt: string | undefined, untrusted: boolean) {
+  if (!getGoal(goalId)) throw new Error(`Goal ${goalId} not found.`)
+  reviveIfDone(goalId) // a done one-off runs again
+  let run
+  if (prompt !== undefined) {
+    const queued = queueRunWithRequest(goalId, prompt, { untrusted })
+    if ('reason' in queued) throw new Error(queued.reason)
+    run = queued.run
+  } else run = queueRun(goalId)
+  record(goalId, goalId, 'run_requested', { run_id: run.id, prompt: prompt ?? null, ...(prompt !== undefined && { untrusted }) })
+  return run
+}
+
+/** The plugin's Run with a prompt (pane box, or its run_goal once the person confirmed the quoted prompt): a trusted request. */
+export async function request_run(args: unknown) {
+  const input = RequestRunSchema.parse(args)
+  const run = queueRequested(input.goal_id, input.prompt, false)
+  return { run: { id: run.id, status: run.status } }
+}
+
 export async function run_goal(args: unknown) {
   const input = RunGoalSchema.parse(args)
-  if (!getGoal(input.goal_id)) throw new Error(`Goal ${input.goal_id} not found.`)
-  reviveIfDone(input.goal_id) // a done one-off runs again
-  const run = queueRun(input.goal_id)
+  // A prompt typed here is one the person doesn't see: stored untrusted, so the run treats it as information
+  const run = queueRequested(input.goal_id, input.prompt, true)
   return {
     run: { id: run.id, status: run.status },
     message: run.status === 'queued'

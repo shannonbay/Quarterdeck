@@ -11,7 +11,7 @@ import { schemaOutdated } from './db.js'
  * pane still shows the goals and its reload notice; goals_tick, which already schedules
  * nothing on outdated code; and a run's own tools (add_item, remember, end_run,
  * set_status, ...) with the runner's bookkeeping for it (attach_agent, fail_run,
- * guard_check, report_run_end, run_progress). An outdated server claims no new runs, so
+ * guard_check, report_run_end, run_progress, run_step). An outdated server claims no new runs, so
  * those only serve a run it started before the upgrade, and refusing them would lose
  * that run's work and its end_run. To-do lists are plans, not goals, and are left alone.
  */
@@ -30,6 +30,7 @@ export const REFUSED_WHEN_OUTDATED = new Set([
   'trust_memory',
   'cancel_run',
   'run_goal',
+  'request_run',
   'watch_report',
 ])
 

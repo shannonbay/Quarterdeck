@@ -71,6 +71,7 @@ export const insertRun = (planId: string, trigger: core.TriggerKind, status?: co
 export const markRunUntrusted = (runId: string, source: string, root?: string) => core.markRunUntrusted(db, runId, source, root)
 export const endRun = (runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown) => core.endRun(db, runId, summary, status, statusCheck, statusTone)
 export const queueRun = (planId: string) => core.queueRun(db, planId, 'manual')
+export const queueRunWithRequest = (planId: string, text: string, opts: { untrusted?: boolean } = {}) => core.queueRunWithRequest(db, planId, text, opts)
 export const getOpenGoalRun = (planId: string) => core.getOpenRun(db, planId)
 export const countItems = (planId: string) => db.prepare(
   "SELECT SUM(CASE WHEN status IN ('pending','active') THEN 1 ELSE 0 END) AS open, SUM(CASE WHEN review_requested_at IS NOT NULL THEN 1 ELSE 0 END) AS awaiting_review FROM tasks WHERE plan_id = ? AND archived_at IS NULL",
@@ -97,6 +98,7 @@ export const nextScheduledRun = (planId: string) => core.nextScheduledRun(db, pl
 export const reviveIfDone = (planId: string) => core.reviveIfDone(db, planId)
 export const applyGoalChanges = (planId: string, changes: core.GoalChanges) => core.applyGoalChanges(db, planId, changes)
 export const reportRunEnd = (runId: string, input: { answer: string; reason?: string; usage?: core.RunUsage }) => core.reportRunEnd(db, runId, input)
+export const setRunStep = (runId: string, text: string) => core.setRunStep(db, runId, text)
 export const reportRunProgress = (runId: string, progress: core.RunProgress) => core.reportRunProgress(db, runId, progress)
 export const listWatches = (planId: string) => core.listWatches(db, planId)
 export const checkCommandWatch = (watchId: string) => core.checkCommandWatch(db, watchId)

@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from '../../tools/goals.js'
+import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal, request_run, run_step } from '../../tools/goals.js'
 import { delete_goal, restore_goal, purge_goal } from '../../tools/goal_runner.js'
 import { set_status } from '../../tools/set_status.js'
 import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun } from '../../db.js'
-import { setOpenPlan } from '../../session.js'
+import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun, getEvents, endRun } from '../../db.js'
+import { setOpenPlan, withScope } from '../../session.js'
 import { RememberSchema } from '../../schema.js'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
@@ -255,6 +255,31 @@ describe('goal tools', () => {
     expect(a.run.status).toBe('queued')
     expect(b.run.id).toBe(a.run.id)
   })
+
+  it('run_goal records the run, and stores a prompt as untrusted so the run proposes its auto actions', async () => {
+    const id = makeGoal()
+    const running = insertRun(id, 'manual', 'running')
+    const plain = await run_goal({ goal_id: id })
+    expect(plain.run.id).toBe(running.id)
+    expect(getEvents(id).find((e) => e.event_type === 'run_requested')?.payload).toMatchObject({ run_id: plain.run.id, prompt: null })
+    const asked = await run_goal({ goal_id: id, prompt: 'Look at the refund' })
+    expect(asked.run.id).not.toBe(plain.run.id)
+    expect(getEvents(id).filter((e) => e.event_type === 'run_requested').map((e) => e.payload)).toContainEqual(expect.objectContaining({ run_id: asked.run.id, prompt: 'Look at the refund' }))
+    endRun(plain.run.id, 'done')
+    const brief = (await get_goal_brief({ goal_id: id, run_id: asked.run.id })) as any
+    expect(brief.run!.request).toEqual({ text: 'Look at the refund', untrusted: true })
+    expect(brief.run!.untrusted).toMatchObject({ source: 'run request' })
+    expect(brief.memory).toEqual([])
+  })
+
+  it('request_run (the plugin, after the person confirmed the prompt) stores a trusted request', async () => {
+    const id = makeGoal()
+    const r = await request_run({ goal_id: id, prompt: 'Check the refund' })
+    const brief = (await get_goal_brief({ goal_id: id, run_id: r.run.id })) as any
+    expect(brief.run.request).toEqual({ text: 'Check the refund' })
+    expect(brief.run.untrusted).toBeNull()
+    expect(getEvents(id).find((e) => e.event_type === 'run_requested')?.payload).toMatchObject({ run_id: r.run.id, prompt: 'Check the refund', untrusted: false })
+  })
 })
 
 describe('attempt limits through set_status and update_task', () => {
@@ -315,5 +340,26 @@ describe('deleting, restoring and purging a goal', () => {
     await delete_goal({ goal_id: id })
     await purge_goal({ goal_id: id })
     expect((await list_goals({ status: 'all', deleted: 'include' })).goals.map((g) => g.id)).not.toContain(id)
+  })
+})
+
+describe('run_step (#146)', () => {
+  it('sets the step from the run itself, records a change once, and is refused without its run_scope', async () => {
+    const id = makeGoal()
+    const run = insertRun(id, 'manual', 'running')
+    await expect(run_step({ goal_id: id, run_id: run.id, text: 'Issue #12' })).rejects.toThrow(/run_scope/)
+    await expect(withScope({ planId: id, runId: 'run_other' }, () => run_step({ goal_id: id, run_id: run.id, text: 'Issue #12' }))).rejects.toThrow(/run_scope/)
+    const step = (text: string) => withScope({ planId: id, runId: run.id }, () => run_step({ goal_id: id, run_id: run.id, text }))
+    const before = getEvents(id).filter((e) => e.event_type === 'step_set').length
+    expect(await step('Issue #12: running tests')).toEqual({ step: 'Issue #12: running tests', changed: true })
+    expect(await step('Issue #12: running tests')).toEqual({ step: 'Issue #12: running tests', changed: false })
+    expect(getEvents(id).filter((e) => e.event_type === 'step_set')).toHaveLength(before + 1)
+    await expect(step('x'.repeat(61))).rejects.toThrow(/at most 60 characters/)
+    markRunUntrusted(run.id, 'Bash: gh issue view')
+    expect(await step('Issue #13')).toEqual({ step: 'Issue #13', changed: true, untrusted: true })
+    expect(getRun(run.id)!.step_untrusted).toBe('Bash: gh issue view')
+    endRun(run.id, 'done')
+    expect(getRun(run.id)!.step).toBeNull()
+    await expect(step('later')).rejects.toThrow(/not running/)
   })
 })

@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 20
+export const SCHEMA_VERSION = 22
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -511,6 +511,13 @@ export function runMigrations(db: Database): void {
   }
   // Schema version 20: the goal whose run set the usage-limit hold, so clearing it is recorded there (#104)
   try { db.exec('ALTER TABLE goal_run_hold ADD COLUMN plan_id TEXT') } catch { /* already exists */ }
+  // Schema version 21: what the person asked of one run (Run with a prompt), and whether it came from outside their view (#143)
+  try { db.exec('ALTER TABLE goal_runs ADD COLUMN request TEXT') } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE goal_runs ADD COLUMN request_untrusted INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  // Schema version 22: the part of the job a running run says it is on (run_step), and whether it was set after an untrusted read (#146)
+  for (const col of ['step', 'step_at', 'step_untrusted']) {
+    try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
+  }
   // The update trigger's column list grew in 17: an older one is made again below
   if (dbSchemaVersion(db) < 17) db.exec('DROP TRIGGER IF EXISTS trg_goal_watches_update_revision')
   db.exec(`

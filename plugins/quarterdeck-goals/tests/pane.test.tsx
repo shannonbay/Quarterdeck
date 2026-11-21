@@ -531,9 +531,29 @@ test('a goal\'s controls are separated by dots, and a scheduled goal has Resched
   expect(await ui.find({ key: 'reschedule-g1' })).toBeDefined()
   expect(await ui.find({ key: 'schedule-g1' })).toBeUndefined()
   expect(await ui.find({ key: 'reschedule-g2' })).toBeUndefined()
-  // Each goal: Reschedule (or Set schedule) · Run now · Pause · Delete, with no dot at either end,
-  // and its facts line: Runs … · model
-  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(8)
+  // Each goal: Reschedule (or Set schedule) · Run now · Run with a prompt… · Pause · Delete, with no
+  // dot at either end, and its facts line: Runs … · model
+  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(10)
+  await ui.unmount()
+})
+
+test('Run with a prompt opens a box and sends the typed text as a trusted request; a refusal shows (#143)', async ($, on) => {
+  engine(on)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })], {
+    errors: { request_run: 'Goal runs are on hold until 2026-11-21T03:00:00Z: usage limit' },
+  })
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  await ui.press({ key: 'run-prompt-g1' })
+  await ui.input({ key: 'prompt-input-g1', text: '  Look at issue #12 first ' })
+  expect(fake.of('request_run').map((c) => c.input)).toEqual([{ goal_id: 'g1', prompt: 'Look at issue #12 first' }])
+  expect(fake.of('run_goal')).toEqual([])
+  expect((await ui.find({ type: 'Text', text: /Couldn't start the run/ }))?.text).toContain('on hold')
+  // The box stays open after a refusal; Cancel closes it
+  await ui.press({ key: 'prompt-cancel-g1' })
+  expect(await ui.find({ key: 'prompt-input-g1' })).toBeUndefined()
+  expect(await ui.find({ key: 'run-prompt-g1' })).toBeDefined()
   await ui.unmount()
 })
 

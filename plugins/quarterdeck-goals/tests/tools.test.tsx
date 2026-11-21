@@ -7,7 +7,7 @@ import { FORGE_QUESTION, ISSUE_FIX_REFINED_WATCH } from '../hooks/templates'
 const typed = (command: string, args: string) =>
   ({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } }) as const
 
-const inbox = () => goal({ id: 'g1', name: 'Inbox', needs_you: [proposal('11', 'Reply to Alice')] })
+const inbox = (over: Partial<Parameters<typeof goal>[0]> = {}) => goal({ id: 'g1', name: 'Inbox', needs_you: [proposal('11', 'Reply to Alice')], ...over })
 
 test('goals_status summarises every goal for Claude, with item ids', async ($, on) => {
   engine(on)
@@ -65,6 +65,26 @@ test('other tools refuse a deleted goal (#105)', async ($, on) => {
   const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__run_goal', goal: 'old jobs' } as never)
   expect(String(res.result)).toBe(`Error: ${DELETED_LINE}`)
   expect(fake.of('run_goal')).toEqual([])
+})
+
+test('run_goal with a prompt quotes it in the confirmation and queues it as a trusted request, even behind an open run (#143)', async ($, on) => {
+  const { asked } = engine(on, { answer: 'Run it' })
+  const fake = fakeQuarterdeck(on, [inbox({ open_run: { id: 'r0', status: 'running', trigger: 'schedule', started_at: '2026-11-07T08:00:00Z' } as never })])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__run_goal', goal: 'inbox', prompt: '  Look at the refund  ' } as never)
+  expect(asked).toEqual(['Start a run of the goal "Inbox" now, with this prompt:\n\nLook at the refund'])
+  expect(String(res.result)).toBe('Queued a run of Inbox.')
+  expect(fake.of('request_run').map((c) => c.input)).toEqual([{ goal_id: 'g1', prompt: 'Look at the refund' }])
+  expect(fake.of('run_goal')).toEqual([])
+})
+
+test('run_goal with a prompt starts nothing when declined (#143)', async ($, on) => {
+  engine(on, { answer: 'Cancel' })
+  const fake = fakeQuarterdeck(on, [inbox()])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__run_goal', goal: 'inbox', prompt: 'Look at the refund' } as never)
+  expect(String(res.result)).toContain('declined')
+  expect(fake.of('request_run')).toEqual([])
 })
 
 test('approve_item asks first and does nothing when declined', async ($, on) => {
@@ -574,7 +594,7 @@ test('the issue fixer watches open issues and its own pull requests\' CI and con
   expect(input.watches['failed CI on its pull requests']?.command).toBe('gh run list --event pull_request --status failure --limit 30 --json databaseId,headBranch --jq ".[] | select(.headBranch | startswith(\\"issue-fix/\\")) | .databaseId"')
   expect(input.watches['merge conflicts on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,headRefOid,mergeable --jq ".[] | select((.headRefName | startswith(\\"issue-fix/\\")) and .mergeable == \\"CONFLICTING\\") | (.number | tostring) + \\"@\\" + .headRefOid"')
   // Tried under both sh and cmd.exe: only trusted authors' comments and reviews, as "<number> <id>", and no jq $variables
-  expect(input.watches['comments on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"issue-fix/\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select((.authorAssociation | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\"))) | .id] | .[0] + \\" \\" + .[1:][]"')
+  expect(input.watches['comments on its pull requests']?.command).toBe('gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"issue-fix/\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select((.authorAssociation | IN(\\"OWNER\\",\\"MEMBER\\",\\"COLLABORATOR\\")) and ((.body // \\"\\") | test(\\"Reviewed at [0-9a-f]+: no problems found\\") | not)) | .id] | .[0] + \\" \\" + .[1:][]"')
   expect(input.instructions).toContain('pr-comment:<id>')
   expect(input.instructions).toContain('pr_inline_comments')
   expect(input.instructions).not.toContain('pulls/<number>/comments') // the inline read is a server tool now (#68)
