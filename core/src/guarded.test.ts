@@ -5,8 +5,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
-  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY,
+  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
 } from './index.js'
+import { readFileSync } from 'fs'
 
 describe('touchesSecrets (#159)', () => {
   it('names secret locations and commands that print secrets', () => {
@@ -81,6 +82,36 @@ describe('guardRun with auto_after_outside (#159)', () => {
     expect(call('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
     updateGoal(db, 'g1', { auto_after_outside: [] })
     expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
+  })
+
+  it('stageGuardedCall: stages a listed call under the data folder, and the staged call goes through once', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const dataDir = join(dir, 'data')
+    const stagePaths = { dirs: [dataDir], db: null }
+    const cmd = 'gh pr review 1 --comment --body-file review.md'
+    const files = [{ path: 'review.md', contents: 'Looks good.' }]
+    expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true })).toMatchObject({ ok: true, category: 'gh.review', files: [] })
+    expect(listToolCalls(db, 'g1')).toHaveLength(0)
+    const staged = stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {} })
+    if (!staged.ok) throw new Error(staged.reason)
+    expect(staged.files).toHaveLength(1)
+    expect(staged.files[0]!.startsWith(join(dataDir, 'guarded', run.id))).toBe(true)
+    expect(readFileSync(staged.files[0]!, 'utf8')).toBe('Looks good.')
+    expect(staged.command).toBe(`gh pr review 1 --comment --body-file ${staged.files[0]}`)
+    const call = (c: string) => guardToolCallForRun(db, run.id, 'Bash', { command: c }, stagePaths)
+    expect(call(cmd)).toMatchObject({ decision: 'deny' })
+    expect(call(staged.command)).toMatchObject({ decision: 'allow', category: 'gh.review' })
+    expect(call(staged.command)).toMatchObject({ decision: 'deny' })
+  })
+
+  it('stageGuardedCall: refuses unlisted categories, unmatched commands, oversized and secret payloads', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const opts = { dataDir: join(dir, 'data'), env: { API_SECRET: 'hunter2hunter2' } }
+    expect(stageGuardedCall(db, run.id, 'gh issue edit 1 --add-label x', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/gh\.label/) })
+    expect(stageGuardedCall(db, run.id, 'rm -rf /', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/tool rules/) })
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'x'.repeat(GUARDED_MAX_BYTES) }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/limit/) })
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'key hunter2hunter2' }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/API_SECRET/) })
   })
 
   it('a staged file changed after the check: falls back to approval, naming why', () => {

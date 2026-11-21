@@ -6,7 +6,11 @@
 
 import { createHash } from 'crypto'
 import type { Database } from './sqlite.js'
-import { newId } from './goals.js'
+import { mkdirSync, writeFileSync } from 'fs'
+import { basename, join } from 'path'
+import { newId, getGoal, getRun } from './goals.js'
+import { autonomyFor } from './goal-engine.js'
+import { matchToolCategory } from './guard.js'
 
 /** One file a guarded call needs, sent in full so the check sees what the call will send. */
 export interface GuardedFile {
@@ -132,4 +136,46 @@ export function claimUsedGuardedCheck(db: Database, runId: string, category: str
   if (!row) return false
   db.prepare('UPDATE guarded_checks SET recorded_at = ? WHERE id = ?').run(new Date().toISOString(), row.id)
   return true
+}
+
+export type GuardedStage =
+  | { ok: true; category: string; command: string; files: string[] }
+  | { ok: false; reason: string }
+
+/**
+ * guarded_run's server half (#159): checks a call for a marked run and, unless
+ * `dryRun`, stages it. The command must map (as a Bash call) to a category the
+ * goal keeps auto after outside content; then the payload rules run. On a pass,
+ * each file is written under `<dataDir>/guarded/<run id>/`, every mention of its
+ * original path in the command is pointed at the copy, and the check is recorded
+ * (one use). It never runs the command: the run makes the returned call itself.
+ * The plugin calls it twice, `dryRun` first, with its Haiku check in between.
+ */
+export function stageGuardedCall(
+  db: Database, runId: string, command: string, files: GuardedFile[],
+  opts: { dataDir: string; env?: Record<string, string | undefined>; dryRun?: boolean },
+): GuardedStage {
+  const run = getRun(db, runId)
+  if (!run || !['queued', 'running'].includes(run.status)) return { ok: false, reason: 'this run is not running' }
+  const goal = getGoal(db, run.plan_id)
+  if (!goal) return { ok: false, reason: 'the goal is gone' }
+  const category = matchToolCategory(goal.tool_map, 'Bash', { command })
+  if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== 'auto') {
+    return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" }
+  }
+  const check = checkGuardedPayload(command, files, opts.env ?? process.env)
+  if (!check.ok) return check
+  if (opts.dryRun) return { ok: true, category, command, files: [] }
+  const dir = join(opts.dataDir, 'guarded', runId)
+  mkdirSync(dir, { recursive: true })
+  const stamp = newId('gf')
+  let staged = command
+  const copies: GuardedFile[] = files.map((f, i) => {
+    const path = join(dir, `${stamp}-${i}-${basename(f.path.replace(/\\/g, '/'))}`)
+    writeFileSync(path, f.contents)
+    staged = staged.split(f.path).join(path)
+    return { path, contents: f.contents }
+  })
+  recordGuardedCheck(db, run, category, staged, copies)
+  return { ok: true, category, command: staged, files: copies.map((c) => c.path) }
 }
