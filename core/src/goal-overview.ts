@@ -296,6 +296,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           tokens: r.input_tokens + r.output_tokens + r.cache_write_tokens, model: r.model,
           // What untrusted content it read first: from then on its auto actions needed approval
           untrusted: r.untrusted_source,
+          // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
+          request: r.request ? { text: clip(r.request, CLIP.summary)!, untrusted: r.request_untrusted === 1 } : null,
         })),
         needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
         open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
