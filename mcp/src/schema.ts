@@ -276,7 +276,7 @@ export const GuardCheckSchema = z.object({
 export const RunRefusedSchema = z.object({
   run_id: z.string(),
   tool_name: z.string().describe('The tool Claude Code refused'),
-  input: z.record(z.unknown()).optional().describe("The call's command and path fields, to match the goal's command rules"),
+  input: z.record(z.string(), z.unknown()).optional().describe("The call's command and path fields, to match the goal's command rules"),
 })
 
 const GoalScheduleSchema = z.union([

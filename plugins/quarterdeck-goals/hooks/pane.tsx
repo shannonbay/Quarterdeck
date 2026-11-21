@@ -636,7 +636,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
 
   if (isDeleting) {
     return (
-      <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
+      <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
         <Text color="yellow">Delete "{g.name}"? It stops running and is hidden; you can restore it, with its items, runs and memory, until it is purged after the retention period (30 days unless QUARTERDECK_DELETED_RETENTION_DAYS says otherwise).</Text>
         <Box>
           <Button
@@ -682,8 +682,9 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
       })
     }
     return (
-      <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
-        <Input key={`prompt-input-${g.id}`} label="What should this run do or look at? (for this run only, not kept as memory)" submitLabel="Run" autoFocus onSubmit={send} />
+      <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
+        <Input key={`prompt-input-${g.id}`} label="Prompt" submitLabel="Run" autoFocus onSubmit={send} />
+        <Text dimColor> · </Text>
         {action($, e, { key: `prompt-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
       </Box>
     )
