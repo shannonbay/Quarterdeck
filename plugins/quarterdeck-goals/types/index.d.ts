@@ -15,6 +15,10 @@ export type Run = {
   tokens?: number
   /** The model the run's agent actually used, as its turns reported it (null when unknown). */
   model?: string | null
+  /** What the person asked this one run to do (Run with a prompt); untrusted when it came from where they did not see it (the MCP server's run_goal). */
+  request?: { text: string; untrusted: boolean } | null
+  /** Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none Claude Code can take) (#145). */
+  refused?: { tool: string; rule: string | null }[]
 }
 
 /** One memory entry the goal's runs read. */
@@ -74,6 +78,8 @@ export type GoalCard = {
   instructions: string
   /** Action category → off | propose | auto (unlisted: propose). */
   autonomy: Record<string, string>
+  /** Categories the person keeps auto after a run reads outside content (#159). */
+  autoAfterOutside: string[]
   /** Tool name pattern → action category. */
   toolMap: Record<string, string>
   health: { passed: boolean; value: number | null } | null
@@ -126,6 +132,10 @@ export type Snapshot = {
   update?: Update
   /** Deleted goals, newest first, while any wait to be purged (#105): the pane's "Recently deleted". */
   deleted?: DeletedGoal[]
+  /** Each expanded goal's detail etag, by goal id: its own `only: true` read sends it back (#162). */
+  detailEtags?: Record<string, string>
+  /** Expanded goals whose detail was too large to read: the pane shows them as cards and says so (#162). */
+  tooBig?: string[]
 }
 
 /** A deleted goal the pane can restore or delete permanently. `purgeAt` is null when retention never purges. */

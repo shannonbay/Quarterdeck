@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.31.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.32.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -407,7 +407,9 @@ function runMigrations(db) {
     // When the goal last went back to active: the runaway breaker counts only runs since then
     ["resumed_at", "TEXT"],
     // When its memory was last curated (curation.ts; schema version 13)
-    ["curated_at", "TEXT"]
+    ["curated_at", "TEXT"],
+    // Auto categories that stay auto after a run reads outside content (JSON array; schema version 24)
+    ["auto_after_outside", "TEXT NOT NULL DEFAULT '[]'"]
   ];
   for (const [col, def] of addedGoalColumns) {
     try {
@@ -470,7 +472,7 @@ function runMigrations(db) {
       run_id     TEXT NOT NULL,
       tool_name  TEXT NOT NULL,
       category   TEXT NOT NULL,
-      decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+      decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny', 'refused')),
       reason     TEXT,
       created_at TEXT NOT NULL
     );
@@ -610,6 +612,44 @@ function runMigrations(db) {
     db.exec("ALTER TABLE goal_run_hold ADD COLUMN plan_id TEXT");
   } catch {
   }
+  try {
+    db.exec("ALTER TABLE goal_runs ADD COLUMN request TEXT");
+  } catch {
+  }
+  try {
+    db.exec("ALTER TABLE goal_runs ADD COLUMN request_untrusted INTEGER NOT NULL DEFAULT 0");
+  } catch {
+  }
+  for (const col of ["step", "step_at", "step_untrusted"]) {
+    try {
+      db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
+    } catch {
+    }
+  }
+  const toolCallsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'goal_tool_calls'").get()?.sql ?? "";
+  if (toolCallsSql && !toolCallsSql.includes("'refused'")) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE goal_tool_calls_v23 (
+        id         TEXT PRIMARY KEY,
+        plan_id    TEXT NOT NULL REFERENCES plans(id),
+        run_id     TEXT NOT NULL,
+        tool_name  TEXT NOT NULL,
+        category   TEXT NOT NULL,
+        decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny', 'refused')),
+        reason     TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO goal_tool_calls_v23 (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
+        SELECT id, plan_id, run_id, tool_name, category, decision, reason, created_at FROM goal_tool_calls;
+      DROP TABLE goal_tool_calls;
+      ALTER TABLE goal_tool_calls_v23 RENAME TO goal_tool_calls;
+      CREATE INDEX IF NOT EXISTS idx_goal_tool_calls ON goal_tool_calls(plan_id, category, created_at);
+      CREATE TRIGGER IF NOT EXISTS trg_goal_tool_calls_insert_revision AFTER INSERT ON goal_tool_calls
+      BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
+      COMMIT;
+    `);
+  }
   if (dbSchemaVersion(db) < 17) db.exec("DROP TRIGGER IF EXISTS trg_goal_watches_update_revision");
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_goal_watches_insert_revision AFTER INSERT ON goal_watches
@@ -644,6 +684,20 @@ function runMigrations(db) {
     CREATE INDEX IF NOT EXISTS idx_transcript_session ON transcript_messages(session_id, turn_index);
   `);
   db.exec(`
+    CREATE TABLE IF NOT EXISTS guarded_checks (
+      id          TEXT PRIMARY KEY,
+      plan_id     TEXT NOT NULL REFERENCES plans(id),
+      run_id      TEXT NOT NULL,
+      category    TEXT NOT NULL,
+      command     TEXT NOT NULL,
+      file_hashes TEXT NOT NULL DEFAULT '{}',
+      used_at     TEXT,
+      recorded_at TEXT,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);
+  `);
+  db.exec(`
     UPDATE goals SET tool_map = replace(tool_map, '"mcp__conductor__', '"mcp__quarterdeck__')
     WHERE instr(tool_map, '"mcp__conductor__') > 0
   `);
@@ -671,7 +725,7 @@ var init_migrate = __esm({
       "trg_goal_watches_update_revision",
       "trg_goal_watches_delete_revision"
     ];
-    SCHEMA_VERSION = 20;
+    SCHEMA_VERSION = 25;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -934,6 +988,7 @@ function deserializeGoal(r) {
     autonomy: JSON.parse(r.autonomy || "{}"),
     limits: { ...DEFAULT_GOAL_LIMITS, ...JSON.parse(r.limits || "{}") },
     tool_map: JSON.parse(r.tool_map || "{}"),
+    auto_after_outside: JSON.parse(r.auto_after_outside || "[]"),
     health_command: r.health_command ?? null,
     health_every_minutes: r.health_every_minutes ?? 60,
     health_triggers_run: r.health_triggers_run === void 0 ? true : Boolean(r.health_triggers_run),
@@ -1009,6 +1064,7 @@ function updateGoal(db, planId, fields) {
   const serialized = { ...fields };
   if (fields.autonomy) serialized.autonomy = JSON.stringify(fields.autonomy);
   if (fields.tool_map) serialized.tool_map = JSON.stringify(fields.tool_map);
+  if (fields.auto_after_outside) serialized.auto_after_outside = JSON.stringify(fields.auto_after_outside);
   if ("status_check" in fields) serialized.status_check = fields.status_check ? JSON.stringify(fields.status_check) : null;
   if ("health_triggers_run" in fields) serialized.health_triggers_run = fields.health_triggers_run ? 1 : 0;
   if ("one_off" in fields) serialized.one_off = fields.one_off ? 1 : 0;
@@ -1078,7 +1134,12 @@ function insertRun(db, planId, trigger, status2 = "queued", skipReason) {
     waiting_since: null,
     untrusted_at: null,
     untrusted_source: null,
-    untrusted_root: null
+    untrusted_root: null,
+    request: null,
+    request_untrusted: 0,
+    step: null,
+    step_at: null,
+    step_untrusted: null
   };
   db.prepare(`
     INSERT INTO goal_runs (id, plan_id, trigger, status, session_id, summary, skip_reason, items_created, items_resolved, started_at, ended_at)
@@ -1090,7 +1151,8 @@ function getRun(db, runId) {
   return db.prepare("SELECT * FROM goal_runs WHERE id = ?").get(runId);
 }
 function updateRun(db, runId, fields) {
-  const entries = Object.entries(fields);
+  const ended = fields.status !== void 0 && fields.status !== "running" && fields.status !== "queued";
+  const entries = Object.entries(ended ? { step: null, step_at: null, step_untrusted: null, ...fields } : fields);
   if (!entries.length) return;
   db.prepare(`UPDATE goal_runs SET ${entries.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...entries.map(([, v]) => v), runId);
 }
@@ -1738,56 +1800,119 @@ var init_schedule = __esm({
   }
 });
 
-// ../core/src/health.ts
-function parseHealthValue(output) {
-  const matches = output.match(/-?\d+(?:\.\d+)?/g);
-  return matches ? Number(matches[matches.length - 1]) : null;
+// ../core/src/guarded.ts
+import { createHash as createHash2 } from "crypto";
+import { mkdirSync, writeFileSync } from "fs";
+import { basename, join as join2 } from "path";
+function checkGuardedPayload(command2, files, env = process.env) {
+  const parts = [command2, ...files.map((f) => f.contents)];
+  const bytes = parts.reduce((n, p) => n + Buffer.byteLength(p, "utf8"), 0);
+  if (bytes > GUARDED_MAX_BYTES) {
+    return { ok: false, reason: `the command and its files come to ${bytes} bytes, over the ${GUARDED_MAX_BYTES}-byte limit for a guarded call` };
+  }
+  const where = (i) => i === 0 ? "the command" : `file ${files[i - 1].path}`;
+  for (const [i, text] of parts.entries()) {
+    for (const rule of TOKEN_RULES) {
+      if (rule.re.test(text)) return { ok: false, reason: `${where(i)} contains what looks like ${rule.name}` };
+    }
+  }
+  const values = Object.entries(env).filter((e) => typeof e[1] === "string" && e[1].length >= ENV_VALUE_MIN_CHARS);
+  for (const [i, text] of parts.entries()) {
+    for (const [name, value] of values) {
+      if (text.includes(value)) return { ok: false, reason: `${where(i)} contains the value of the environment variable ${name}` };
+    }
+  }
+  return { ok: true };
 }
-async function runHealthCheck(db, planId) {
-  const goal = getGoal(db, planId);
-  const plan = getPlan(db, planId);
-  if (!goal || !plan) throw new Error(`Goal ${planId} not found`);
-  if (!goal.health_command) throw new Error("This goal has no health check command.");
-  const r = await runVerifyCommand(goal.health_command, plan.working_dir, HEALTH_TIMEOUT_S);
-  const row = {
-    id: newId("hc"),
-    plan_id: planId,
-    passed: r.passed,
-    exit_code: r.exit_code,
-    value: parseHealthValue(r.output),
-    output: r.output.slice(-2e3),
-    duration_ms: r.duration_ms,
+function hashContents(contents) {
+  return createHash2("sha256").update(contents).digest("hex");
+}
+function recordGuardedCheck(db, run, category, command2, staged) {
+  const rec = {
+    id: newId("gc"),
+    plan_id: run.plan_id,
+    run_id: run.id,
+    category,
+    command: command2,
+    file_hashes: Object.fromEntries(staged.map((f) => [f.path, hashContents(f.contents)])),
+    used_at: null,
     created_at: (/* @__PURE__ */ new Date()).toISOString()
   };
-  db.prepare(`
-    INSERT INTO goal_health (id, plan_id, passed, exit_code, value, output, duration_ms, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(row.id, row.plan_id, row.passed ? 1 : 0, row.exit_code, row.value, row.output, row.duration_ms, row.created_at);
-  updateGoal(db, planId, { last_health_at: row.created_at });
-  return row;
+  db.prepare("INSERT INTO guarded_checks (id, plan_id, run_id, category, command, file_hashes, used_at, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)").run(rec.id, rec.plan_id, rec.run_id, rec.category, rec.command, JSON.stringify(rec.file_hashes), rec.created_at);
+  return rec;
 }
-function listHealth(db, planId, limit = 50) {
-  return db.prepare("SELECT * FROM goal_health WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(planId, limit).map((r) => ({ ...r, passed: Boolean(r.passed) }));
+function consumeGuardedCheck(db, runId, category, command2, readFile) {
+  const rows = db.prepare("SELECT * FROM guarded_checks WHERE run_id = ? AND category = ? AND command = ? ORDER BY created_at, rowid").all(runId, category, command2);
+  const unused = rows.filter((r) => r.used_at === null);
+  if (rows.length === 0) return { ok: false, reason: "no guarded_run check matches this exact command" };
+  if (unused.length === 0) return { ok: false, reason: "the guarded_run check for this command was already used; each check is good for one call" };
+  const check = { ...unused[0], file_hashes: JSON.parse(unused[0].file_hashes) };
+  for (const [path, hash2] of Object.entries(check.file_hashes)) {
+    const now = readFile(path);
+    if (now === null) return { ok: false, reason: `staged file ${path} is gone` };
+    if (hashContents(now) !== hash2) return { ok: false, reason: `staged file ${path} changed after guarded_run checked it` };
+  }
+  const usedAt = (/* @__PURE__ */ new Date()).toISOString();
+  db.prepare("UPDATE guarded_checks SET used_at = ? WHERE id = ? AND used_at IS NULL").run(usedAt, check.id);
+  return { ok: true, check: { ...check, used_at: usedAt } };
 }
-function healthDue(goal, now = /* @__PURE__ */ new Date()) {
-  if (!goal.health_command || goal.status !== "active") return false;
-  if (!goal.last_health_at) return true;
-  return now.getTime() - new Date(goal.last_health_at).getTime() >= goal.health_every_minutes * 6e4;
+function hasUnusedGuardedCheck(db, runId, command2) {
+  return db.prepare("SELECT 1 FROM guarded_checks WHERE run_id = ? AND command = ? AND used_at IS NULL LIMIT 1").get(runId, command2) !== void 0;
 }
-var HEALTH_TIMEOUT_S;
-var init_health = __esm({
-  "../core/src/health.ts"() {
+function claimUsedGuardedCheck(db, runId, category) {
+  const row = db.prepare(`SELECT id FROM guarded_checks WHERE run_id = ? AND category = ? AND used_at IS NOT NULL AND recorded_at IS NULL ORDER BY used_at LIMIT 1`).get(runId, category);
+  if (!row) return false;
+  db.prepare("UPDATE guarded_checks SET recorded_at = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), row.id);
+  return true;
+}
+function stageGuardedCall(db, runId, command2, files, opts) {
+  const run = getRun(db, runId);
+  if (!run || !["queued", "running"].includes(run.status)) return { ok: false, reason: "this run is not running" };
+  const goal = getGoal(db, run.plan_id);
+  if (!goal) return { ok: false, reason: "the goal is gone" };
+  const category = matchToolCategory(goal.tool_map, "Bash", { command: command2 });
+  if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== "auto") {
+    return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" };
+  }
+  const check = checkGuardedPayload(command2, files, opts.env ?? process.env);
+  if (!check.ok) return check;
+  if (opts.dryRun) return { ok: true, category, command: command2, files: [] };
+  const dir = join2(opts.dataDir, "guarded", runId);
+  mkdirSync(dir, { recursive: true });
+  const stamp = newId("gf");
+  let staged = command2;
+  const copies = files.map((f, i) => {
+    const path = join2(dir, `${stamp}-${i}-${basename(f.path.replace(/\\/g, "/"))}`);
+    writeFileSync(path, f.contents);
+    staged = staged.split(f.path).join(path);
+    return { path, contents: f.contents };
+  });
+  recordGuardedCheck(db, run, category, staged, copies);
+  return { ok: true, category, command: staged, files: copies.map((c) => c.path) };
+}
+var GUARDED_MAX_BYTES, ENV_VALUE_MIN_CHARS, TOKEN_RULES;
+var init_guarded = __esm({
+  "../core/src/guarded.ts"() {
     "use strict";
-    init_gates();
     init_goals();
-    init_queries();
-    HEALTH_TIMEOUT_S = 120;
+    init_goal_engine();
+    init_guard();
+    GUARDED_MAX_BYTES = 64 * 1024;
+    ENV_VALUE_MIN_CHARS = 8;
+    TOKEN_RULES = [
+      { name: "a GitHub token (ghp_, gho_, ghu_, ghs_, ghr_)", re: /\bgh[pousr]_[A-Za-z0-9]{20,}/ },
+      { name: "a GitHub fine-grained token (github_pat_)", re: /\bgithub_pat_[A-Za-z0-9_]{20,}/ },
+      { name: "an API key (sk-)", re: /\bsk-[A-Za-z0-9_-]{16,}/ },
+      { name: "an AWS access key id", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },
+      { name: "a private key block", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ }
+    ];
   }
 });
 
 // ../core/src/guard.ts
 import { homedir as homedir2 } from "os";
-import { join as join2, posix } from "path";
+import { join as join3, posix } from "path";
+import { readFileSync } from "fs";
 function canonicalToolName(name) {
   return name.startsWith(PLUGIN_QUARTERDECK_TOOL_PREFIX) ? QUARTERDECK_TOOL_PREFIX + name.slice(PLUGIN_QUARTERDECK_TOOL_PREFIX.length) : name;
 }
@@ -1836,7 +1961,7 @@ function untrustedLabel(toolMap, toolName, input) {
 }
 function quarterdeckDataPaths(env = process.env, home = homedir2()) {
   const db = defaultDbPath(env, home);
-  const dirs = [join2(home, ".quarterdeck"), join2(home, ".conductor")];
+  const dirs = [join3(home, ".quarterdeck"), join3(home, ".conductor")];
   const inDirs = dirs.some((d) => isInside(normPath(db), normPath(d)));
   return { dirs, db: db === ":memory:" || inDirs ? null : db };
 }
@@ -1871,6 +1996,26 @@ function touchesQuarterdeckData(toolName, input, workingDir, paths = quarterdeck
   }
   return null;
 }
+function touchesSecrets(toolName, input) {
+  if (!input) return null;
+  const str2 = (k) => typeof input[k] === "string" ? input[k] : "";
+  if (SHELL_TOOLS.has(toolName)) {
+    const command2 = str2("command");
+    if (!command2) return null;
+    const found = SECRET_PATH.exec(command2);
+    if (found) return found[2];
+    for (const part of commandParts(command2)) {
+      if (SECRET_COMMAND.test(part)) return part;
+    }
+    return null;
+  }
+  if (FILE_TOOLS.has(toolName)) {
+    for (const field of ["file_path", "notebook_path", "path", "pattern"]) {
+      if (SECRET_PATH.test(str2(field))) return str2(field);
+    }
+  }
+  return null;
+}
 function record(db, run, toolName, category, decision, reason) {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -1885,11 +2030,30 @@ function guardRun(db, run, toolName, input, paths) {
   const goal = getGoal(db, run.plan_id);
   if (!goal) return { decision: "allow" };
   const workingDir = db.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
+  const command2 = SHELL_TOOLS.has(toolName) && typeof input?.command === "string" ? input.command : null;
+  const listed = matchToolCategory(goal.tool_map, toolName, input);
+  let guardedMiss = null;
+  if (command2 !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === "auto" && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command2)) {
+    const match = consumeGuardedCheck(db, run.id, listed, command2, readStaged);
+    if (match.ok) {
+      record(db, run, toolName, listed, "allow", AFTER_OUTSIDE_NOTE);
+      return { decision: "allow", category: listed, run_id: run.id };
+    }
+    guardedMiss = match.reason;
+  }
   const touched2 = touchesQuarterdeckData(toolName, input, workingDir, paths);
   if (touched2 !== null) {
     const reason2 = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched2}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`;
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, "deny", reason2);
     return { decision: "deny", category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason: reason2 };
+  }
+  if (goal.auto_after_outside.length > 0 && getRun(db, run.id)?.untrusted_source) {
+    const secret = touchesSecrets(toolName, input);
+    if (secret !== null) {
+      const reason2 = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`;
+      record(db, run, toolName, SECRETS_CATEGORY, "deny", reason2);
+      return { decision: "deny", category: SECRETS_CATEGORY, run_id: run.id, reason: reason2 };
+    }
   }
   const untrustedRead = untrustedLabel(goal.tool_map, toolName, input);
   if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead);
@@ -1904,6 +2068,9 @@ function guardRun(db, run, toolName, input, paths) {
   if (mode === "auto" && untrusted === null) {
     record(db, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
+  }
+  if (guardedMiss === null && mode === "auto" && goal.auto_after_outside.includes(category)) {
+    guardedMiss = "this call was not staged by guarded_run";
   }
   if (mode === "off") {
     const reason2 = `Quarterdeck goal guard: "${category}" is off for this goal, so ${toolName} is not allowed. Don't take or propose this action.`;
@@ -1920,12 +2087,45 @@ function guardRun(db, run, toolName, input, paths) {
     return { decision: "allow", category, run_id: run.id };
   }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`;
-  const reason = untrusted !== null ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it. ${how}` : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`;
+  const guardedHow = guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : "";
+  const reason = untrusted !== null ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it.${guardedHow} ${how}` : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`;
   record(db, run, toolName, category, "deny", reason);
   return { decision: "deny", category, run_id: run.id, reason };
 }
+function commandAllowRule(pattern) {
+  const m = /^(?:Bash|[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll])\(([\s\S]*)\)$/.exec(pattern);
+  if (!m) return false;
+  const star = m[1].indexOf("*");
+  if (star < 0) return true;
+  const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean);
+  return words.length >= 2 && words.slice(1).some((w) => !w.startsWith("-"));
+}
+function recordRefusal(db, runId, toolName, input, paths = quarterdeckDataPaths()) {
+  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND status IN ('queued', 'running')").get(runId);
+  const goal = run ? getGoal(db, run.plan_id) : null;
+  if (!run || !goal) return null;
+  const workingDir = db.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
+  if (touchesQuarterdeckData(toolName, input, workingDir, paths) !== null) return null;
+  const matched = matchToolRule(goal.tool_map, toolName, input);
+  if (!matched || matched.category === UNTRUSTED_CATEGORY) return null;
+  const { category, pattern } = matched;
+  const mode = autonomyFor(goal, category);
+  if (mode === "off") return null;
+  const untrusted = getRun(db, run.id)?.untrusted_source ?? null;
+  if (mode !== "auto" || untrusted !== null) {
+    const approved = db.prepare(`
+      SELECT COUNT(*) AS n FROM tasks
+      WHERE plan_id = ? AND status = 'active' AND archived_at IS NULL AND approved_at IS NOT NULL
+        AND json_extract(state, '$.action.category') = ?
+    `).get(run.plan_id, category).n;
+    if (approved === 0) return null;
+  }
+  const rule = commandAllowRule(pattern) ? pattern : SHELL_TOOLS.has(toolName) ? null : toolName;
+  record(db, run, toolName, category, "refused", rule);
+  return { category, rule };
+}
 function usableAsAllowRule(pattern) {
-  return !pattern.includes("*") || /^mcp__[^*]+?__\*$/.test(pattern);
+  return !pattern.includes("*") || /^mcp__[^*]+?__\*$/.test(pattern) || commandAllowRule(pattern);
 }
 function standingAllowRules(db) {
   const rules = /* @__PURE__ */ new Set();
@@ -1948,13 +2148,14 @@ function standingAllowRules(db) {
 function listToolCalls(db, planId, limit = 50) {
   return db.prepare("SELECT * FROM goal_tool_calls WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(planId, limit);
 }
-var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE;
+var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE, SECRET_PATH, SECRET_COMMAND, AFTER_OUTSIDE_NOTE, readStaged;
 var init_guard = __esm({
   "../core/src/guard.ts"() {
     "use strict";
     init_paths();
     init_goal_engine();
     init_goals();
+    init_guarded();
     QUARTERDECK_TOOL_PREFIX = "mcp__quarterdeck__";
     PLUGIN_QUARTERDECK_TOOL_PREFIX = "mcp__plugin_quarterdeck-goals_quarterdeck__";
     COMMAND_RULE = /^(\w+)\(([\s\S]+)\)$/;
@@ -1970,6 +2171,7 @@ var init_guard = __esm({
     ];
     BUILTIN_UNTRUSTED_MAP = Object.fromEntries(BUILTIN_UNTRUSTED.map((p) => [p, UNTRUSTED_CATEGORY]));
     QUARTERDECK_DATA_CATEGORY = "quarterdeck-data";
+    SECRETS_CATEGORY = "secrets";
     normPath = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
     isInside = (path, dir) => path === dir || path.startsWith(dir + "/");
     SHELL_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
@@ -1977,6 +2179,16 @@ var init_guard = __esm({
     DATA_DIR_SEGMENT = /(^|[\\/\s"'`=])\.(quarterdeck|conductor)(?![\w-])/i;
     DB_FILE_NAME = /(^|[\\/\s"'`=])tasks\.db(-wal|-shm)?(?![\w.-])/i;
     DB_VARIABLE = /\b(QUARTERDECK|CONDUCTOR)_DB\b/i;
+    SECRET_PATH = /(^|[\\/\s"'`=])(\.ssh|\.aws|\.npmrc|\.config[\\/]gh|\.env(\.[\w.-]*)?)(?![\w-])/i;
+    SECRET_COMMAND = /^(env|printenv)(\s|$)|^gh\s+auth\s+token\b|^(get-childitem|gci|ls|dir|cat|type|get-content|gc)\s+env:/i;
+    AFTER_OUTSIDE_NOTE = "went through after outside content because you allowed it (checked by guarded_run)";
+    readStaged = (path) => {
+      try {
+        return readFileSync(path);
+      } catch {
+        return null;
+      }
+    };
   }
 });
 
@@ -2421,6 +2633,320 @@ var init_watches = __esm({
   }
 });
 
+// ../core/src/goal-changes.ts
+function applyInstructionEdits(text, edits) {
+  let out = text;
+  edits.forEach((e, i) => {
+    const which = edits.length > 1 ? ` (edit ${i + 1})` : "";
+    if (!e.old) throw new GoalError(`An instructions edit needs the text to replace${which}.`);
+    const at = out.indexOf(e.old);
+    if (at < 0) throw new GoalError(`The instructions don't contain the text to replace${which}: "${clipText(e.old)}". Read them again with goal_detail.`);
+    if (out.indexOf(e.old, at + 1) >= 0) throw new GoalError(`The text to replace is in the instructions more than once${which}: "${clipText(e.old)}". Give more of it, so it's there once.`);
+    out = out.slice(0, at) + e.new + out.slice(at + e.old.length);
+  });
+  return out;
+}
+function isRiskyToolRule(pattern) {
+  const p = pattern.trim();
+  if (BROAD_TOOLS.has(p.toLowerCase())) return true;
+  if (p.startsWith("mcp__") && p.endsWith("__*")) return true;
+  return PUSH_OR_PR.test(p);
+}
+function autoAfterOutsideRisks(toolMap, category) {
+  return Object.entries(toolMap).filter(([pattern, c]) => c === category && isRiskyToolRule(pattern)).map(([pattern]) => pattern);
+}
+function autoAfterOutsideWarning(toolMap, category) {
+  const risky = autoAfterOutsideRisks(toolMap, category);
+  if (!risky.length) return null;
+  return `${category} has tool rules that push code, create or merge a pull request, or are broad (${risky.join(", ")}): a planted instruction in outside content could then push code or open a pull request without review.`;
+}
+function applyGoalChanges(db, planId, changes) {
+  const goal = getGoal(db, planId);
+  const plan = getPlan(db, planId);
+  if (!goal || !plan) throw new GoalError(`Goal ${planId} not found.`);
+  for (const [category, mode] of Object.entries(changes.autonomy ?? {})) {
+    if (mode !== null && !MODES.has(mode)) throw new GoalError(`"${mode}" isn't a mode for ${category}: use off, propose or auto.`);
+  }
+  for (const [from, to] of Object.entries(changes.merge_categories ?? {})) {
+    if (!from.trim() || !to.trim() || from.trim() === to.trim()) throw new GoalError(`Can't merge "${from}" into "${to}": give two different category names.`);
+  }
+  const model = changes.model === void 0 ? void 0 : normalizeModel(changes.model);
+  for (const id of changes.forget_memory ?? []) {
+    if (getMemory(db, id)?.plan_id !== planId) throw new GoalError(`Memory ${id} isn't this goal's.`);
+  }
+  if (changes.instructions !== void 0 && changes.instructions_edits?.length) {
+    throw new GoalError("Give the instructions in full or as edits, not both.");
+  }
+  const gap = changes.min_watch_gap_minutes;
+  if (gap !== void 0 && (!Number.isInteger(gap) || gap < 0 || gap > MAX_WATCH_GAP_MINUTES)) {
+    throw new GoalError(`The gap between watch runs is whole minutes from 0 to ${MAX_WATCH_GAP_MINUTES}, not ${gap}.`);
+  }
+  for (const [category, on] of Object.entries(changes.auto_after_outside ?? {})) {
+    if (!category.trim()) throw new GoalError("Give a category name to keep auto after outside content.");
+    if (typeof on !== "boolean") throw new GoalError(`Keeping ${category} auto after outside content is true or false, not ${JSON.stringify(on)}.`);
+  }
+  const edited = changes.instructions_edits?.length ? applyInstructionEdits(goal.instructions, changes.instructions_edits) : void 0;
+  const done = [];
+  db.transaction(() => {
+    if (changes.name?.trim() && changes.name.trim() !== plan.name) {
+      updatePlan(db, planId, { name: changes.name.trim(), updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+      done.push(`renamed to "${changes.name.trim()}"`);
+    }
+    if (changes.objective?.trim() && changes.objective.trim() !== goal.objective) {
+      updateGoal(db, planId, { objective: changes.objective.trim() });
+      updatePlan(db, planId, { description: changes.objective.trim() });
+      done.push("objective changed");
+    }
+    if (changes.instructions !== void 0 && changes.instructions !== goal.instructions) {
+      updateGoal(db, planId, { instructions: changes.instructions });
+      done.push(changes.instructions.trim() ? "instructions changed" : "instructions cleared");
+    }
+    if (edited !== void 0 && edited !== goal.instructions) {
+      updateGoal(db, planId, { instructions: edited });
+      const n = changes.instructions_edits.length;
+      done.push(`instructions edited (${n} ${n === 1 ? "change" : "changes"})`);
+    }
+    if (changes.autonomy && Object.keys(changes.autonomy).length) {
+      const autonomy = { ...goal.autonomy };
+      for (const [category, mode] of Object.entries(changes.autonomy)) {
+        if (mode === null) delete autonomy[category];
+        else autonomy[category] = mode;
+        done.push(mode === null ? `${category}: back to propose` : `${category}: ${mode}`);
+      }
+      updateGoal(db, planId, { autonomy });
+    }
+    if (changes.tool_map && Object.keys(changes.tool_map).length) {
+      const toolMap = { ...goal.tool_map };
+      for (const [pattern, category] of Object.entries(changes.tool_map)) {
+        if (category === null) delete toolMap[pattern];
+        else toolMap[pattern] = category;
+        done.push(category === null ? `tool rule ${pattern} removed` : `tool rule ${pattern} \u2192 ${category}${category === UNTRUSTED_CATEGORY ? " (reads outside content)" : ""}`);
+      }
+      updateGoal(db, planId, { tool_map: toolMap });
+    }
+    if (changes.auto_after_outside && Object.keys(changes.auto_after_outside).length) {
+      const current = getGoal(db, planId);
+      const list = new Set(current.auto_after_outside);
+      for (const [raw, on] of Object.entries(changes.auto_after_outside)) {
+        const category = raw.trim();
+        if (on === list.has(category)) continue;
+        if (on) {
+          list.add(category);
+          const mode = current.autonomy[category] ?? "propose";
+          const warning = autoAfterOutsideWarning(current.tool_map, category);
+          done.push(`${category}: auto, even after reading outside text${mode === "auto" ? "" : ` (counts only while it is auto; it is ${mode})`}${warning ? `. Warning: ${warning}` : ""}`);
+        } else {
+          list.delete(category);
+          done.push(`${category}: back to propose after reading outside text`);
+        }
+      }
+      updateGoal(db, planId, { auto_after_outside: [...list] });
+    }
+    for (const [rawFrom, rawTo] of Object.entries(changes.merge_categories ?? {})) {
+      const from = rawFrom.trim(), to = rawTo.trim();
+      const items = db.prepare(`UPDATE tasks SET state = json_set(state, '$.action.category', ?)
+        WHERE plan_id = ? AND json_extract(state, '$.action.category') = ?`).run(to, planId, from).changes;
+      const current = getGoal(db, planId);
+      const autonomy = { ...current.autonomy };
+      if (from in autonomy) {
+        if (!(to in autonomy)) autonomy[to] = autonomy[from];
+        delete autonomy[from];
+      }
+      const toolMap = Object.fromEntries(Object.entries(current.tool_map).map(([pattern, c]) => [pattern, c === from ? to : c]));
+      const afterOutside = [...new Set(current.auto_after_outside.map((c) => c === from ? to : c))];
+      updateGoal(db, planId, { autonomy, tool_map: toolMap, auto_after_outside: afterOutside });
+      done.push(`merged ${from} into ${to} (${items} ${items === 1 ? "item" : "items"})`);
+    }
+    for (const m of changes.add_memory ?? []) {
+      insertMemory(db, { plan_id: planId, kind: m.kind, text: m.text, source: "human", pinned: m.pinned ?? false });
+      done.push(`remembered (${m.kind}): ${m.text}`);
+    }
+    for (const id of changes.forget_memory ?? []) {
+      updateMemory(db, id, { active: false });
+      done.push(`forgot memory ${id}`);
+    }
+    const watches = listWatches(db, planId);
+    for (const [name, spec] of Object.entries(changes.watches ?? {})) {
+      if (spec === null) {
+        if (removeWatch(db, planId, name)) done.push(`watch "${name.trim()}" removed`);
+        continue;
+      }
+      const before = watches.find((w) => w.name === name.trim());
+      const after = setWatch(db, planId, name, spec);
+      if (before && describeWatch(before) === describeWatch(after) && before.every_minutes === after.every_minutes && before.fires === after.fires && JSON.stringify(before.status_rules) === JSON.stringify(after.status_rules)) continue;
+      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}`);
+    }
+    if (model !== void 0 && model !== goal.model) {
+      updateGoal(db, planId, { model });
+      done.push(model ? `runs use ${model}` : "runs use the session's model");
+    }
+    if (gap !== void 0 && gap !== goal.limits.min_watch_gap_minutes) {
+      updateGoal(db, planId, { limits: { min_watch_gap_minutes: gap } });
+      done.push(gap ? `watch runs at least ${gap} min apart (urgent watches excepted)` : "no gap between watch runs");
+    }
+    if (changes.status && changes.status !== goal.status) {
+      if (goal.status === "retired") throw new GoalError("This goal is done; run it again first.");
+      updateGoal(db, planId, { status: changes.status });
+      done.push(changes.status === "paused" ? "paused" : "resumed");
+    }
+  })();
+  return done;
+}
+function getRunHold(db, now = /* @__PURE__ */ new Date()) {
+  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
+  if (!row) return null;
+  if (row.until <= now.toISOString()) {
+    db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
+    return null;
+  }
+  return row;
+}
+function setRunHold(db, hold) {
+  db.prepare("INSERT INTO goal_run_hold (id, until, reason, plan_id) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason, plan_id = excluded.plan_id").run(hold.until, hold.reason, hold.plan_id ?? null);
+}
+function clearRunHold(db) {
+  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
+  if (!row) return null;
+  db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
+  return row;
+}
+function usageWindowsClear(rateLimits) {
+  return !!rateLimits && rateLimits.length > 0 && rateLimits.every((w) => typeof w.percent_used === "number" && w.percent_used < 100);
+}
+function isUsageLimit(text) {
+  return LIMIT.test(text);
+}
+function parseLimitReset(text, now = /* @__PURE__ */ new Date()) {
+  const m = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minute = Number(m[2] ?? 0);
+  const meridiem = m[3]?.toLowerCase();
+  if (hour > 23 || minute > 59 || meridiem && hour > 12) return null;
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  const at = new Date(now);
+  at.setHours(hour, minute, 0, 0);
+  if (at <= now) at.setDate(at.getDate() + 1);
+  return at;
+}
+function addRunUsage(db, runId, usage) {
+  db.prepare(`
+    UPDATE goal_runs SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?,
+      cache_read_tokens = cache_read_tokens + ?, cache_write_tokens = cache_write_tokens + ?, model = COALESCE(?, model)
+    WHERE id = ?
+  `).run(usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_read_input_tokens || 0, usage.cache_creation_input_tokens || 0, usage.model ?? null, runId);
+}
+function reportRunEnd(db, runId, input, now = /* @__PURE__ */ new Date()) {
+  const run = getRun(db, runId);
+  if (!run) return { outcome: "unchanged" };
+  if (input.usage) addRunUsage(db, runId, input.usage);
+  if (run.status !== "running") return { outcome: "unchanged" };
+  const answer = input.answer.trim();
+  if (isUsageLimit(answer)) {
+    const until = (parseLimitReset(answer, now) ?? new Date(now.getTime() + DEFAULT_HOLD_MS)).toISOString();
+    const hold = { until, reason: answer.split("\n")[0].slice(0, 200), plan_id: run.plan_id };
+    updateRun(db, runId, { status: "skipped", skip_reason: `usage limit reached: ${hold.reason}`, ended_at: now.toISOString() });
+    releaseWatchEvents(db, runId, { requeue: true });
+    setRunHold(db, hold);
+    return { outcome: "held", hold };
+  }
+  if (input.reason === "error") {
+    failRun(db, runId, "failed", `The agent stopped on an error: ${answer.slice(0, 300) || "no message"}`);
+    return { outcome: "failed" };
+  }
+  return { outcome: "unchanged" };
+}
+function setRunStep(db, runId, text, now = /* @__PURE__ */ new Date()) {
+  const run = getRun(db, runId);
+  if (!run) throw new Error(`Run ${runId} not found`);
+  if (run.status !== "running") throw new Error(`Run ${runId} is ${run.status}, not running: only a running run has a step.`);
+  const step = text.trim();
+  if (!step) throw new Error("A step needs a few words saying what the run is on.");
+  if (/[\r\n]/.test(step)) throw new Error("A step is one line: say it without a new line.");
+  if (step.length > STEP_MAX) throw new Error(`A step is at most ${STEP_MAX} characters (this one has ${step.length}): say it in fewer words.`);
+  const untrusted = run.untrusted_source ?? null;
+  if (run.step === step && (run.step_untrusted ?? null) === untrusted) return { changed: false, step, untrusted };
+  updateRun(db, runId, { step, step_at: now.toISOString(), step_untrusted: untrusted });
+  return { changed: true, step, untrusted };
+}
+function reportRunProgress(db, runId, { event, tool }, now = /* @__PURE__ */ new Date()) {
+  const run = getRun(db, runId);
+  if (!run || run.status !== "running") return { updated: false };
+  const at = now.toISOString();
+  if (event === "tool") updateRun(db, runId, { now_tool: tool, now_tool_at: at });
+  else if (event === "waiting") updateRun(db, runId, { now_tool: tool, now_tool_at: at, waiting_tool: tool, waiting_since: at });
+  else if (run.waiting_tool === tool) updateRun(db, runId, { waiting_tool: null, waiting_since: null });
+  else return { updated: false };
+  return { updated: true };
+}
+var clipText, MAX_WATCH_GAP_MINUTES, MODES, BROAD_TOOLS, PUSH_OR_PR, LIMIT, DEFAULT_HOLD_MS, STEP_MAX;
+var init_goal_changes = __esm({
+  "../core/src/goal-changes.ts"() {
+    "use strict";
+    init_queries();
+    init_goals();
+    init_goal_engine();
+    init_guard();
+    init_watches();
+    clipText = (s) => s.length > 80 ? `${s.slice(0, 79)}\u2026` : s;
+    MAX_WATCH_GAP_MINUTES = 1440;
+    MODES = /* @__PURE__ */ new Set(["off", "propose", "auto"]);
+    BROAD_TOOLS = /* @__PURE__ */ new Set(["bash", "powershell", "edit", "write", "multiedit", "notebookedit", "*"]);
+    PUSH_OR_PR = /\bgit\b.*\bpush\b|\bgh\s+pr\s+(create|merge)\b/i;
+    LIMIT = /(hit|reached) (your|the) .{0,30}limit|usage limit|rate limit|out of (credits|usage)/i;
+    DEFAULT_HOLD_MS = 30 * 6e4;
+    STEP_MAX = 60;
+  }
+});
+
+// ../core/src/health.ts
+function parseHealthValue(output) {
+  const matches = output.match(/-?\d+(?:\.\d+)?/g);
+  return matches ? Number(matches[matches.length - 1]) : null;
+}
+async function runHealthCheck(db, planId) {
+  const goal = getGoal(db, planId);
+  const plan = getPlan(db, planId);
+  if (!goal || !plan) throw new Error(`Goal ${planId} not found`);
+  if (!goal.health_command) throw new Error("This goal has no health check command.");
+  const r = await runVerifyCommand(goal.health_command, plan.working_dir, HEALTH_TIMEOUT_S);
+  const row = {
+    id: newId("hc"),
+    plan_id: planId,
+    passed: r.passed,
+    exit_code: r.exit_code,
+    value: parseHealthValue(r.output),
+    output: r.output.slice(-2e3),
+    duration_ms: r.duration_ms,
+    created_at: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  db.prepare(`
+    INSERT INTO goal_health (id, plan_id, passed, exit_code, value, output, duration_ms, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(row.id, row.plan_id, row.passed ? 1 : 0, row.exit_code, row.value, row.output, row.duration_ms, row.created_at);
+  updateGoal(db, planId, { last_health_at: row.created_at });
+  return row;
+}
+function listHealth(db, planId, limit = 50) {
+  return db.prepare("SELECT * FROM goal_health WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(planId, limit).map((r) => ({ ...r, passed: Boolean(r.passed) }));
+}
+function healthDue(goal, now = /* @__PURE__ */ new Date()) {
+  if (!goal.health_command || goal.status !== "active") return false;
+  if (!goal.last_health_at) return true;
+  return now.getTime() - new Date(goal.last_health_at).getTime() >= goal.health_every_minutes * 6e4;
+}
+var HEALTH_TIMEOUT_S;
+var init_health = __esm({
+  "../core/src/health.ts"() {
+    "use strict";
+    init_gates();
+    init_goals();
+    init_queries();
+    HEALTH_TIMEOUT_S = 120;
+  }
+});
+
 // ../core/src/goal-engine.ts
 function readOutsideContent(run) {
   return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE));
@@ -2514,7 +3040,9 @@ function addItem(db, planId, runId, input) {
   }
   const goalMode = autonomyFor(goal, input.action.category);
   const similar = similarCategories(knownCategories(db, planId), input.action.category);
-  const untrusted = goalMode === "auto" && runId ? getRun(db, runId)?.untrusted_source ?? void 0 : void 0;
+  const marked = goalMode === "auto" && runId ? getRun(db, runId)?.untrusted_source ?? void 0 : void 0;
+  const guarded = marked !== void 0 && goal.auto_after_outside.includes(input.action.category) && claimUsedGuardedCheck(db, runId, input.action.category);
+  const untrusted = guarded ? void 0 : marked;
   const mode = untrusted !== void 0 ? "propose" : goalMode;
   if (mode === "off") {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`);
@@ -2523,7 +3051,7 @@ function addItem(db, planId, runId, input) {
   if (mode === "propose" || input.ask_person) {
     insertTask(db, { ...base, status: "active", state, requires_approval: true, review_requested_at: now });
   } else {
-    insertTask(db, { ...base, status: "completed", state, result: input.result ?? `Done automatically: ${input.action.summary}` });
+    insertTask(db, { ...base, status: "completed", state: guarded ? { ...state, after_outside: AFTER_OUTSIDE_ITEM_NOTE } : state, result: input.result ?? `Done automatically: ${input.action.summary}` });
   }
   return { task: getTask(db, planId, id), existing: false, mode: input.ask_person ? "propose" : mode, ...untrusted !== void 0 && { untrusted }, ...similar.length > 0 && { similar_categories: similar } };
 }
@@ -2598,6 +3126,7 @@ function buildBrief(db, planId, runId) {
   const recentRuns = listRuns(db, planId, 10, { includeSkipped: false }).filter((r) => r.id !== runId && r.summary && r.trigger !== "curate").slice(0, RECENT_RUNS);
   const taintedRun = recentRuns.find(readOutsideContent);
   if (run && taintedRun) markRunUntrusted(db, run.id, `${RUN_SUMMARY_SOURCE}${taintedRun.id} (written after ${taintedRun.untrusted_source})`, taintedRun.untrusted_root ?? taintedRun.untrusted_source);
+  if (run?.request && run.request_untrusted) markRunUntrusted(db, run.id, REQUEST_SOURCE);
   const marked = run ? getRun(db, run.id) : void 0;
   const dayAgo = new Date(Date.now() - 864e5).toISOString();
   const resolved24h = db.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND status IN ('completed', 'abandoned') AND updated_at >= ?").get(planId, dayAgo).n;
@@ -2610,7 +3139,8 @@ function buildBrief(db, planId, runId) {
       limits: goal.limits,
       deadline: new Date(Date.parse(run.started_at) + goal.limits.max_run_minutes * 6e4).toISOString(),
       next_scheduled_run: nextScheduledRun(db, planId, new Date(run.started_at)),
-      untrusted: marked?.untrusted_at && marked.untrusted_source ? { since: marked.untrusted_at, source: marked.untrusted_source } : null
+      untrusted: marked?.untrusted_at && marked.untrusted_source ? { since: marked.untrusted_at, source: marked.untrusted_source } : null,
+      request: run.request ? { text: run.request, ...run.request_untrusted && { untrusted: true } } : null
     } : null,
     autonomy: { default: "propose", categories: goal.autonomy },
     known_categories: knownCategories(db, planId),
@@ -2670,6 +3200,24 @@ function queueRunAfterDecision(db, planId) {
   if (goal.status !== "active") throw new GoalError(`Goal is ${goal.status}; resume it before running.`);
   const queued = db.prepare("SELECT * FROM goal_runs WHERE plan_id = ? AND status = 'queued' AND trigger != 'curate' ORDER BY started_at LIMIT 1").get(planId);
   return queued ?? insertRun(db, planId, "manual", "queued");
+}
+function queueRunWithRequest(db, planId, text, opts = {}) {
+  const goal = mustGetGoal(db, planId);
+  if (goal.deleted_at) throw new GoalError(DELETED_GOAL_MESSAGE);
+  if (goal.status !== "active") throw new GoalError(`Goal is ${goal.status}; resume it before running.`);
+  const request = text.trim();
+  if (!request) throw new GoalError("The prompt is empty.");
+  const hold = getRunHold(db);
+  if (hold) return { reason: `Goal runs are on hold until ${hold.until}: ${hold.reason}` };
+  const queued = db.prepare("SELECT * FROM goal_runs WHERE plan_id = ? AND status = 'queued' AND trigger != 'curate' ORDER BY started_at LIMIT 1").get(planId);
+  if (!queued && countRunsSince(db, planId, new Date(Date.now() - 864e5).toISOString()) >= goal.limits.max_runs_per_day) {
+    return { reason: `The daily run limit is reached (${goal.limits.max_runs_per_day}).` };
+  }
+  const run = queued ?? insertRun(db, planId, "manual", "queued");
+  db.prepare("UPDATE goal_runs SET request = ?, request_untrusted = ? WHERE id = ?").run(run.request ? `${run.request}
+
+${request}` : request, run.request_untrusted || opts.untrusted ? 1 : 0, run.id);
+  return { run: getRun(db, run.id) };
 }
 function startRun(db, runId, sessionId) {
   const run = getRun(db, runId);
@@ -2893,7 +3441,7 @@ function recordSkip(db, planId, trigger, reason, now = /* @__PURE__ */ new Date(
   const recent = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND status = 'skipped' AND skip_reason = ? AND started_at >= ?").get(planId, reason, hourAgo);
   return recent ? null : insertRun(db, planId, trigger, "skipped", reason);
 }
-var GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, STATUS_NOTE_MAX, COUNTED_RUNS;
+var AFTER_OUTSIDE_ITEM_NOTE, GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, REQUEST_SOURCE, STATUS_NOTE_MAX, COUNTED_RUNS;
 var init_goal_engine = __esm({
   "../core/src/goal-engine.ts"() {
     "use strict";
@@ -2902,8 +3450,11 @@ var init_goal_engine = __esm({
     init_gates();
     init_goals();
     init_schedule();
+    init_goal_changes();
+    init_guarded();
     init_health();
     init_watches();
+    AFTER_OUTSIDE_ITEM_NOTE = "Went through after outside content because you allowed it (checked by guarded_run)";
     GoalError = class extends Error {
     };
     MEMORY_BRIEF_CHARS = 4e3;
@@ -2913,222 +3464,9 @@ var init_goal_engine = __esm({
     ANSWER_PREFIX = "Your answer: ";
     QUESTION_NOTES_CHARS = 2e3;
     RECALL_MAX = 20;
+    REQUEST_SOURCE = "run request";
     STATUS_NOTE_MAX = 40;
     COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))";
-  }
-});
-
-// ../core/src/goal-changes.ts
-function applyInstructionEdits(text, edits) {
-  let out = text;
-  edits.forEach((e, i) => {
-    const which = edits.length > 1 ? ` (edit ${i + 1})` : "";
-    if (!e.old) throw new GoalError(`An instructions edit needs the text to replace${which}.`);
-    const at = out.indexOf(e.old);
-    if (at < 0) throw new GoalError(`The instructions don't contain the text to replace${which}: "${clipText(e.old)}". Read them again with goal_detail.`);
-    if (out.indexOf(e.old, at + 1) >= 0) throw new GoalError(`The text to replace is in the instructions more than once${which}: "${clipText(e.old)}". Give more of it, so it's there once.`);
-    out = out.slice(0, at) + e.new + out.slice(at + e.old.length);
-  });
-  return out;
-}
-function applyGoalChanges(db, planId, changes) {
-  const goal = getGoal(db, planId);
-  const plan = getPlan(db, planId);
-  if (!goal || !plan) throw new GoalError(`Goal ${planId} not found.`);
-  for (const [category, mode] of Object.entries(changes.autonomy ?? {})) {
-    if (mode !== null && !MODES.has(mode)) throw new GoalError(`"${mode}" isn't a mode for ${category}: use off, propose or auto.`);
-  }
-  for (const [from, to] of Object.entries(changes.merge_categories ?? {})) {
-    if (!from.trim() || !to.trim() || from.trim() === to.trim()) throw new GoalError(`Can't merge "${from}" into "${to}": give two different category names.`);
-  }
-  const model = changes.model === void 0 ? void 0 : normalizeModel(changes.model);
-  for (const id of changes.forget_memory ?? []) {
-    if (getMemory(db, id)?.plan_id !== planId) throw new GoalError(`Memory ${id} isn't this goal's.`);
-  }
-  if (changes.instructions !== void 0 && changes.instructions_edits?.length) {
-    throw new GoalError("Give the instructions in full or as edits, not both.");
-  }
-  const gap = changes.min_watch_gap_minutes;
-  if (gap !== void 0 && (!Number.isInteger(gap) || gap < 0 || gap > MAX_WATCH_GAP_MINUTES)) {
-    throw new GoalError(`The gap between watch runs is whole minutes from 0 to ${MAX_WATCH_GAP_MINUTES}, not ${gap}.`);
-  }
-  const edited = changes.instructions_edits?.length ? applyInstructionEdits(goal.instructions, changes.instructions_edits) : void 0;
-  const done = [];
-  db.transaction(() => {
-    if (changes.name?.trim() && changes.name.trim() !== plan.name) {
-      updatePlan(db, planId, { name: changes.name.trim(), updated_at: (/* @__PURE__ */ new Date()).toISOString() });
-      done.push(`renamed to "${changes.name.trim()}"`);
-    }
-    if (changes.objective?.trim() && changes.objective.trim() !== goal.objective) {
-      updateGoal(db, planId, { objective: changes.objective.trim() });
-      updatePlan(db, planId, { description: changes.objective.trim() });
-      done.push("objective changed");
-    }
-    if (changes.instructions !== void 0 && changes.instructions !== goal.instructions) {
-      updateGoal(db, planId, { instructions: changes.instructions });
-      done.push(changes.instructions.trim() ? "instructions changed" : "instructions cleared");
-    }
-    if (edited !== void 0 && edited !== goal.instructions) {
-      updateGoal(db, planId, { instructions: edited });
-      const n = changes.instructions_edits.length;
-      done.push(`instructions edited (${n} ${n === 1 ? "change" : "changes"})`);
-    }
-    if (changes.autonomy && Object.keys(changes.autonomy).length) {
-      const autonomy = { ...goal.autonomy };
-      for (const [category, mode] of Object.entries(changes.autonomy)) {
-        if (mode === null) delete autonomy[category];
-        else autonomy[category] = mode;
-        done.push(mode === null ? `${category}: back to propose` : `${category}: ${mode}`);
-      }
-      updateGoal(db, planId, { autonomy });
-    }
-    if (changes.tool_map && Object.keys(changes.tool_map).length) {
-      const toolMap = { ...goal.tool_map };
-      for (const [pattern, category] of Object.entries(changes.tool_map)) {
-        if (category === null) delete toolMap[pattern];
-        else toolMap[pattern] = category;
-        done.push(category === null ? `tool rule ${pattern} removed` : `tool rule ${pattern} \u2192 ${category}${category === UNTRUSTED_CATEGORY ? " (reads outside content)" : ""}`);
-      }
-      updateGoal(db, planId, { tool_map: toolMap });
-    }
-    for (const [rawFrom, rawTo] of Object.entries(changes.merge_categories ?? {})) {
-      const from = rawFrom.trim(), to = rawTo.trim();
-      const items = db.prepare(`UPDATE tasks SET state = json_set(state, '$.action.category', ?)
-        WHERE plan_id = ? AND json_extract(state, '$.action.category') = ?`).run(to, planId, from).changes;
-      const current = getGoal(db, planId);
-      const autonomy = { ...current.autonomy };
-      if (from in autonomy) {
-        if (!(to in autonomy)) autonomy[to] = autonomy[from];
-        delete autonomy[from];
-      }
-      const toolMap = Object.fromEntries(Object.entries(current.tool_map).map(([pattern, c]) => [pattern, c === from ? to : c]));
-      updateGoal(db, planId, { autonomy, tool_map: toolMap });
-      done.push(`merged ${from} into ${to} (${items} ${items === 1 ? "item" : "items"})`);
-    }
-    for (const m of changes.add_memory ?? []) {
-      insertMemory(db, { plan_id: planId, kind: m.kind, text: m.text, source: "human", pinned: m.pinned ?? false });
-      done.push(`remembered (${m.kind}): ${m.text}`);
-    }
-    for (const id of changes.forget_memory ?? []) {
-      updateMemory(db, id, { active: false });
-      done.push(`forgot memory ${id}`);
-    }
-    const watches = listWatches(db, planId);
-    for (const [name, spec] of Object.entries(changes.watches ?? {})) {
-      if (spec === null) {
-        if (removeWatch(db, planId, name)) done.push(`watch "${name.trim()}" removed`);
-        continue;
-      }
-      const before = watches.find((w) => w.name === name.trim());
-      const after = setWatch(db, planId, name, spec);
-      if (before && describeWatch(before) === describeWatch(after) && before.every_minutes === after.every_minutes && before.fires === after.fires && JSON.stringify(before.status_rules) === JSON.stringify(after.status_rules)) continue;
-      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}`);
-    }
-    if (model !== void 0 && model !== goal.model) {
-      updateGoal(db, planId, { model });
-      done.push(model ? `runs use ${model}` : "runs use the session's model");
-    }
-    if (gap !== void 0 && gap !== goal.limits.min_watch_gap_minutes) {
-      updateGoal(db, planId, { limits: { min_watch_gap_minutes: gap } });
-      done.push(gap ? `watch runs at least ${gap} min apart (urgent watches excepted)` : "no gap between watch runs");
-    }
-    if (changes.status && changes.status !== goal.status) {
-      if (goal.status === "retired") throw new GoalError("This goal is done; run it again first.");
-      updateGoal(db, planId, { status: changes.status });
-      done.push(changes.status === "paused" ? "paused" : "resumed");
-    }
-  })();
-  return done;
-}
-function getRunHold(db, now = /* @__PURE__ */ new Date()) {
-  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
-  if (!row) return null;
-  if (row.until <= now.toISOString()) {
-    db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
-    return null;
-  }
-  return row;
-}
-function setRunHold(db, hold) {
-  db.prepare("INSERT INTO goal_run_hold (id, until, reason, plan_id) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET until = excluded.until, reason = excluded.reason, plan_id = excluded.plan_id").run(hold.until, hold.reason, hold.plan_id ?? null);
-}
-function clearRunHold(db) {
-  const row = db.prepare("SELECT until, reason, plan_id FROM goal_run_hold WHERE id = 1").get();
-  if (!row) return null;
-  db.prepare("DELETE FROM goal_run_hold WHERE id = 1").run();
-  return row;
-}
-function usageWindowsClear(rateLimits) {
-  return !!rateLimits && rateLimits.length > 0 && rateLimits.every((w) => typeof w.percent_used === "number" && w.percent_used < 100);
-}
-function isUsageLimit(text) {
-  return LIMIT.test(text);
-}
-function parseLimitReset(text, now = /* @__PURE__ */ new Date()) {
-  const m = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(text);
-  if (!m) return null;
-  let hour = Number(m[1]);
-  const minute = Number(m[2] ?? 0);
-  const meridiem = m[3]?.toLowerCase();
-  if (hour > 23 || minute > 59 || meridiem && hour > 12) return null;
-  if (meridiem === "pm" && hour < 12) hour += 12;
-  if (meridiem === "am" && hour === 12) hour = 0;
-  const at = new Date(now);
-  at.setHours(hour, minute, 0, 0);
-  if (at <= now) at.setDate(at.getDate() + 1);
-  return at;
-}
-function addRunUsage(db, runId, usage) {
-  db.prepare(`
-    UPDATE goal_runs SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?,
-      cache_read_tokens = cache_read_tokens + ?, cache_write_tokens = cache_write_tokens + ?, model = COALESCE(?, model)
-    WHERE id = ?
-  `).run(usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_read_input_tokens || 0, usage.cache_creation_input_tokens || 0, usage.model ?? null, runId);
-}
-function reportRunEnd(db, runId, input, now = /* @__PURE__ */ new Date()) {
-  const run = getRun(db, runId);
-  if (!run) return { outcome: "unchanged" };
-  if (input.usage) addRunUsage(db, runId, input.usage);
-  if (run.status !== "running") return { outcome: "unchanged" };
-  const answer = input.answer.trim();
-  if (isUsageLimit(answer)) {
-    const until = (parseLimitReset(answer, now) ?? new Date(now.getTime() + DEFAULT_HOLD_MS)).toISOString();
-    const hold = { until, reason: answer.split("\n")[0].slice(0, 200), plan_id: run.plan_id };
-    updateRun(db, runId, { status: "skipped", skip_reason: `usage limit reached: ${hold.reason}`, ended_at: now.toISOString() });
-    releaseWatchEvents(db, runId, { requeue: true });
-    setRunHold(db, hold);
-    return { outcome: "held", hold };
-  }
-  if (input.reason === "error") {
-    failRun(db, runId, "failed", `The agent stopped on an error: ${answer.slice(0, 300) || "no message"}`);
-    return { outcome: "failed" };
-  }
-  return { outcome: "unchanged" };
-}
-function reportRunProgress(db, runId, { event, tool }, now = /* @__PURE__ */ new Date()) {
-  const run = getRun(db, runId);
-  if (!run || run.status !== "running") return { updated: false };
-  const at = now.toISOString();
-  if (event === "tool") updateRun(db, runId, { now_tool: tool, now_tool_at: at });
-  else if (event === "waiting") updateRun(db, runId, { now_tool: tool, now_tool_at: at, waiting_tool: tool, waiting_since: at });
-  else if (run.waiting_tool === tool) updateRun(db, runId, { waiting_tool: null, waiting_since: null });
-  else return { updated: false };
-  return { updated: true };
-}
-var clipText, MAX_WATCH_GAP_MINUTES, MODES, LIMIT, DEFAULT_HOLD_MS;
-var init_goal_changes = __esm({
-  "../core/src/goal-changes.ts"() {
-    "use strict";
-    init_queries();
-    init_goals();
-    init_goal_engine();
-    init_guard();
-    init_watches();
-    clipText = (s) => s.length > 80 ? `${s.slice(0, 79)}\u2026` : s;
-    MAX_WATCH_GAP_MINUTES = 1440;
-    MODES = /* @__PURE__ */ new Set(["off", "propose", "auto"]);
-    LIMIT = /(hit|reached) (your|the) .{0,30}limit|usage limit|rate limit|out of (credits|usage)/i;
-    DEFAULT_HOLD_MS = 30 * 6e4;
   }
 });
 
@@ -3926,7 +4264,7 @@ var init_goal_tick = __esm({
 });
 
 // ../core/src/goal-overview.ts
-import { createHash as createHash2 } from "crypto";
+import { createHash as createHash3 } from "crypto";
 function clip(text, max) {
   if (text === null || text.length <= max) return text;
   return `${text.slice(0, max - 1).trimEnd()}\u2026`;
@@ -4012,6 +4350,9 @@ function describeEvent(e, itemGoal) {
       return null;
   }
 }
+function refusedCalls(db, runId) {
+  return db.prepare("SELECT tool_name AS tool, reason AS rule FROM goal_tool_calls WHERE run_id = ? AND decision = 'refused' GROUP BY tool_name, reason ORDER BY MIN(created_at), MIN(rowid)").all(runId).map((c) => ({ tool: c.tool, rule: c.rule ?? null }));
+}
 function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (openRun?.status === "running") {
     if (openRun.waiting_tool && openRun.waiting_since) {
@@ -4033,8 +4374,12 @@ function describeActivity({ goal, openRun, lastRun, events, items }) {
       }
     }
     const tool = openRun.now_tool && openRun.now_tool_at && openRun.now_tool_at >= openRun.started_at ? { state: "running", text: `Using ${openRun.now_tool}`, at: openRun.now_tool_at } : null;
-    if (tool && (!latest || tool.at > latest.at)) return tool;
-    return latest ?? { state: "running", text: "Starting: reading the brief", at: openRun.started_at };
+    const now = tool && (!latest || tool.at > latest.at) ? tool : latest ?? { state: "running", text: "Starting: reading the brief", at: openRun.started_at };
+    if (openRun.step && openRun.step_at && openRun.step_at >= openRun.started_at) {
+      const at = now.at && now.at > openRun.step_at ? now.at : openRun.step_at;
+      return { state: "running", text: openRun.step, at, ...now.at && now.at >= openRun.step_at && { detail: now.text }, ...openRun.step_untrusted && { untrusted: openRun.step_untrusted } };
+    }
+    return now;
   }
   if (openRun) return { state: "queued", text: `Queued (${openRun.trigger}) \u2014 starts within a minute while Claude Code is open`, at: openRun.started_at };
   if (goal.status === "paused") return { state: "paused", text: "Paused", at: null };
@@ -4071,6 +4416,8 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
       status_note: statusNote(goal, runs, watches),
       instructions: fullInstructions ? goal.instructions : clip(goal.instructions, CLIP.instructions),
       autonomy: goal.autonomy,
+      // Categories kept auto after a run reads outside content (#159)
+      auto_after_outside: goal.auto_after_outside,
       tool_map: goal.tool_map,
       next_run_at: goal.next_run_at,
       schedule: getSchedule(db, plan.id),
@@ -4097,7 +4444,11 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
         tokens: r.input_tokens + r.output_tokens + r.cache_write_tokens,
         model: r.model,
         // What untrusted content it read first: from then on its auto actions needed approval
-        untrusted: r.untrusted_source
+        untrusted: r.untrusted_source,
+        // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
+        request: r.request ? { text: clip(r.request, CLIP.summary), untrusted: r.request_untrusted === 1 } : null,
+        // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
+        refused: refusedCalls(db, r.id)
       })),
       needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
       open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
@@ -4177,7 +4528,7 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
 }
 function overviewWithEtag(db, detail = "all", standingSession = null, fullInstructions = false, only = false) {
   const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions, only));
-  return { body, etag: `"${createHash2("sha256").update(body).digest("base64url").slice(0, 27)}"` };
+  return { body, etag: `"${createHash3("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
 var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
 var init_goal_overview = __esm({
@@ -4303,6 +4654,8 @@ var init_todos = __esm({
 // ../core/src/index.ts
 var src_exports = {};
 __export(src_exports, {
+  AFTER_OUTSIDE_ITEM_NOTE: () => AFTER_OUTSIDE_ITEM_NOTE,
+  AFTER_OUTSIDE_NOTE: () => AFTER_OUTSIDE_NOTE,
   ANSWER_CONTEXT_CHARS: () => ANSWER_CONTEXT_CHARS,
   ANSWER_PREFIX: () => ANSWER_PREFIX,
   ATTEMPT_REF: () => ATTEMPT_REF,
@@ -4325,7 +4678,9 @@ __export(src_exports, {
   DELETED_GOAL_MESSAGE: () => DELETED_GOAL_MESSAGE,
   DONE_TEXT_CHARS: () => DONE_TEXT_CHARS,
   Database: () => Database,
+  ENV_VALUE_MIN_CHARS: () => ENV_VALUE_MIN_CHARS,
   GATE_FIELDS: () => GATE_FIELDS,
+  GUARDED_MAX_BYTES: () => GUARDED_MAX_BYTES,
   GateError: () => GateError,
   GoalError: () => GoalError,
   HEALTH_TIMEOUT_S: () => HEALTH_TIMEOUT_S,
@@ -4343,10 +4698,12 @@ __export(src_exports, {
   QUARTERDECK_TOOL_PREFIX: () => QUARTERDECK_TOOL_PREFIX,
   RECALL_MAX: () => RECALL_MAX,
   RECENT_RUNS: () => RECENT_RUNS,
+  REQUEST_SOURCE: () => REQUEST_SOURCE,
   REVISION_TRIGGERS: () => REVISION_TRIGGERS,
   RUNAWAY_REF: () => RUNAWAY_REF,
   RUN_SUMMARY_SOURCE: () => RUN_SUMMARY_SOURCE,
   SCHEMA_VERSION: () => SCHEMA_VERSION,
+  SECRETS_CATEGORY: () => SECRETS_CATEGORY,
   STALE_GRACE_MS: () => STALE_GRACE_MS,
   STATUS_CHECK_BUDGET_MS: () => STATUS_CHECK_BUDGET_MS,
   STATUS_CHECK_EVERY_MS: () => STATUS_CHECK_EVERY_MS,
@@ -4354,6 +4711,7 @@ __export(src_exports, {
   STATUS_CHECK_VALUES: () => STATUS_CHECK_VALUES,
   STATUS_NOTE_MAX: () => STATUS_NOTE_MAX,
   STATUS_TONES: () => STATUS_TONES,
+  STEP_MAX: () => STEP_MAX,
   Statement: () => Statement,
   UNTRUSTED_CATEGORY: () => UNTRUSTED_CATEGORY,
   WATCH_BRIEF_LINES: () => WATCH_BRIEF_LINES,
@@ -4388,6 +4746,8 @@ __export(src_exports, {
   archiveResolved: () => archiveResolved,
   asksPerson: () => asksPerson,
   attachAgent: () => attachAgent,
+  autoAfterOutsideRisks: () => autoAfterOutsideRisks,
+  autoAfterOutsideWarning: () => autoAfterOutsideWarning,
   autonomyFor: () => autonomyFor,
   buildBrief: () => buildBrief,
   buildCurationBrief: () => buildCurationBrief,
@@ -4396,18 +4756,22 @@ __export(src_exports, {
   checkCommandWatch: () => checkCommandWatch,
   checkCompletion: () => checkCompletion,
   checkCuration: () => checkCuration,
+  checkGuardedPayload: () => checkGuardedPayload,
   checkHealth: () => checkHealth,
   checkStatuses: () => checkStatuses,
   checkWatches: () => checkWatches,
   checkWatchesAtClaim: () => checkWatchesAtClaim,
   claimRun: () => claimRun,
+  claimUsedGuardedCheck: () => claimUsedGuardedCheck,
   cleanStatusNote: () => cleanStatusNote,
   clearAllData: () => clearAllData,
   clearRunHold: () => clearRunHold,
+  commandAllowRule: () => commandAllowRule,
   commandLines: () => commandLines,
   commandParts: () => commandParts,
   compareMemory: () => compareMemory,
   compareTaskIds: () => compareTaskIds,
+  consumeGuardedCheck: () => consumeGuardedCheck,
   countAllTasks: () => countAllTasks,
   countAttempts: () => countAttempts,
   countOpenItems: () => countOpenItems,
@@ -4471,6 +4835,8 @@ __export(src_exports, {
   goalRunPrompt: () => goalRunPrompt,
   guardToolCallForRun: () => guardToolCallForRun,
   hasGates: () => hasGates,
+  hasUnusedGuardedCheck: () => hasUnusedGuardedCheck,
+  hashContents: () => hashContents,
   healthDue: () => healthDue,
   heldByStatusRules: () => heldByStatusRules,
   insertEvent: () => insertEvent,
@@ -4482,6 +4848,7 @@ __export(src_exports, {
   isAttemptBlocked: () => isAttemptBlocked,
   isCurationRequest: () => isCurationRequest,
   isProposal: () => isProposal,
+  isRiskyToolRule: () => isRiskyToolRule,
   isUsageLimit: () => isUsageLimit,
   isWatchRequest: () => isWatchRequest,
   itemView: () => itemView,
@@ -4526,12 +4893,16 @@ __export(src_exports, {
   queueForWatchEvents: () => queueForWatchEvents,
   queueRun: () => queueRun,
   queueRunAfterDecision: () => queueRunAfterDecision,
+  queueRunWithRequest: () => queueRunWithRequest,
   readOutsideContent: () => readOutsideContent,
   readsUntrusted: () => readsUntrusted,
   recallMemory: () => recallMemory,
   recordAttempt: () => recordAttempt,
+  recordGuardedCheck: () => recordGuardedCheck,
+  recordRefusal: () => recordRefusal,
   recordSkip: () => recordSkip,
   recordWatchLines: () => recordWatchLines,
+  refusedCalls: () => refusedCalls,
   rejectCuration: () => rejectCuration,
   rejectTask: () => rejectTask,
   rejectWatchRequest: () => rejectWatchRequest,
@@ -4556,10 +4927,12 @@ __export(src_exports, {
   schemaOutdated: () => schemaOutdated,
   setIntervalTrigger: () => setIntervalTrigger,
   setRunHold: () => setRunHold,
+  setRunStep: () => setRunStep,
   setSchedule: () => setSchedule,
   setTodo: () => setTodo,
   setWatch: () => setWatch,
   similarCategories: () => similarCategories,
+  stageGuardedCall: () => stageGuardedCall,
   standingAllowRules: () => standingAllowRules,
   startRun: () => startRun,
   statusCheckCommand: () => statusCheckCommand,
@@ -4571,6 +4944,7 @@ __export(src_exports, {
   todoLists: () => todoLists,
   touchPlan: () => touchPlan,
   touchesQuarterdeckData: () => touchesQuarterdeckData,
+  touchesSecrets: () => touchesSecrets,
   tripBreakerIfRunaway: () => tripBreakerIfRunaway,
   untrustedLabel: () => untrustedLabel,
   updateGoal: () => updateGoal,
@@ -4591,10 +4965,10 @@ __export(src_exports, {
   watchStopped: () => watchStopped,
   withinActiveHours: () => withinActiveHours
 });
-import { mkdirSync } from "fs";
+import { mkdirSync as mkdirSync2 } from "fs";
 import { dirname } from "path";
 function openDatabase(path = defaultDbPath()) {
-  if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
+  if (path !== ":memory:") mkdirSync2(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
@@ -4626,22 +5000,23 @@ var init_src = __esm({
     init_paths();
     init_migrate();
     init_watch_requests();
+    init_guarded();
   }
 });
 
 // src/doctor.ts
-import { existsSync as existsSync4, readFileSync as readFileSync2, readdirSync, statSync as statSync2 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync3, readdirSync, statSync as statSync2 } from "fs";
 import { homedir as homedir4 } from "os";
-import { dirname as dirname3, join as join4, resolve as resolve2 } from "path";
+import { dirname as dirname3, join as join5, resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // src/runner-session.ts
 init_src();
 import { execFileSync } from "child_process";
 import { randomUUID as randomUUID4 } from "crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, rmSync, statSync, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir3, userInfo } from "os";
-import { dirname as dirname2, join as join3, resolve } from "path";
+import { dirname as dirname2, join as join4, resolve } from "path";
 import { fileURLToPath } from "url";
 var SESSION_NAME = "Quarterdeck goals";
 var TASK_NAME = "Quarterdeck goals runner";
@@ -4869,19 +5244,19 @@ function install(deps, opts = {}) {
   checkMode(opts.permissionMode);
   const given = opts.permissionMode ?? deps.readState()?.permissionMode;
   const permissionMode = given ?? DEFAULT_PERMISSION_MODE;
-  const launcher = join3(deps.dir, "launch.mjs");
+  const launcher = join4(deps.dir, "launch.mjs");
   deps.writeFile(launcher, LAUNCHER);
-  deps.writeFile(join3(deps.dir, "cli-path"), deps.cliPath);
+  deps.writeFile(join4(deps.dir, "cli-path"), deps.cliPath);
   const lines = [];
   if (deps.platform === "win32") {
-    const file = join3(deps.dir, "task.xml");
+    const file = join4(deps.dir, "task.xml");
     deps.writeFile(file, "\uFEFF" + taskXml({ user: deps.user, node: deps.node, launcher }), "utf16le");
     deps.schtasks(["/create", "/tn", TASK_NAME, "/xml", file, "/f"]);
     lines.push(`Created the scheduled task "${TASK_NAME}": it checks at logon and every ${ENSURE_MINUTES} minutes that the standing session is running.`);
   } else {
     const units = systemdUnits({ node: deps.node, launcher, dir: deps.dir, path: deps.path });
-    deps.writeFile(join3(deps.systemdDir, `${UNIT_NAME}.service`), units.service);
-    deps.writeFile(join3(deps.systemdDir, `${UNIT_NAME}.timer`), units.timer);
+    deps.writeFile(join4(deps.systemdDir, `${UNIT_NAME}.service`), units.service);
+    deps.writeFile(join4(deps.systemdDir, `${UNIT_NAME}.timer`), units.timer);
     deps.systemctl(["daemon-reload"]);
     deps.systemctl(["enable", "--now", `${UNIT_NAME}.timer`]);
     lines.push(`Created the systemd user timer ${UNIT_NAME}.timer: it checks at login and every ${ENSURE_MINUTES} minutes that the standing session is running.`);
@@ -4912,7 +5287,7 @@ function startByTask(deps, opts = {}) {
     deps.sleep(500);
     made = liveState(deps);
   }
-  if (!made) throw new Error(`${keepAliveName(deps.platform).replace(/^t/, "T")} ran but no session appeared. See ${join3(deps.dir, "ensure.log")}.`);
+  if (!made) throw new Error(`${keepAliveName(deps.platform).replace(/^t/, "T")} ran but no session appeared. See ${join4(deps.dir, "ensure.log")}.`);
   return { started: true, sessionId: made.sessionId, text: `Started the standing session (${made.sessionId}). It appears as "${SESSION_NAME}" in the Claude app and at claude.ai/code.${questionNote(deps, made.pid)}` };
 }
 function questionNote(deps, pid) {
@@ -4939,16 +5314,16 @@ function uninstall(deps) {
       deps.systemctl(["disable", "--now", `${UNIT_NAME}.timer`]);
     } catch {
     }
-    deps.removeFile(join3(deps.systemdDir, `${UNIT_NAME}.timer`));
-    deps.removeFile(join3(deps.systemdDir, `${UNIT_NAME}.service`));
+    deps.removeFile(join4(deps.systemdDir, `${UNIT_NAME}.timer`));
+    deps.removeFile(join4(deps.systemdDir, `${UNIT_NAME}.service`));
     try {
       deps.systemctl(["daemon-reload"]);
     } catch {
     }
     lines.push(had ? `Deleted the systemd timer ${UNIT_NAME}.timer.` : `There was no systemd timer ${UNIT_NAME}.timer.`);
   }
-  deps.removeFile(join3(deps.dir, "launch.mjs"));
-  deps.removeFile(join3(deps.dir, "task.xml"));
+  deps.removeFile(join4(deps.dir, "launch.mjs"));
+  deps.removeFile(join4(deps.dir, "task.xml"));
   lines.push(stop(deps).text);
   return lines.join("\n");
 }
@@ -4963,24 +5338,24 @@ function taskInstalled(deps) {
   }
 }
 function runnerDir(home = homedir3()) {
-  return join3(home, ".quarterdeck", "runner");
+  return join4(home, ".quarterdeck", "runner");
 }
 function currentBuild(scriptDir = dirname2(fileURLToPath(import.meta.url))) {
-  const plugin = [join3(scriptDir, ".."), join3(scriptDir, "..", "..", "plugins", "quarterdeck-goals")].find((d) => existsSync3(join3(d, ".claude-plugin", "plugin.json")));
+  const plugin = [join4(scriptDir, ".."), join4(scriptDir, "..", "..", "plugins", "quarterdeck-goals")].find((d) => existsSync3(join4(d, ".claude-plugin", "plugin.json")));
   if (!plugin) return "unknown";
   let version = "unknown";
   try {
-    version = String(JSON.parse(readFileSync(join3(plugin, ".claude-plugin", "plugin.json"), "utf8")).version);
+    version = String(JSON.parse(readFileSync2(join4(plugin, ".claude-plugin", "plugin.json"), "utf8")).version);
   } catch {
   }
-  const bundle = join3(plugin, "server", "quarterdeck-mcp.mjs");
+  const bundle = join4(plugin, "server", "quarterdeck-mcp.mjs");
   return existsSync3(bundle) ? `${version}+${Math.round(statSync(bundle).mtimeMs)}` : version;
 }
 function readStateText(file) {
-  return readFileSync(file, "utf8").replace(/^﻿/, "");
+  return readFileSync2(file, "utf8").replace(/^﻿/, "");
 }
-function transcriptPath(dir, sessionId, configDir = process.env.CLAUDE_CONFIG_DIR || join3(homedir3(), ".claude")) {
-  return join3(configDir, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
+function transcriptPath(dir, sessionId, configDir = process.env.CLAUDE_CONFIG_DIR || join4(homedir3(), ".claude")) {
+  return join4(configDir, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
 }
 function sessionEnv() {
   const env = { ...process.env };
@@ -4996,7 +5371,7 @@ function tmux(args, env) {
   }
 }
 function onPath(name, path) {
-  for (const d of path.split(":")) if (d && existsSync3(join3(d, name))) return join3(d, name);
+  for (const d of path.split(":")) if (d && existsSync3(join4(d, name))) return join4(d, name);
   return null;
 }
 function spawnInTmux(dir, args) {
@@ -5043,8 +5418,8 @@ function tmuxPaneAlive(pid) {
 async function realDeps() {
   const core = await Promise.resolve().then(() => (init_src(), src_exports));
   const dir = runnerDir();
-  mkdirSync2(dir, { recursive: true });
-  const stateFile = join3(dir, "state.json");
+  mkdirSync3(dir, { recursive: true });
+  const stateFile = join4(dir, "state.json");
   const withDb = (fn) => {
     const db = core.openDatabase(core.defaultDbPath());
     try {
@@ -5127,7 +5502,7 @@ async function realDeps() {
       }
     },
     writeState: (state) => {
-      if (state) writeFileSync(stateFile, JSON.stringify(state, null, 2) + "\n");
+      if (state) writeFileSync2(stateFile, JSON.stringify(state, null, 2) + "\n");
       else rmSync(stateFile, { force: true });
     },
     platform: process.platform,
@@ -5136,17 +5511,17 @@ async function realDeps() {
     user: process.platform === "win32" && process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${userInfo().username}` : userInfo().username,
     node: process.execPath,
     writeFile: (path, content, encoding) => {
-      mkdirSync2(dirname2(path), { recursive: true });
-      writeFileSync(path, content, encoding ?? "utf8");
+      mkdirSync3(dirname2(path), { recursive: true });
+      writeFileSync2(path, content, encoding ?? "utf8");
     },
     removeFile: (path) => rmSync(path, { force: true }),
     schtasks: (args) => execFileSync("schtasks.exe", args, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
     systemctl: (args) => execFileSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
-    systemdDir: join3(process.env.XDG_CONFIG_HOME || join3(homedir3(), ".config"), "systemd", "user"),
+    systemdDir: join4(process.env.XDG_CONFIG_HOME || join4(homedir3(), ".config"), "systemd", "user"),
     path: process.env.PATH ?? "",
     wsl: process.platform === "linux" && (() => {
       try {
-        return /microsoft/i.test(readFileSync("/proc/version", "utf8"));
+        return /microsoft/i.test(readFileSync2("/proc/version", "utf8"));
       } catch {
         return false;
       }
@@ -5235,7 +5610,7 @@ function defaultOptions() {
 }
 function findRepoRoot(from) {
   for (let dir = from; ; dir = dirname3(dir)) {
-    if (existsSync4(join4(dir, "core", "src")) && existsSync4(join4(dir, "mcp", "src"))) return dir;
+    if (existsSync4(join5(dir, "core", "src")) && existsSync4(join5(dir, "mcp", "src"))) return dir;
     if (dirname3(dir) === dir) return resolve2(from, "..", "..");
   }
 }
@@ -5292,8 +5667,8 @@ async function checkDatabase(o) {
 }
 function checkBuild(o, pkg) {
   const name = `${pkg}/ build`;
-  const srcDir = join4(o.repoRoot, pkg, "src");
-  const entry = join4(o.repoRoot, pkg, "dist", "index.js");
+  const srcDir = join5(o.repoRoot, pkg, "src");
+  const entry = join5(o.repoRoot, pkg, "dist", "index.js");
   if (!existsSync4(srcDir)) return ok(name, "not a Quarterdeck checkout (installed plugin) \u2014 skipped");
   if (!existsSync4(entry)) return fail(name, `${pkg}/dist/index.js is missing`, `Run \`npm run build --prefix ${pkg}\`.`);
   const newestSrc = newestMtime(srcDir);
@@ -5302,17 +5677,17 @@ function checkBuild(o, pkg) {
 }
 function checkBundle(o) {
   const name = "Plugin server bundle";
-  const srcDir = join4(o.repoRoot, "mcp", "src");
-  const bundle = join4(o.repoRoot, "plugins", "quarterdeck-goals", "server", "quarterdeck-mcp.mjs");
+  const srcDir = join5(o.repoRoot, "mcp", "src");
+  const bundle = join5(o.repoRoot, "plugins", "quarterdeck-goals", "server", "quarterdeck-mcp.mjs");
   if (!existsSync4(srcDir)) return ok(name, "not a Quarterdeck checkout (installed plugin) \u2014 skipped");
   if (!existsSync4(bundle)) return fail(name, "plugins/quarterdeck-goals/server/quarterdeck-mcp.mjs is missing, so the plugin has no server", "Run `npm run build --prefix mcp`, then /reload-plugins.");
   const built = statSync2(bundle).mtimeMs;
-  return Math.max(newestMtime(srcDir), newestMtime(join4(o.repoRoot, "core", "src"))) > built + 1e3 ? warn(name, "source files changed since the last build", "Run `npm run build --prefix mcp`, then /reload-plugins.") : ok(name, "up to date");
+  return Math.max(newestMtime(srcDir), newestMtime(join5(o.repoRoot, "core", "src"))) > built + 1e3 ? warn(name, "source files changed since the last build", "Run `npm run build --prefix mcp`, then /reload-plugins.") : ok(name, "up to date");
 }
 function checkServerSetup(o) {
   const name = "quarterdeck MCP server";
-  const user = readJson(join4(o.home, ".claude.json")).mcpServers ?? {};
-  const projectFile = [join4(o.cwd, ".mcp.json"), join4(o.repoRoot, ".mcp.json")].find((f) => existsSync4(f));
+  const user = readJson(join5(o.home, ".claude.json")).mcpServers ?? {};
+  const projectFile = [join5(o.cwd, ".mcp.json"), join5(o.repoRoot, ".mcp.json")].find((f) => existsSync4(f));
   const project = projectFile ? readJson(projectFile).mcpServers ?? {} : {};
   const plugin = enabledPlugins(o)[PLUGIN] === true;
   const byHand = [user.quarterdeck && "added for your user", project.quarterdeck && `in ${projectFile}`].filter(Boolean);
@@ -5340,7 +5715,7 @@ function checkServerSetup(o) {
 }
 function checkPermissionRules(o) {
   if (enabledPlugins(o)[PLUGIN] !== true) return null;
-  const files = [join4(o.home, ".claude", "settings.json"), join4(o.cwd, ".claude", "settings.json"), join4(o.cwd, ".claude", "settings.local.json")];
+  const files = [join5(o.home, ".claude", "settings.json"), join5(o.cwd, ".claude", "settings.json"), join5(o.cwd, ".claude", "settings.local.json")];
   const stale = files.filter((f) => {
     const perms = readJson(f).permissions;
     return perms !== void 0 && JSON.stringify(perms).includes("mcp__quarterdeck__");
@@ -5353,7 +5728,7 @@ function checkPermissionRules(o) {
   );
 }
 function checkUpdates(o) {
-  const known = readJson(join4(o.home, ".claude", "plugins", "known_marketplaces.json"));
+  const known = readJson(join5(o.home, ".claude", "plugins", "known_marketplaces.json"));
   const m = known.quarterdeck;
   if (!m) return null;
   const name = "Updates";
@@ -5365,11 +5740,11 @@ function checkUpdates(o) {
   );
 }
 function checkHooks(o) {
-  const file = join4(o.home, ".claude", "settings.json");
+  const file = join5(o.home, ".claude", "settings.json");
   if (!existsSync4(file)) return ok("Claude Code hooks", "none installed (none needed)");
   let text;
   try {
-    text = readFileSync2(file, "utf8");
+    text = readFileSync3(file, "utf8");
     JSON.parse(text);
   } catch {
     return fail("Claude Code hooks", "~/.claude/settings.json is not valid JSON", "Fix the JSON syntax.");
@@ -5396,17 +5771,17 @@ function checkPlugin(o) {
 function checkRenameLeftovers(o) {
   const read = (file) => {
     try {
-      return JSON.parse(readFileSync2(file, "utf8"));
+      return JSON.parse(readFileSync3(file, "utf8"));
     } catch {
       return {};
     }
   };
-  const user = read(join4(o.home, ".claude.json"));
-  const repo = read(join4(o.repoRoot, ".mcp.json"));
-  const enabled = read(join4(o.home, ".claude", "settings.json")).enabledPlugins ?? {};
+  const user = read(join5(o.home, ".claude.json"));
+  const repo = read(join5(o.repoRoot, ".mcp.json"));
+  const enabled = read(join5(o.home, ".claude", "settings.json")).enabledPlugins ?? {};
   const found = [];
   const fixes = [];
-  if (!o.env.QUARTERDECK_DB && !o.env.CONDUCTOR_DB && existsSync4(join4(o.home, ".conductor", "tasks.db")) && !existsSync4(join4(o.home, ".quarterdeck", "tasks.db"))) {
+  if (!o.env.QUARTERDECK_DB && !o.env.CONDUCTOR_DB && existsSync4(join5(o.home, ".conductor", "tasks.db")) && !existsSync4(join5(o.home, ".quarterdeck", "tasks.db"))) {
     found.push("your goals are still in ~/.conductor");
     fixes.push("with Claude Code and the web app closed, rename ~/.conductor to ~/.quarterdeck");
   }
@@ -5454,7 +5829,7 @@ async function checkGoals(o, plugins) {
 }
 async function checkRunner(o, deps) {
   const name = "Standing session";
-  if (!existsSync4(join4(o.home, ".quarterdeck", "runner", "launch.mjs"))) return null;
+  if (!existsSync4(join5(o.home, ".quarterdeck", "runner", "launch.mjs"))) return null;
   try {
     const d = deps ?? await realDeps();
     const s = status(d);
@@ -5502,13 +5877,13 @@ function formatResults(results) {
 }
 function readJson(file) {
   try {
-    return JSON.parse(readFileSync2(file, "utf8"));
+    return JSON.parse(readFileSync3(file, "utf8"));
   } catch {
     return {};
   }
 }
 function enabledPlugins(o) {
-  return readJson(join4(o.home, ".claude", "settings.json")).enabledPlugins ?? {};
+  return readJson(join5(o.home, ".claude", "settings.json")).enabledPlugins ?? {};
 }
 function firstLine2(s) {
   return s.split("\n")[0];
@@ -5516,7 +5891,7 @@ function firstLine2(s) {
 function newestMtime(dir) {
   let newest = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const p = join4(dir, entry.name);
+    const p = join5(dir, entry.name);
     if (entry.isDirectory()) newest = Math.max(newest, newestMtime(p));
     else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) newest = Math.max(newest, statSync2(p).mtimeMs);
   }
