@@ -85,6 +85,9 @@ export function question(id: string, title: string, notes?: string): Item {
 
 export type Call = { tool: string; input: Record<string, unknown> }
 
+/** Claude Code's current wording when a tool result is too large and saved to a file (#162). */
+export const SPILL_TEXT = 'result (68,739 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to C:\\Users\\me\\.claude\\projects\\p\\tool-results\\mcp-plugin_quarterdeck-goals_quarterdeck-goals_overview-1.txt. Read it with the Read tool.'
+
 const TOOLS = [
   'goals_overview', 'decide_item', 'run_goal', 'request_run', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
   'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold',
@@ -96,7 +99,7 @@ const TOOLS = [
  */
 type FakeTodoList = { id: string; name: string; items: { id: string; text: string; status: string; depth: number; notes: string | null }[] }
 
-export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolean; errors?: Record<string, string>; todos?: FakeTodoList[]; hold?: { until: string; reason: string }; outdated?: boolean; standing?: boolean; update?: { installed: string; latest: string; ready?: true }; /** Deleted goals the overview lists (#105). */ deleted?: { id: string; name: string; deleted_at: string; purge_at: string | null }[]; /** Deleted goals' full detail, given when the overview's detail names them (#105). */ deletedGoals?: FakeGoal[]; prefix?: string; /** Tool watches the next pass hands out, once. A report with text for watch `w-<goal id>` queues that goal's run. */ toolWatches?: { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown> }[]; /** get_item's full text for clipped items, by item id. */ full?: Record<string, Item> } = {}) {
+export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolean; errors?: Record<string, string>; todos?: FakeTodoList[]; hold?: { until: string; reason: string }; outdated?: boolean; standing?: boolean; update?: { installed: string; latest: string; ready?: true }; /** Deleted goals the overview lists (#105). */ deleted?: { id: string; name: string; deleted_at: string; purge_at: string | null }[]; /** Deleted goals' full detail, given when the overview's detail names them (#105). */ deletedGoals?: FakeGoal[]; prefix?: string; /** Tool watches the next pass hands out, once. A report with text for watch `w-<goal id>` queues that goal's run. */ toolWatches?: { watch_id: string; goal_id: string; name: string; tool: string; input: Record<string, unknown> }[]; /** get_item's full text for clipped items, by item id. */ full?: Record<string, Item>; /** Goals whose detail is too large: a read naming them answers like Claude Code's spill (#162). */ spill?: string[]; /** Every overview read spills. */ spillAll?: boolean; /** The spill's wording; SPILL_TEXT by default. */ spillText?: string } = {}) {
   const prefix = opts.prefix ?? 'mcp__quarterdeck__'
   const lists: FakeTodoList[] = opts.todos ?? []
   const listView = () => lists.map((l) => {
@@ -123,6 +126,9 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
       const g = byId(input.goal_id)
       switch (name) {
         case 'goals_overview': {
+          // Claude Code's answer when a result passes its size limit (#162): a read naming a spilled goal's detail, or any read under spillAll
+          const detailIds = Array.isArray(input.detail) ? (input.detail as string[]) : []
+          if (opts.spillAll || detailIds.some((id) => opts.spill?.includes(id))) return { result: opts.spillText ?? SPILL_TEXT } as never
           if (input.etag === etag()) return ok({ changed: false, etag: etag() }) as never
           // Long instructions are cut like the server's (1500 characters) unless full_instructions asks for them whole;
           // only (#121) gives just the goals in detail, without the deleted list

@@ -26,7 +26,7 @@ import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
 import { addFromPane, askFromPane, cancelHeldTodo, editFromPane, toggleTodo, workFromPane } from './todos'
 import { GUARD_MISSING, PLAN_MODE_ON } from './runner'
-import { act, refresh } from './sync'
+import { act, refresh, tooBigText } from './sync'
 
 type Engine = EngineInterface
 type E = RenderInput<'Pane'>
@@ -246,6 +246,7 @@ export async function renderPane($: Engine, e: E) {
       {phone === 'config_off' && <Text color="yellow">Alerts can't reach your phone: mobile push is off. Turn it on in /config.</Text>}
       {(planMode || (!s.reachable && planModeBlocked(s.error ?? ''))) && <Text color="yellow">{PLAN_MODE_ON}</Text>}
       {!s.reachable && !planMode && !planModeBlocked(s.error ?? '') && <Text color="yellow">Offline — showing the last read ({ago(new Date(s.fetchedAt).toISOString(), view.now)}).</Text>}
+      {(s.tooBig ?? []).map((id) => <Text key={`too-big:${id}`} color="yellow">{tooBigText(s.goals.find((g) => g.id === id)?.name ?? id)}</Text>)}
       {current.length === 0 && done.length === 0 && !todos?.lists.length && welcome($, e)}
       {current.length === 0 && (done.length > 0 || !!todos?.lists.length) && (
         <Box flexDirection="column" marginBottom={1}>
