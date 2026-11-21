@@ -102,18 +102,22 @@ section > p, section > ol, section > ul:not(.chips), section > pre { max-width: 
 .button.ghost:hover { border-color: var(--bronze); color: #fff1d6; }
 
 .hero-prompt blockquote {
+  position: relative;
   margin: 0;
-  padding: 4px 0 4px 28px;
-  border-left: 3px solid var(--bronze);
-  font: 400 clamp(1.45rem, 2.5vw, 2.05rem)/1.4 var(--serif);
+  padding: 0 0 0 2.3em;
+  font: 600 clamp(1.45rem, 2.5vw, 2.05rem)/1.4 var(--serif);
   color: #f8e2b8;
 }
-.hero-prompt .cmd {
-  font: 0.82em var(--mono);
-  color: var(--bronze-strong);
-  margin-right: 0.2em;
+.hero-prompt blockquote::before {
+  content: ">";
+  position: absolute;
+  left: -0.06em;
+  top: -0.05em;
+  font: 400 4.2em/0.8 var(--serif);
+  color: var(--bronze);
 }
-.hero-prompt figcaption { padding-left: 31px; margin-top: 18px; font-size: 1rem; }
+.hero-prompt .cmd { color: var(--bronze-strong); }
+.hero-prompt figcaption { padding-left: calc(2.3 * clamp(1.45rem, 2.5vw, 2.05rem)); margin-top: 18px; font-size: 1rem; }
 
 figure { margin: 0; }
 figure img {
