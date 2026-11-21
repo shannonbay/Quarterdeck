@@ -173,6 +173,8 @@ claude plugin install quarterdeck-goals@quarterdeck --scope user
 
 That's the whole setup. `quarterdeck-guard` comes with it as a dependency, and the plugin brings the `quarterdeck` MCP server with it, so there is nothing to clone, build or `claude mcp add`. Start Claude Code (or `/reload-plugins`) and type `/goals` to open the Goals pane. Due runs start on their own while Claude Code is open. The web app is optional.
 
+The MCP server is also in the official [MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.shannonbay/quarterdeck` (an MCPB bundle on each release). On its own it gives an MCP client the goal, memory and to-do tools only; scheduled runs, the guard and the Goals pane need the Claude Code plugin above.
+
 See [`plugins/quarterdeck-goals`](plugins/quarterdeck-goals/README.md) for the pane, commands, settings and how runs work, and [`plugins/quarterdeck-guard`](plugins/quarterdeck-guard/README.md) for what a run may do.
 
 ### Turn on updates

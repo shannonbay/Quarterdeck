@@ -4,14 +4,17 @@
  *
  * 1. Checks main is clean, then runs every test (workspaces, the live tests
  *    against the bundled server, and both plugins).
- * 2. Sets the version in both plugin.json files and commits that on main.
- * 3. Builds, then commits the installable marketplace (marketplace.json, the
+ * 2. Sets the version in both plugin.json files, builds, packs the server into
+ *    dist/quarterdeck-<version>.mcpb (mcpb.mjs), writes server.json for the
+ *    MCP Registry with that file's SHA-256, and commits those on main.
+ * 3. Commits the installable marketplace (marketplace.json, the
  *    plugins with the bundled server and each plugin's hooks in one file
  *    (bundle-hooks.mjs: the plugin directory reads `$` in one file only),
  *    README, LICENSE) to the `release`
  *    branch, and tags it v<version>, quarterdeck-goals--v<version> and
  *    quarterdeck-guard--v<version>.
- * 4. With --push, pushes main, release and the tags.
+ * 4. With --push, pushes main, release and the tags. Then attach the .mcpb to
+ *    the GitHub release page and run `mcp-publisher publish` (CLAUDE.md).
  *
  * People install from the release branch:
  *   claude plugin marketplace add shannonbay/Quarterdeck#release
@@ -24,6 +27,7 @@ import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 
 import { bundleHooks } from './bundle-hooks.mjs'
+import { buildMcpb, writeServerJson } from './mcpb.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const PLUGINS = ['quarterdeck-goals', 'quarterdeck-guard']
@@ -67,13 +71,17 @@ for (const p of PLUGINS) {
   manifest.version = version
   writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n')
 }
-run('git', ['add', ...PLUGINS.map((p) => `plugins/${p}/.claude-plugin/plugin.json`)])
+run('npm', ['run', 'build', '--prefix', 'mcp'])
+if (!existsSync(join(root, 'plugins', 'quarterdeck-goals', 'server', 'quarterdeck-mcp.mjs'))) fail('the server bundle was not built')
+// The MCPB bundle for the MCP Registry, and server.json pointing at it
+const mcpb = buildMcpb(root, version)
+writeServerJson(root, version, mcpb.sha256)
+console.log(`release: packed ${mcpb.file} (sha256 ${mcpb.sha256})`)
+run('git', ['add', 'server.json', ...PLUGINS.map((p) => `plugins/${p}/.claude-plugin/plugin.json`)])
 run('git', ['commit', '-m', `release: v${version}`])
 const source = git('rev-parse', '--short', 'HEAD')
 
-// ── 3. Build and commit to the release branch ─────────────────────────────────
-run('npm', ['run', 'build', '--prefix', 'mcp'])
-if (!existsSync(join(root, 'plugins', 'quarterdeck-goals', 'server', 'quarterdeck-mcp.mjs'))) fail('the server bundle was not built')
+// ── 3. Commit the build to the release branch ─────────────────────────────────
 
 const work = join(mkdtempSync(join(tmpdir(), 'quarterdeck-release-')), 'tree')
 const hasLocal = git('branch', '--list', RELEASE_BRANCH) !== ''
@@ -132,9 +140,12 @@ try {
 
 // ── 4. Push ───────────────────────────────────────────────────────────────────
 const tags = [`v${version}`, ...PLUGINS.map((p) => `${p}--v${version}`)]
+const after = `Then create the release page with the bundle attached (gh release create v${version} --title "Quarterdeck v${version}" --notes-file <notes.md> dist/quarterdeck-${version}.mcpb) and publish to the MCP Registry from main: mcp-publisher publish (mcp-publisher login github first when the token has expired).`
 if (push) {
   run('git', ['push', 'origin', 'main', RELEASE_BRANCH, ...tags])
   console.log(`release: v${version} published. With auto-update on, sessions get it within a few minutes; /reload-plugins applies it.`)
+  console.log(`release: ${after}`)
 } else {
   console.log(`release: v${version} is ready locally. Publish with: git push origin main ${RELEASE_BRANCH} ${tags.join(' ')}`)
+  console.log(`release: ${after}`)
 }
