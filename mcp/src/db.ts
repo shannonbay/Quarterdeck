@@ -87,6 +87,7 @@ export const decideItem = (planId: string, taskId: string, input: Parameters<typ
 export const failRun = (runId: string, status: 'failed' | 'timed_out', reason: string) => core.failRun(db, runId, status, reason)
 export const attachAgent = (runId: string, agentId: string) => core.attachAgent(db, runId, agentId)
 export const guardToolCallForRun = (runId: string, tool: string, input?: Record<string, unknown>) => core.guardToolCallForRun(db, runId, tool, input)
+export const recordRefusal = (runId: string, tool: string, input?: Record<string, unknown>) => core.recordRefusal(db, runId, tool, input)
 export const updateGoal = (planId: string, fields: Parameters<typeof core.updateGoal>[2]) => core.updateGoal(db, planId, fields)
 
 export const forgetMemory = (id: string) => core.forgetMemory(db, id)

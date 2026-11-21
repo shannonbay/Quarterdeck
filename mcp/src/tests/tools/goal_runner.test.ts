@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check,
+  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check, run_refused,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
@@ -146,6 +146,21 @@ describe('run bookkeeping', () => {
     expect(getGoal(id)!.status).toBe('paused')
     await set_goal_status({ goal_id: id, status: 'active' })
     expect(getGoal(id)!.status).toBe('active')
+  })
+})
+
+describe('run_refused', () => {
+  it('records a refused call the guard allowed, with the rule it needs, and records nothing for one it would refuse', async () => {
+    const id = makeGoal()
+    updateGoal(id, { tool_map: { 'mcp__gmail__archive': 'email.archive', 'mcp__gmail__delete': 'email.delete' }, autonomy: { 'email.archive': 'auto', 'email.delete': 'off' } })
+    const run = await claim(id)
+    expect(await run_refused({ run_id: run.run_id, tool_name: 'mcp__gmail__delete' })).toEqual({ recorded: false })
+    expect(await run_refused({ run_id: run.run_id, tool_name: 'Read' })).toEqual({ recorded: false })
+    expect(await run_refused({ run_id: run.run_id, tool_name: 'mcp__gmail__archive' }))
+      .toEqual({ recorded: true, category: 'email.archive', rule: 'mcp__gmail__archive' })
+    const events = getEvents(id).filter((e) => e.event_type === 'tool_refused')
+    expect(events).toHaveLength(1)
+    expect(events[0].payload).toMatchObject({ run_id: run.run_id, tool_name: 'mcp__gmail__archive', rule: 'mcp__gmail__archive' })
   })
 })
 
