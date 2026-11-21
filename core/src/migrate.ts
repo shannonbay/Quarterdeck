@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 22
+export const SCHEMA_VERSION = 23
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -395,7 +395,7 @@ export function runMigrations(db: Database): void {
       run_id     TEXT NOT NULL,
       tool_name  TEXT NOT NULL,
       category   TEXT NOT NULL,
-      decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+      decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny', 'refused')),
       reason     TEXT,
       created_at TEXT NOT NULL
     );
@@ -517,6 +517,32 @@ export function runMigrations(db: Database): void {
   // Schema version 22: the part of the job a running run says it is on (run_step), and whether it was set after an untrusted read (#146)
   for (const col of ['step', 'step_at', 'step_untrusted']) {
     try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
+  }
+  // Schema version 23: a call the guard allowed but Claude Code refused is recorded as 'refused' (#145).
+  // SQLite can't alter a CHECK, so an older goal_tool_calls is rebuilt, keeping its rows, index and trigger.
+  const toolCallsSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'goal_tool_calls'").get() as { sql?: string } | undefined)?.sql ?? ''
+  if (toolCallsSql && !toolCallsSql.includes("'refused'")) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE goal_tool_calls_v23 (
+        id         TEXT PRIMARY KEY,
+        plan_id    TEXT NOT NULL REFERENCES plans(id),
+        run_id     TEXT NOT NULL,
+        tool_name  TEXT NOT NULL,
+        category   TEXT NOT NULL,
+        decision   TEXT NOT NULL CHECK (decision IN ('allow', 'deny', 'refused')),
+        reason     TEXT,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO goal_tool_calls_v23 (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
+        SELECT id, plan_id, run_id, tool_name, category, decision, reason, created_at FROM goal_tool_calls;
+      DROP TABLE goal_tool_calls;
+      ALTER TABLE goal_tool_calls_v23 RENAME TO goal_tool_calls;
+      CREATE INDEX IF NOT EXISTS idx_goal_tool_calls ON goal_tool_calls(plan_id, category, created_at);
+      CREATE TRIGGER IF NOT EXISTS trg_goal_tool_calls_insert_revision AFTER INSERT ON goal_tool_calls
+      BEGIN UPDATE plans SET revision = revision + 1 WHERE id = NEW.plan_id; END;
+      COMMIT;
+    `)
   }
   // The update trigger's column list grew in 17: an older one is made again below
   if (dbSchemaVersion(db) < 17) db.exec('DROP TRIGGER IF EXISTS trg_goal_watches_update_revision')
