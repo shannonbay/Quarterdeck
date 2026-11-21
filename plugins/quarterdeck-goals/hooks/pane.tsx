@@ -26,7 +26,7 @@ import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
 import { addFromPane, askFromPane, cancelHeldTodo, editFromPane, toggleTodo, workFromPane } from './todos'
 import { GUARD_MISSING, PLAN_MODE_ON } from './runner'
-import { act, refresh } from './sync'
+import { act, refresh, tooBigText } from './sync'
 
 type Engine = EngineInterface
 type E = RenderInput<'Pane'>
@@ -246,6 +246,7 @@ export async function renderPane($: Engine, e: E) {
       {phone === 'config_off' && <Text color="yellow">Alerts can't reach your phone: mobile push is off. Turn it on in /config.</Text>}
       {(planMode || (!s.reachable && planModeBlocked(s.error ?? ''))) && <Text color="yellow">{PLAN_MODE_ON}</Text>}
       {!s.reachable && !planMode && !planModeBlocked(s.error ?? '') && <Text color="yellow">Offline — showing the last read ({ago(new Date(s.fetchedAt).toISOString(), view.now)}).</Text>}
+      {(s.tooBig ?? []).map((id) => <Text key={`too-big:${id}`} color="yellow">{tooBigText(s.goals.find((g) => g.id === id)?.name ?? id)}</Text>)}
       {current.length === 0 && done.length === 0 && !todos?.lists.length && welcome($, e)}
       {current.length === 0 && (done.length > 0 || !!todos?.lists.length) && (
         <Box flexDirection="column" marginBottom={1}>
@@ -504,6 +505,26 @@ function activityLine($: Engine, e: E, view: View, g: GoalCard) {
       </Box>
     )
   }
+  if (state === 'running' && g.openRun?.step) {
+    // The run's step leads (#146), what it is doing within it dimmed after; a step set after
+    // reading outside content gets the same mark as an untrusted status
+    const age = at ? ` · ${ago(at, view.now)}` : ''
+    const { detail, untrusted } = g.activity
+    const room = Math.max(view.columns - 2 - age.length - (untrusted ? 2 : 0), 10)
+    const step = clip(`Now: ${text}`, room)
+    const rest = detail ? clip(` · ${detail}`, Math.max(room - step.length, 0)) : ''
+    return (
+      <Box key={`activity-${g.id}`} flexDirection="column">
+        <Text>
+          {untrusted ? <Text color="yellow">⚠ </Text> : <Text color="cyan">● </Text>}
+          <Text color="cyan">{step}</Text>
+          {rest ? <Text dimColor>{rest}</Text> : null}
+          <Text dimColor>{age}</Text>
+        </Text>
+        {untrusted ? <Text dimColor>  set after reading {untrusted}</Text> : null}
+      </Box>
+    )
+  }
   if (state === 'running') {
     const age = at ? ` · ${ago(at, view.now)}` : ''
     return (
@@ -616,7 +637,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
 
   if (isDeleting) {
     return (
-      <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
+      <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
         <Text color="yellow">Delete "{g.name}"? It stops running and is hidden; you can restore it, with its items, runs and memory, until it is purged after the retention period (30 days unless QUARTERDECK_DELETED_RETENTION_DAYS says otherwise).</Text>
         <Box>
           <Button
@@ -662,8 +683,9 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
       })
     }
     return (
-      <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
-        <Input key={`prompt-input-${g.id}`} label="What should this run do or look at? (for this run only, not kept as memory)" submitLabel="Run" autoFocus onSubmit={send} />
+      <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
+        <Input key={`prompt-input-${g.id}`} label="Prompt" submitLabel="Run" autoFocus onSubmit={send} />
+        <Text dimColor> · </Text>
         {action($, e, { key: `prompt-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
       </Box>
     )

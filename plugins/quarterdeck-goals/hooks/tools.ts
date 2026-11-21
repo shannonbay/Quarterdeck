@@ -198,8 +198,17 @@ export async function registerTools($: Engine): Promise<void> {
 type Resolved = { goal: GoalCard } | { error: string; deleted?: DeletedGoal }
 
 async function resolveGoal($: Engine, query: unknown): Promise<Resolved> {
-  const s = await refresh($)
-  if (!s.reachable) return { error: `Quarterdeck isn't connected${s.error ? ` (${s.error})` : ''}. Check the quarterdeck MCP server with /mcp.` }
+  // Its own cards-only read (#162): finding a goal needs names and ids, not any expanded goal's detail
+  let s: { goals: GoalCard[]; deleted?: DeletedGoal[] }
+  try {
+    const res = await fetchOverview($, null, [])
+    if (!res.changed) throw new Error('Quarterdeck answered "unchanged" to a read without an etag')
+    s = { goals: res.goals.map(toCard), deleted: res.deleted.map((d) => ({ id: d.id, name: d.name, deletedAt: d.deleted_at, purgeAt: d.purge_at })) }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/too large/.test(message)) return { error: `Couldn't read Quarterdeck's goal list: ${message}` }
+    return { error: `Quarterdeck isn't connected (${message}). Check the quarterdeck MCP server with /mcp.` }
+  }
   const found = findGoal(s.goals, typeof query === 'string' ? query : '')
   if ('goal' in found) return found
   // A deleted goal (#105) is no live goal, but say so rather than "no goal matches"

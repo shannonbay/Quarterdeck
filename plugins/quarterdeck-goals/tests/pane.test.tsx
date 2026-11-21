@@ -28,6 +28,22 @@ test('the pane shows a proposal with hotkeys, and Approve records it in Quarterd
   await ui.unmount()
 })
 
+test('a running goal with a step shows Now: step, its call dimmed after, and ⚠ when untrusted (#146)', async ($, on) => {
+  engine(on)
+  fakeQuarterdeck(on, [
+    goal({ id: 'g1', name: 'Inbox', open_run: { id: 'r1', status: 'running', step: 'Replying to Alice' },
+      activity: { state: 'running', text: 'Replying to Alice', at: '2026-11-07T07:57:00Z', detail: 'Using Gmail create_draft' } }),
+    goal({ id: 'g2', name: 'Fixer', open_run: { id: 'r2', status: 'running', step: 'Fixing #12' },
+      activity: { state: 'running', text: 'Fixing #12', at: '2026-11-07T07:57:00Z', untrusted: 'watch events' } }),
+  ])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /^● Now: Replying/ }))?.text).toBe('● Now: Replying to Alice · Using Gmail create_draft · 3m ago')
+  expect((await ui.find({ type: 'Text', text: /^⚠ Now: Fixing/ }))?.text).toBe('⚠ Now: Fixing #12 · 3m ago')
+  expect(await ui.find({ type: 'Text', text: /set after reading watch events/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test("each goal shows a line of what its agent is doing, clipped to the pane", async ($, on) => {
   engine(on)
   fakeQuarterdeck(on, [

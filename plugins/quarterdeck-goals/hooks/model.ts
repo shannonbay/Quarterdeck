@@ -24,9 +24,9 @@ export type OverviewGoal = {
   /** Categories kept auto after a run reads outside content (#159); missing from an older server. */
   auto_after_outside?: string[]
   tool_map?: Record<string, string>
-  open_run: { id: string; status: string } | null
+  open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
-  activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string } }
+  activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string }; detail?: string; untrusted?: string }
   runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
@@ -82,7 +82,8 @@ export function toCard(g: OverviewGoal): GoalCard {
     needsYouCount: g.needs_you_count ?? g.needs_you.length,
     openItems: g.open_items.map(toItem),
     openItemCount: g.open_item_count,
-    openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status } : null,
+    // step: the part of the job the run says it is on (run_step, #146); then activity.text is that step
+    openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status, step: g.open_run.step ?? null } : null,
     runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
@@ -222,11 +223,14 @@ export function statusText(s: Snapshot): string | undefined {
   if (s.goals.length === 0) return undefined
   const waiting = s.goals.reduce((n, g) => n + g.needsYou.length, 0)
   const asking = s.goals.filter((g) => g.openRun?.status === 'running' && g.activity.waiting).map((g) => g.name)
-  const running = s.goals.filter(isWorking).map((g) => g.name)
+  const working = s.goals.filter(isWorking)
+  const running = working.map((g) => g.name)
+  // One goal running with a step: say the step, as the status line has room for one (#146)
+  const one = working.length === 1 && working[0]!.openRun?.step ? working[0]! : null
   const parts = [
     waiting > 0 ? `${waiting} need${waiting === 1 ? 's' : ''} you` : null,
     asking.length > 0 ? `${asking.join(', ')} waiting for your permission` : null,
-    running.length > 0 ? `${running.join(', ')} running` : null,
+    one ? `${one.name}: ${one.activity.untrusted ? '⚠ ' : ''}${one.activity.text}` : running.length > 0 ? `${running.join(', ')} running` : null,
   ].filter(Boolean)
   return `Quarterdeck: ${parts.length > 0 ? parts.join(' · ') : 'all clear'}`
 }
@@ -239,7 +243,7 @@ export function summarize(goals: GoalCard[], now: number): string {
     const lines = [
       `## ${g.name} (id ${g.id}, ${g.status === 'retired' ? 'done' : g.status}${g.oneOff ? ', one-off' : ''})`,
       `Objective: ${g.objective}`,
-      g.activity.text ? `Now: ${g.activity.text}` : null,
+      g.activity.text ? `Now: ${g.activity.text}${g.activity.detail ? ` (${g.activity.detail})` : ''}${g.activity.untrusted ? ` [set after reading ${g.activity.untrusted}]` : ''}` : null,
       g.openRun ? `Run ${g.openRun.status} now.` : `Last run: ${run ? `${run.status} ${ago(run.endedAt ?? run.startedAt, now)}${runCost(run) ? ` (${runCost(run)})` : ''}${run.summary ? ` — ${run.summary}` : ''}` : 'none'}.`,
       g.health ? `Health: ${g.health.passed ? 'passing' : 'failing'}${g.health.value !== null ? ` (${g.health.value})` : ''}.` : null,
       `Open items: ${g.openItemCount}.`,

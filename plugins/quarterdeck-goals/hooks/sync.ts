@@ -4,7 +4,7 @@
  */
 import type { EngineInterface } from 'claude-code'
 
-import type { Snapshot } from '../types'
+import type { GoalCard, Snapshot } from '../types'
 import { announce, showStatus, savePoll } from './alerts'
 import { fetchOverview, fetchTodos, settings } from './api'
 import { planModeBlocked, toCard } from './model'
@@ -37,22 +37,34 @@ async function load($: Engine): Promise<Snapshot> {
   const now = await $.clock.now()
   let next: Snapshot
   try {
-    // Expanded goals come with their detail; if that ever makes the answer too large to read, cards alone still work
-    const res = await fetchOverview($, previous.reachable ? previous.etag : null, await getExpanded($))
-      .catch((err: unknown) => {
-        if (err instanceof Error && /too large/.test(err.message)) return fetchOverview($, null, [])
-        throw err
-      })
+    // Cards in one read, and each expanded goal's detail in its own `only: true` read (#162),
+    // so one large goal can't push the answer past Claude Code's tool-result limit
+    const expanded = await getExpanded($)
+    const res = await fetchOverview($, previous.reachable ? previous.etag : null, [])
     failures = 0
-    if (!res.changed) {
-      // Unchanged: keep the stored value so nothing redraws, unless it was offline.
-      if (previous.reachable) return previous
-      next = { ...previous, reachable: true, error: null, fetchedAt: now }
-    } else {
-      const goals = res.goals.map(toCard)
-      next = { reachable: true, error: null, goals, fetchedAt: now, etag: res.etag, hold: res.hold, ...(res.outdated ? { outdated: true } : {}), ...(res.standing ? { standing: true } : {}), ...(res.update ? { update: res.update } : {}), ...(res.deleted.length ? { deleted: res.deleted.map((d) => ({ id: d.id, name: d.name, deletedAt: d.deleted_at, purgeAt: d.purge_at })) } : {}) }
-      await announce($, goals, now)
-    }
+    const base: Snapshot = !res.changed
+      ? { ...previous, reachable: true, error: null }
+      : { reachable: true, error: null, goals: res.goals.map(toCard), fetchedAt: now, etag: res.etag, hold: res.hold, ...(res.outdated ? { outdated: true } : {}), ...(res.standing ? { standing: true } : {}), ...(res.update ? { update: res.update } : {}), ...(res.deleted.length ? { deleted: res.deleted.map((d) => ({ id: d.id, name: d.name, deletedAt: d.deleted_at, purgeAt: d.purge_at })) } : {}) }
+    const ids = expanded.filter((id) => base.goals.some((g) => g.id === id))
+    const reads = await Promise.all(ids.map((id) => readDetail($, previous, id)))
+    const detailChanged = reads.some((r) => r.changed)
+    const tooBig = ids.filter((_, i) => reads[i]!.tooBig)
+    const detailEtags: Record<string, string> = {}
+    ids.forEach((id, i) => {
+      const etag = reads[i]!.etag
+      if (etag) detailEtags[id] = etag
+    })
+    const goals = base.goals.map((g) => {
+      const i = ids.indexOf(g.id)
+      return i >= 0 && reads[i]!.card ? reads[i]!.card! : g
+    })
+    const sameTooBig = tooBig.join() === (previous.tooBig ?? []).join()
+    // Nothing changed: keep the stored value so nothing redraws, unless it was offline
+    if (!res.changed && !detailChanged && sameTooBig && previous.reachable) return previous
+    next = { ...base, goals, fetchedAt: now, detailEtags }
+    if (tooBig.length) next.tooBig = tooBig
+    else delete next.tooBig
+    if (res.changed || detailChanged) await announce($, goals, now)
   } catch (err) {
     failures += 1
     // fetchedAt stays: it dates the goals still shown, not this failed read
@@ -61,6 +73,32 @@ async function load($: Engine): Promise<Snapshot> {
   await setSnapshot($, next)
   showStatus($, next)
   return next
+}
+
+/** What the pane says for an expanded goal whose detail was too large to read (#162). */
+export function tooBigText(name: string): string {
+  return `Goal ${name} is too big to show expanded: it shows as a card. Collapse it, or see it with goal_detail.`
+}
+
+type DetailRead ={ changed: boolean; card: GoalCard | null; etag: string | null; tooBig: boolean }
+
+/**
+ * One expanded goal's detail, read on its own with its own etag. Unchanged keeps
+ * the last detail; too large shows it as a card (tooBig); any other failure keeps
+ * the last detail and leaves the pane online.
+ */
+async function readDetail($: Engine, previous: Snapshot, id: string): Promise<DetailRead> {
+  const last = previous.goals.find((g) => g.id === id && g.detail) ?? null
+  const lastEtag = previous.reachable && last ? previous.detailEtags?.[id] ?? null : null
+  try {
+    const r = await fetchOverview($, lastEtag, [id], false, true)
+    if (!r.changed) return { changed: false, card: last, etag: lastEtag, tooBig: false }
+    const full = r.goals.find((g) => g.id === id)
+    return { changed: true, card: full ? toCard(full) : null, etag: r.etag, tooBig: false }
+  } catch (err) {
+    if (err instanceof Error && /too large/.test(err.message)) return { changed: last !== null, card: null, etag: null, tooBig: true }
+    return { changed: false, card: last, etag: lastEtag, tooBig: false }
+  }
 }
 
 /** How long until the next poll: quicker while a run is open, backing off while offline. */

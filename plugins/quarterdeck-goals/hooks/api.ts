@@ -69,6 +69,14 @@ export function isNotLoaded(err: unknown): boolean {
 /** The prefix the session's quarterdeck server answered under last (a cache: call tries both). */
 let serverPrefix: string | null = null
 
+/**
+ * True when a non-JSON answer is Claude Code saying the result was too large
+ * and saved to a file. Recognised by what it is, not one wording (#162).
+ */
+export function isSpilled(text: string): boolean {
+  return /persisted-output|Output too large|exceeds maximum allowed tokens|Output has been saved to|tool-results/i.test(text)
+}
+
 /** Calls one `quarterdeck` MCP tool and returns its JSON answer. */
 async function call<T>($: Engine, name: string, input: Record<string, unknown> = {}): Promise<T> {
   const order = serverPrefix ? [serverPrefix, ...SERVER_PREFIXES.filter((p) => p !== serverPrefix)] : [...SERVER_PREFIXES]
@@ -91,7 +99,7 @@ async function call<T>($: Engine, name: string, input: Record<string, unknown> =
   try {
     return JSON.parse(text) as T
   } catch {
-    throw new Error(/persisted-output|Output too large/.test(text)
+    throw new Error(isSpilled(text)
       ? `Quarterdeck's answer to ${name} was too large to read (Claude Code saved it to a file). Update Quarterdeck, or tell its developer.`
       : `Unexpected answer from quarterdeck: ${text.slice(0, 200)}`)
   }
