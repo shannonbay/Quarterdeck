@@ -663,7 +663,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     }
     return (
       <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
-        <Input key={`prompt-input-${g.id}`} label="What should this run do or look at? (for this run only, not kept as memory)" submitLabel="Run" autoFocus onSubmit={send} />
+        <Input key={`prompt-input-${g.id}`} label="Prompt" submitLabel="Run" autoFocus onSubmit={send} />
         {action($, e, { key: `prompt-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
       </Box>
     )
