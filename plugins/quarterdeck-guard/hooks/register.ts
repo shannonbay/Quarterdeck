@@ -47,6 +47,7 @@ export function serverTool(tool: string): string | null {
 const HUMAN_ONLY = new Set([
   'goals_tick',
   'decide_item',
+  'request_run',
   'cancel_run',
   'set_goal_status',
   'clear_run_hold',

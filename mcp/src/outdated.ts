@@ -30,6 +30,7 @@ export const REFUSED_WHEN_OUTDATED = new Set([
   'trust_memory',
   'cancel_run',
   'run_goal',
+  'request_run',
   'watch_report',
 ])
 

@@ -166,6 +166,11 @@ export const RunGoalSchema = z.object({
 
 // ── Goal runner (called by the quarterdeck-goals plugin, not by agents) ─────────
 
+export const RequestRunSchema = z.object({
+  goal_id: z.string(),
+  prompt: z.string().min(1).describe('What this one run should do, as the person confirmed it'),
+})
+
 export const GoalsTickSchema = z.object({
   holder: z.string().min(1).describe('The Claude Code session asking (its session id)'),
   tracked_run_ids: z.array(z.string()).default([]).describe('Runs this holder is tracking itself; never expired by the pass'),

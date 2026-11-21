@@ -37,6 +37,7 @@ const GUARD_RECHECK_MS = 2_000
 export const HUMAN_ONLY_TOOLS = serverToolNames(
   'goals_tick',
   'decide_item',
+  'request_run',
   'cancel_run',
   'set_goal_status',
   'clear_run_hold',

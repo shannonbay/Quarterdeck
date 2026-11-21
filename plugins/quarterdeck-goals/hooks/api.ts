@@ -154,8 +154,10 @@ export async function reject($: Engine, goalId: string, itemId: string, feedback
   await call($, 'decide_item', { goal_id: goalId, item_id: itemId, decision: 'reject', feedback })
 }
 
-export async function runNow($: Engine, goalId: string): Promise<void> {
-  await call($, 'run_goal', { goal_id: goalId })
+export async function runNow($: Engine, goalId: string, prompt?: string): Promise<void> {
+  // A prompt the person typed or confirmed goes through request_run, which stores it trusted
+  if (prompt) await call($, 'request_run', { goal_id: goalId, prompt })
+  else await call($, 'run_goal', { goal_id: goalId })
 }
 
 /** Marks the goal's open run cancelled; answers the subagent doing it, to stop. */

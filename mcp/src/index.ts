@@ -26,6 +26,7 @@ import {
   ForgetSchema,
   EndRunSchema,
   RunGoalSchema,
+  RequestRunSchema,
   GoalsTickSchema,
   GoalsOverviewSchema,
   DecideItemSchema, GetItemSchema,
@@ -63,7 +64,7 @@ import { provision_tasks } from './tools/provision_tasks.js'
 import { next_task } from './tools/next_task.js'
 import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
-import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal } from './tools/goals.js'
+import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal, request_run } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
@@ -269,6 +270,7 @@ const TOOLS = [
   ...([
     ['goals_tick', 'Runs one goal scheduler pass and claims the runs that are due.', GoalsTickSchema, goals_tick],
     ['decide_item', "Records the human's approval or rejection of a goal item.", DecideItemSchema, decide_item],
+    ['request_run', 'Queues a run of a goal with a prompt the human typed or confirmed (Run with a prompt); stored as trusted.', RequestRunSchema, request_run],
     ['get_item', "One goal item's full title, notes and action summary, which the overview clips.", GetItemSchema, get_item],
     ['cancel_run', "Cancels a goal's run in progress.", CancelRunSchema, cancel_run],
     ['set_goal_status', 'Pauses or resumes a goal.', SetGoalStatusSchema, set_goal_status],
