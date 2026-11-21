@@ -4,7 +4,7 @@ import { phoneText } from '../hooks/alerts'
 
 import {
   ago, choiceFromAnswer, choiceOptions, clip, diffAlerts, EMPTY, findGoal, nextRunText, parseSchedule, parseSuggestion, scheduleLabel, spark,
-  statusText, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
+  statusText, summarize, spawnModel, suggestByKeywords, offersWatch, watchSetupPrompt, toCard, cleanTitle, fallbackTitle, splitGoalArgs, runCost, planModeBlocked, soundsEventDriven, isQuiet, needsAttention, allowRules, allowRulesPrompt, describe, describeGoalChanges, modelName, newGoalModelText, readModelAnswer } from '../hooks/model'
 import {
   TEMPLATES, CI_FIX, ISSUE_FIX, ISSUE_FIX_OTHERS_WATCH, PR_REVIEW, PR_REVIEW_WATCH, PR_REVIEW_OTHERS_WATCH,
   ISSUE_FIX_EVERY, ISSUE_FIX_WAIT, ISSUE_FIX_WORK, RESOLVE_THREAD_TOOL, PR_INLINE_TOOL, ISSUE_FIX_REFINED_INTAKE, ISSUE_FIX_REFINED_WATCH, ISSUE_FIX_CI_WATCH, ISSUE_FIX_CONFLICT_WATCH, ISSUE_FIX_COMMENT_WATCH,
@@ -46,6 +46,18 @@ test('statusText counts what needs you and what is running', async () => {
   const asking = card({ id: 'g3', name: 'Tidy', open_run: { id: 'r3', status: 'running' }, activity: { state: 'running', text: 'Waiting for your permission: Bash: rm a.txt', at: null, waiting: { tool: 'Bash: rm a.txt', since: '2026-11-07T08:00:00Z' } } })
   expect(statusText({ ...s, goals: [...s.goals, asking] })).toBe('Quarterdeck: 2 need you · Tidy waiting for your permission · Invoices running')
   expect(statusText({ ...s, goals: [] })).toBeUndefined()
+})
+
+test('statusText says the step of the one goal running, with ⚠ when set after outside content (#146)', async () => {
+  const stepping = (untrusted?: string) => card({ id: 'g2', name: 'Invoices', open_run: { id: 'r', status: 'running', step: 'Filing March invoices' },
+    activity: { state: 'running', text: 'Filing March invoices', at: null, detail: 'Using Bash', ...(untrusted && { untrusted }) } })
+  const s = { ...EMPTY, reachable: true, goals: [stepping()] }
+  expect(statusText(s)).toBe('Quarterdeck: Invoices: Filing March invoices')
+  expect(statusText({ ...s, goals: [stepping('email')] })).toBe('Quarterdeck: Invoices: ⚠ Filing March invoices')
+  // Two running: names only, as the status line is one line
+  const other = card({ id: 'g3', name: 'Inbox', open_run: { id: 'r3', status: 'running' } })
+  expect(statusText({ ...s, goals: [stepping(), other] })).toBe('Quarterdeck: Invoices, Inbox running')
+  expect(summarize([stepping('email')], Date.parse('2026-11-07T08:00:00Z'))).toContain('Now: Filing March invoices (Using Bash) [set after reading email]')
 })
 
 test('clip keeps short text and ends cut text with …', async () => {

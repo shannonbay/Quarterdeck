@@ -129,6 +129,10 @@ export function GoalView({ goalId }: { goalId: string }) {
                 : data.schedule ? `${data.schedule.kind === 'interval' ? `Every ${data.schedule.minutes} min${data.schedule.active_hours ? ` (${data.schedule.active_hours})` : ''}` : `Cron ${data.schedule.expr}`} · next run ${goal.status === 'active' ? when(goal.next_run_at) : '— paused'}`
                 : 'Runs only when you click Run now'}
             </p>
+            {open_run?.status === 'running' && open_run.step && (
+              <p className="text-xs text-gray-600 mt-1">Now: {open_run.step}
+                {open_run.step_untrusted && <span className="text-amber-700"> (set after reading {open_run.step_untrusted})</span>}</p>
+            )}
             {data.hold && (
               <p className="text-xs text-yellow-700 mt-1">
                 Goal runs are on hold until {new Date(data.hold.until).toLocaleString()}: the usage limit is reached. Due runs start after that. Switched accounts? Clear the hold.{' '}

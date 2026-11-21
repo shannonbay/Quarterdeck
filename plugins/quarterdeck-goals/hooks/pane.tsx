@@ -504,6 +504,26 @@ function activityLine($: Engine, e: E, view: View, g: GoalCard) {
       </Box>
     )
   }
+  if (state === 'running' && g.openRun?.step) {
+    // The run's step leads (#146), what it is doing within it dimmed after; a step set after
+    // reading outside content gets the same mark as an untrusted status
+    const age = at ? ` · ${ago(at, view.now)}` : ''
+    const { detail, untrusted } = g.activity
+    const room = Math.max(view.columns - 2 - age.length - (untrusted ? 2 : 0), 10)
+    const step = clip(`Now: ${text}`, room)
+    const rest = detail ? clip(` · ${detail}`, Math.max(room - step.length, 0)) : ''
+    return (
+      <Box key={`activity-${g.id}`} flexDirection="column">
+        <Text>
+          {untrusted ? <Text color="yellow">⚠ </Text> : <Text color="cyan">● </Text>}
+          <Text color="cyan">{step}</Text>
+          {rest ? <Text dimColor>{rest}</Text> : null}
+          <Text dimColor>{age}</Text>
+        </Text>
+        {untrusted ? <Text dimColor>  set after reading {untrusted}</Text> : null}
+      </Box>
+    )
+  }
   if (state === 'running') {
     const age = at ? ` · ${ago(at, view.now)}` : ''
     return (
