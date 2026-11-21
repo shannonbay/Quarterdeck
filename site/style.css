@@ -80,7 +80,7 @@ section > p, section > ol, section > ul:not(.chips), section > pre { max-width: 
 .hero {
   border-top: 0;
   display: grid;
-  grid-template-columns: 1fr 1.1fr;
+  grid-template-columns: 1.1fr 1fr;
   gap: 48px;
   align-items: center;
   padding-top: 40px;
@@ -101,6 +101,8 @@ section > p, section > ol, section > ul:not(.chips), section > pre { max-width: 
 .button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
 .button.ghost:hover { border-color: var(--bronze); color: #fff1d6; }
 
+/* The prompt is read first: left column on wide screens */
+.hero-prompt { order: -1; }
 .hero-prompt blockquote {
   position: relative;
   margin: 0;
