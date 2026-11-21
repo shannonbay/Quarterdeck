@@ -1,0 +1,34 @@
+{
+  "manifest_version": "0.3",
+  "name": "quarterdeck",
+  "display_name": "Quarterdeck",
+  "version": "0.0.0",
+  "description": "Quarterdeck's MCP server: persistent goals, work items, memory and to-do lists for Claude. Goals run in Claude Code with the Quarterdeck plugin.",
+  "long_description": "This is Quarterdeck's MCP server on its own: the tools over your goals, their items, memory and to-do lists (the tasks.db in your home folder). Scheduled goal runs, the guard that keeps each run within its goal, and the Goals pane come from the Claude Code plugins, so goals run in Claude Code with the plugin. Install it with:\n\n    claude plugin marketplace add shannonbay/Quarterdeck#release\n    claude plugin install quarterdeck-goals@quarterdeck\n\nThe server needs Node 22.13 or later (node:sqlite).",
+  "author": {
+    "name": "Shannon Bay"
+  },
+  "homepage": "https://github.com/shannonbay/Quarterdeck",
+  "documentation": "https://github.com/shannonbay/Quarterdeck/blob/main/plugins/quarterdeck-goals/README.md",
+  "support": "https://github.com/shannonbay/Quarterdeck/issues",
+  "privacy_policies": ["https://github.com/shannonbay/Quarterdeck/blob/main/PRIVACY.md"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shannonbay/Quarterdeck"
+  },
+  "license": "Apache-2.0",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "server/quarterdeck-mcp.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/quarterdeck-mcp.mjs"]
+    }
+  },
+  "compatibility": {
+    "runtimes": {
+      "node": ">=22.13.0"
+    }
+  }
+}
