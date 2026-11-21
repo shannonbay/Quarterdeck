@@ -29,11 +29,12 @@ function curationRun(): string {
 }
 
 describe('schema', () => {
-  it('is version 21, with goals.curated_at and goals.deleted_at', () => {
-    expect(SCHEMA_VERSION).toBe(23)
+  it('is version 24, with goals.curated_at, goals.deleted_at and goals.auto_after_outside', () => {
+    expect(SCHEMA_VERSION).toBe(24)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
     expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual([])
   })
 
   it('rebuilds goal_tool_calls from version 23 so decision takes refused, keeping rows, index and trigger', () => {

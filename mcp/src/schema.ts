@@ -363,6 +363,7 @@ export const UpdateGoalSchema = z.object({
     .describe('Replacements in the current instructions, applied in order: each old must appear exactly once. Not with instructions'),
   autonomy: z.record(z.string(), Mode.nullable()).optional().describe('Category → off | propose | auto; null removes the category'),
   tool_map: z.record(z.string(), z.string().nullable()).optional().describe('Tool name pattern → category; null removes the rule'),
+  auto_after_outside: z.record(z.string(), z.boolean()).optional().describe('Category → true to keep it auto even after a run reads outside content (only while its mode is auto), false to go back to propose. Warn the person first when its tool rules push code, create or merge pull requests, or are broad'),
   merge_categories: z.record(z.string(), z.string().trim().min(1)).optional().describe('Old action category → the category to merge it into: past items, autonomy and tool rules take the new name, so earlier approvals count toward the Switch to auto suggestion'),
   add_memory: z.array(z.object({ kind: z.enum(['fact', 'rule', 'preference']), text: z.string().trim().min(1), pinned: z.boolean().optional() })).optional(),
   forget_memory: z.array(z.string()).optional().describe('Memory ids to forget'),

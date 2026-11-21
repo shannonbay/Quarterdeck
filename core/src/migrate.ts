@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 23
+export const SCHEMA_VERSION = 24
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -351,6 +351,8 @@ export function runMigrations(db: Database): void {
     ['resumed_at', 'TEXT'],
     // When its memory was last curated (curation.ts; schema version 13)
     ['curated_at', 'TEXT'],
+    // Auto categories that stay auto after a run reads outside content (JSON array; schema version 24)
+    ['auto_after_outside', "TEXT NOT NULL DEFAULT '[]'"],
   ]
   for (const [col, def] of addedGoalColumns) {
     try { db.exec(`ALTER TABLE goals ADD COLUMN ${col} ${def}`) } catch { /* already exists */ }

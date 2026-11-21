@@ -23,6 +23,7 @@ function deserializeGoal(r: Row): Goal {
     autonomy: JSON.parse((r.autonomy as string) || '{}'),
     limits: { ...DEFAULT_GOAL_LIMITS, ...JSON.parse((r.limits as string) || '{}') },
     tool_map: JSON.parse((r.tool_map as string) || '{}'),
+    auto_after_outside: JSON.parse((r.auto_after_outside as string | undefined) || '[]'),
     health_command: (r.health_command as string | null | undefined) ?? null,
     health_every_minutes: (r.health_every_minutes as number | undefined) ?? 60,
     health_triggers_run: r.health_triggers_run === undefined ? true : Boolean(r.health_triggers_run),
@@ -124,6 +125,7 @@ export function updateGoal(
   const serialized: Row = { ...fields }
   if (fields.autonomy) serialized.autonomy = JSON.stringify(fields.autonomy)
   if (fields.tool_map) serialized.tool_map = JSON.stringify(fields.tool_map)
+  if (fields.auto_after_outside) serialized.auto_after_outside = JSON.stringify(fields.auto_after_outside)
   if ('status_check' in fields) serialized.status_check = fields.status_check ? JSON.stringify(fields.status_check) : null
   if ('health_triggers_run' in fields) serialized.health_triggers_run = fields.health_triggers_run ? 1 : 0
   if ('one_off' in fields) serialized.one_off = fields.one_off ? 1 : 0

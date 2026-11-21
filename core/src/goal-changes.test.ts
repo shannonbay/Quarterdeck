@@ -3,7 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, getGoal, getPlan, listMemory, insertMemory, queueRun, getRun, claimRun, schedulerPass, buildOverview,
   applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, clearRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
-  setRunStep, STEP_MAX, endRun, failRun, markRunUntrusted, updateRun,
+  setRunStep, STEP_MAX, endRun, failRun, markRunUntrusted, updateRun, isRiskyToolRule, autoAfterOutsideWarning,
 } from './index.js'
 
 let db: Database
@@ -315,5 +315,48 @@ describe("a run's step (#146)", () => {
       end(run.run_id)
       expect(getRun(db, run.run_id)).toMatchObject({ step: null, step_at: null, step_untrusted: null })
     }
+  })
+})
+
+describe('auto after outside content', () => {
+  it('starts empty, and the person can add and remove categories', () => {
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual([])
+    expect(applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': true } })).toEqual(['email.archive: auto, even after reading outside text'])
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual(['email.archive'])
+    expect(applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': true } })).toEqual([])
+    expect(applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': false } })).toEqual(['email.archive: back to propose after reading outside text'])
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual([])
+  })
+
+  it('says it counts only while the category is auto', () => {
+    const [line] = applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.send': true } })
+    expect(line).toContain('counts only while it is auto; it is propose')
+  })
+
+  it('warns, naming the rule, when the category pushes code, opens or merges PRs or is broad, and still saves', () => {
+    updateGoal(db, 'g1', { autonomy: { 'github.write': 'auto', 'github.read': 'auto' }, tool_map: { 'Bash(git -C * push*)': 'github.write', 'Bash(gh pr create*)': 'github.write', 'Bash(gh issue view*)': 'github.read' } })
+    const [line] = applyGoalChanges(db, 'g1', { auto_after_outside: { 'github.write': true } })
+    expect(line).toContain('Warning:')
+    expect(line).toContain('Bash(git -C * push*), Bash(gh pr create*)')
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual(['github.write'])
+    expect(applyGoalChanges(db, 'g1', { auto_after_outside: { 'github.read': true } })[0]).not.toContain('Warning')
+  })
+
+  it('treats whole tools and whole MCP servers as broad', () => {
+    for (const p of ['Bash', 'Edit', 'Write', 'mcp__gmail__*', 'mcp__claude_ai_Gmail__*', 'Bash(gh pr merge*)']) expect(isRiskyToolRule(p)).toBe(true)
+    for (const p of ['Bash(gh issue view*)', 'mcp__gmail__send_message', 'Read']) expect(isRiskyToolRule(p)).toBe(false)
+    expect(autoAfterOutsideWarning({ Bash: 'x' }, 'y')).toBeNull()
+  })
+
+  it('follows a merged category', () => {
+    applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': true } })
+    applyGoalChanges(db, 'g1', { merge_categories: { 'email.archive': 'email.tidy' } })
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual(['email.tidy'])
+  })
+
+  it('refuses a non-boolean or empty category, changing nothing', () => {
+    expect(() => applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': 'yes' as unknown as boolean } })).toThrow(/true or false/)
+    expect(() => applyGoalChanges(db, 'g1', { auto_after_outside: { ' ': true } })).toThrow(/category name/)
+    expect(getGoal(db, 'g1')!.auto_after_outside).toEqual([])
   })
 })
