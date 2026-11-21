@@ -123,6 +123,27 @@ describe('goals API', () => {
     expect((await POSTRun(req('POST'), p(id))).status).toBe(409)
   })
 
+  it('Run with a prompt queues a run whose brief carries the prompt, trusted; a hold is refused (#143)', async () => {
+    const { body: { id } } = await createGoal()
+    expect((await POSTRun(req('POST', { prompt: '  ' }), p(id))).status).toBe(400)
+    const res = await POSTRun(req('POST', { prompt: 'Look at issue #12 first' }), p(id))
+    expect(res.status).toBe(202)
+    const run = getOpenRun(id)!
+    expect(run.status).toBe('queued')
+    const brief = core.buildBrief(getDb(), id, run.id)
+    expect(brief.run!.request).toEqual({ text: 'Look at issue #12 first' })
+    expect(brief.run!.untrusted).toBeNull()
+    expect(core.listMemory(getDb(), id).some((m) => m.text.includes('issue #12'))).toBe(false)
+
+    core.updateRun(getDb(), run.id, { status: 'completed' })
+    core.setRunHold(getDb(), { until: new Date(Date.now() + 3_600_000).toISOString(), reason: 'usage limit' })
+    const held = await POSTRun(req('POST', { prompt: 'Again' }), p(id))
+    expect(held.status).toBe(409)
+    expect((await held.json()).error).toMatch(/on hold/)
+    expect(getOpenRun(id)).toBeUndefined()
+    core.clearRunHold(getDb())
+  })
+
   it('memory can be added, edited and deleted by the human', async () => {
     const { body: { id } } = await createGoal()
     const { memory } = await (await POSTMemory(req('POST', { kind: 'rule', text: 'Never archive the bank.' }), p(id))).json()

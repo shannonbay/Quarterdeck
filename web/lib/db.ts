@@ -67,6 +67,7 @@ export const updateRun = (runId: string, fields: Parameters<typeof core.updateRu
 export const listRuns = (planId: string, limit?: number, opts?: { includeSkipped?: boolean }) => core.listRuns(getDb(), planId, limit, opts)
 export const getOpenRun = (planId: string) => core.getOpenRun(getDb(), planId)
 export const queueRun = (planId: string, trigger: core.TriggerKind = 'manual') => core.queueRun(getDb(), planId, trigger)
+export const queueRunWithRequest = (planId: string, text: string) => core.queueRunWithRequest(getDb(), planId, text)
 export const startRun = (runId: string, sessionId: string | null) => core.startRun(getDb(), runId, sessionId)
 export const failRun = (runId: string, status: 'failed' | 'timed_out', reason: string) => core.failRun(getDb(), runId, status, reason)
 export const decideTick = (planId: string, now?: Date) => core.decideTick(getDb(), planId, now)

@@ -1,16 +1,27 @@
 import { NextRequest } from 'next/server'
-import { getGoal, queueRun, getOpenRun, failRun, GoalError } from '@/lib/db'
+import { getGoal, queueRun, queueRunWithRequest, getOpenRun, failRun, GoalError } from '@/lib/db'
 import { ok, err, notFound, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
 type Params = { params: Promise<{ id: string }> }
 
-/** POST — "Run now": queue a run; the quarterdeck-goals plugin starts it at its next tick (within 30 s). */
-export async function POST(_req: NextRequest, { params }: Params) {
+/**
+ * POST — "Run now": queue a run; the quarterdeck-goals plugin starts it at its next tick (within 30 s).
+ * With { prompt } ("Run with a prompt…", #143) the run's brief carries the typed text as run.request,
+ * trusted since the person typed it here; the daily limit or a usage hold comes back as an error.
+ */
+export async function POST(req: NextRequest, { params }: Params) {
   try {
     const stale = refuseIfOutdated()
     if (stale) return stale
     const { id } = await params
     if (!getGoal(id)) return notFound('Goal')
+    const body = await req.json().catch(() => ({})) as { prompt?: unknown }
+    if (body.prompt !== undefined) {
+      if (typeof body.prompt !== 'string' || !body.prompt.trim()) return err('The prompt is empty.', 400)
+      const queued = queueRunWithRequest(id, body.prompt)
+      if ('reason' in queued) return err(queued.reason, 409)
+      return ok({ run: queued.run }, 202)
+    }
     const run = queueRun(id)
     return ok({ run }, 202)
   } catch (e) {
