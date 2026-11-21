@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { CI_FIX, FORGE_TEMPLATES, forgeAnswer, forgeDecision, ciFix, CLARIFY_LABEL, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
+import { CI_FIX, FORGE_TEMPLATES, forgeAnswer, forgeDecision, ciFix, CLARIFY_LABEL, cleanReview, GITHUB, PR_REREVIEW, prRereview, ISSUE_REFINE_WORK, issueRefineWork, NEEDS_REFINEMENT_LABEL, ISSUE_FIX_REFINED_INTAKE,ISSUE_FIX_WORK, REFINED_LABEL, issueFixIntake, issueFixRefinedIntake, issueFixWork, ISSUE_TRIAGE, issueTriage, PR_REVIEW, prReview, REFINE_INTAKE, REFINE_PICKED_INTAKE, refineIntake, refinePickedIntake, STATUS, TEMPLATES, clarifyReplyWatch, githubRules, issueWatch, needsRefinementWatch, prCommentWatch, pullWatch, refineRules, refineWatch, refinedWatch, reviewRules, SCHEDULE_COMMAND, SCHEDULE_WITH_FLAGS, scheduleCommand, scheduleWithFlags, triageRules, triageWatch, type Forge } from '../hooks/templates'
 
 test('the repo templates take their watch commands from the GitHub forge, unchanged (#44)', async () => {
   expect(GITHUB.watches.pulls(true)).toBe(pullWatch(true))
@@ -17,6 +17,18 @@ test('the repo templates take their watch commands from the GitHub forge, unchan
   expect(commands).toContain(GITHUB.watches.fixConflicts())
   expect(GITHUB.watches.fixFailures()).toContain('gh run list --event pull_request --status failure')
   expect(GITHUB.watches.fixConflicts()).toContain('CONFLICTING')
+})
+
+test("the issue fixer's comment watch leaves out the PR reviewer's clean reviews, by the wording the reviewer is told to use", async () => {
+  expect(cleanReview('<sha>')).toBe('Reviewed at <sha>: no problems found')
+  expect(PR_REVIEW).toContain(`"${cleanReview('<sha>')}"`)
+  expect(PR_REREVIEW).toContain(`"${cleanReview('<sha>')}"`)
+  const watch = prCommentWatch()
+  expect(watch).toContain('| test(\\"Reviewed at [0-9a-f]+: no problems found\\") | not)')
+  // cmd.exe reads the jq string as unquoted, so a ^ in it would be stripped
+  expect(watch).not.toContain('^')
+  expect(new RegExp(cleanReview('[0-9a-f]+')).test('Reviewed at 13c101a: no problems found. Refs #143')).toBe(true)
+  expect(new RegExp(cleanReview('[0-9a-f]+')).test('Reviewed at ec1456c: this does not build.')).toBe(false)
 })
 
 test("the issue fixer's instructions read issues and pull requests through its forge (#44)", async () => {
