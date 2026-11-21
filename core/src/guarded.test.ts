@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
-  openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE,
+  openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
   checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck,
 } from './index.js'
 
@@ -64,6 +64,21 @@ describe('guardRun with auto_after_outside (#159)', () => {
     recordGuardedCheck(db, { id: run.id, plan_id: 'g1' }, 'gh.review', cmd, [{ path: file, contents: 'Looks good.' }])
     expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, dataPaths)).toMatchObject({ decision: 'allow' })
     expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, dataPaths)).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/own data/) })
+  })
+
+  it('addItem: a listed category records auto once per checked call, otherwise proposes', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const action = { category: 'gh.review', summary: 'Reviewed PR 1' }
+    expect(addItem(db, 'g1', run.id, { goal: 'Review 1', external_ref: 'a', action }).mode).toBe('propose')
+    const path = join(dir, 'body.md')
+    const cmd = `gh pr review 1 --comment --body-file ${path}`
+    stage(run.id, 'gh.review', cmd, 'Looks good.')
+    guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, paths)
+    const done = addItem(db, 'g1', run.id, { goal: 'Review 1', external_ref: 'b', action })
+    expect(done.mode).toBe('auto')
+    expect(done.task).toMatchObject({ status: 'completed', state: { after_outside: AFTER_OUTSIDE_ITEM_NOTE } })
+    expect(addItem(db, 'g1', run.id, { goal: 'Review 1', external_ref: 'c', action }).mode).toBe('propose')
   })
 })
 

@@ -596,6 +596,7 @@ export function runMigrations(db: Database): void {
       command     TEXT NOT NULL,
       file_hashes TEXT NOT NULL DEFAULT '{}',
       used_at     TEXT,
+      recorded_at TEXT,
       created_at  TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);

@@ -122,3 +122,14 @@ export function consumeGuardedCheck(
 export function hasUnusedGuardedCheck(db: Database, runId: string, command: string): boolean {
   return db.prepare('SELECT 1 FROM guarded_checks WHERE run_id = ? AND command = ? AND used_at IS NULL LIMIT 1').get(runId, command) !== undefined
 }
+
+/**
+ * Ties a guarded check the run used for this category to the item recording
+ * it: true once per used check, so one checked call records one auto item.
+ */
+export function claimUsedGuardedCheck(db: Database, runId: string, category: string): boolean {
+  const row = db.prepare(`SELECT id FROM guarded_checks WHERE run_id = ? AND category = ? AND used_at IS NOT NULL AND recorded_at IS NULL ORDER BY used_at LIMIT 1`).get(runId, category) as { id: string } | undefined
+  if (!row) return false
+  db.prepare('UPDATE guarded_checks SET recorded_at = ? WHERE id = ?').run(new Date().toISOString(), row.id)
+  return true
+}
