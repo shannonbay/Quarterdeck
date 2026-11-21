@@ -29,6 +29,8 @@ interface GoalData {
   memory: GoalMemory[]
   /** MEMORY_BRIEF_CHARS: how much memory a run's brief carries. */
   memory_brief_chars: number
+  /** Category -> why keeping it auto after outside text is risky (#159), for categories whose tool rules push, open PRs or are broad. */
+  auto_after_outside_warnings?: Record<string, string>
   approval_stats: Record<string, { approved: number; rejected: number }>
   schedule: Schedule | null
   webhook_enabled: boolean
@@ -415,6 +417,7 @@ function Settings({ data, busy, patch, call }: { data: GoalData; busy: string | 
     if (r.ok) setSecret((await r.json()).secret)
   }
   const [autonomy, setAutonomy] = useState<Record<string, (typeof MODES)[number]>>(goal.autonomy)
+  const [afterOutside, setAfterOutside] = useState<string[]>(goal.auto_after_outside ?? [])
   const [newCategory, setNewCategory] = useState('')
   const [limits, setLimits] = useState(goal.limits)
   const [retention, setRetention] = useState(goal.item_retention_days)
@@ -520,12 +523,27 @@ function Settings({ data, busy, patch, call }: { data: GoalData; busy: string | 
                     <td className="py-1.5 font-mono text-xs">{c}</td>
                     <td className="py-1.5 text-xs text-gray-400">{s ? `${s.approved} approved · ${s.rejected} rejected` : ''}</td>
                     <td className="py-1.5 text-right">
+                      {autonomy[c] === 'auto' && (
+                        <label className="mr-3 text-xs text-gray-500 inline-flex items-center gap-1"
+                          title="Keep this category auto after a run reads outside text (an issue, a PR, an email). Each call is checked by guarded_run first: the checks lower the risk of disclosure but don't remove it.">
+                          <input type="checkbox" checked={afterOutside.includes(c)} onChange={(e) => {
+                            if (!e.target.checked) return setAfterOutside(afterOutside.filter((x) => x !== c))
+                            const warning = data.auto_after_outside_warnings?.[c]
+                            if (warning && !confirm(`Warning: ${warning}\n\nKeep ${c} auto after reading outside text anyway?`)) return
+                            setAfterOutside([...afterOutside, c])
+                          }} />
+                          even after reading outside text
+                        </label>
+                      )}
                       <div className="inline-flex rounded-md border border-gray-200 overflow-hidden">
                         {MODES.map((m) => (
                           <button key={m} type="button" onClick={() => setAutonomy({ ...autonomy, [c]: m })}
                             className={`px-2 py-1 text-xs ${(autonomy[c] ?? 'propose') === m ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>{m}</button>
                         ))}
                       </div>
+                      {afterOutside.includes(c) && autonomy[c] === 'auto' && (
+                        <p className="text-[11px] text-amber-700 mt-0.5">{c}: auto, even after reading outside text</p>
+                      )}
                     </td>
                   </tr>
                 )
@@ -561,7 +579,7 @@ function Settings({ data, busy, patch, call }: { data: GoalData; busy: string | 
         <div className="flex items-center gap-3">
           <button disabled={busy !== null}
             onClick={() => patch({
-              objective, instructions, autonomy, limits, item_retention_days: retention,
+              objective, instructions, autonomy, limits, item_retention_days: retention, auto_after_outside: afterOutside,
               schedule: scheduleKind === 'manual' ? null
                 : scheduleKind === 'interval' ? { kind: 'interval', minutes: Number(minutes) || 30, active_hours: hours.trim() || null }
                 : { kind: 'cron', expr: cron },

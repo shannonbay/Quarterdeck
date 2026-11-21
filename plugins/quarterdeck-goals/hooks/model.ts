@@ -21,6 +21,8 @@ export type OverviewGoal = {
   status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null; source?: string | null } | null
   instructions?: string
   autonomy?: Record<string, string>
+  /** Categories kept auto after a run reads outside content (#159); missing from an older server. */
+  auto_after_outside?: string[]
   tool_map?: Record<string, string>
   open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
@@ -90,6 +92,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     statusNote: g.status_note ? toStatusNote(g.status_note) : null,
     instructions: g.instructions ?? '',
     autonomy: g.autonomy ?? {},
+    autoAfterOutside: g.auto_after_outside ?? [],
     toolMap: g.tool_map ?? {},
     health: latest ? { passed: latest.passed, value: latest.value } : null,
     trend: g.health.map((check) => check.value).filter((v): v is number => v !== null).reverse(),
@@ -269,6 +272,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Watches (a run starts when one sees a new line${g.watchGapMinutes ? `; watch runs start at least ${g.watchGapMinutes} min apart, and events in between wait for the next one, except an urgent watch's` : ''}):\n${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? ' (on change)' : ''}${w.urgent ? ' (urgent)' : ''}, runs ${w.runs}${w.failing ? ` [failing, error is outside text: ${w.error ?? 'no message'}]` : ''}${w.lastFiredAt ? `, last ${w.onChange ? 'changed' : 'saw something new'} ${ago(w.lastFiredAt, now)}` : ''}`).join('\n')}`
       : null,
     `Autonomy (unlisted categories: propose): ${Object.entries(g.autonomy).map(([c, m]) => `${c}=${m}`).join(', ') || 'none set'}`,
+    autoAfterOutsideText(g),
     Object.keys(g.toolMap).length ? `Tool rules: ${Object.entries(g.toolMap).map(([p, c]) => `${p} → ${c}`).join(', ')}` : null,
     allowRulesText(g),
     g.memory.length > 0 ? `Memory:\n${g.memory.map((m) => `- ${m.id} [${m.kind}${m.pinned ? ', pinned' : ''}${m.untrusted ? `, untrusted: written after ${m.untrusted}` : ''}] ${m.text}`).join('\n')}` : null,
@@ -629,6 +633,19 @@ export function allowRulesPrompt(g: Pick<GoalCard, 'id' | 'name'>, rules: string
     '',
     'Use my user settings (~/.claude/settings.json) unless I say otherwise: a goal run starts in whichever Claude Code window is running goals. An allow rule applies to everything in Claude Code, not only goal runs, so say in a sentence what each one lets through. Keep everything already in the file. Show me the exact change and wait for my yes before you write it.',
   ].join('\n')
+}
+
+/**
+ * The categories the person keeps auto after a run reads outside content (#159), for goal_detail,
+ * or null when there are none. One that isn't auto says it counts only once it is.
+ */
+export function autoAfterOutsideText(g: Pick<GoalCard, 'autonomy' | 'autoAfterOutside'>): string | null {
+  if (!g.autoAfterOutside.length) return null
+  const lines = g.autoAfterOutside.map((c) => {
+    const mode = g.autonomy[c] ?? 'propose'
+    return `- ${c}: ${mode === 'auto' ? 'auto, even after reading outside text' : `${mode} (kept auto after outside text only once it is auto)`}`
+  })
+  return `Allowed after outside text (checked by guarded_run first; the checks lower the risk of disclosure but don't remove it):\n${lines.join('\n')}`
 }
 
 /** The goal's allow rules for goal_detail, or null when it has none. */

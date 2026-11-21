@@ -3,7 +3,7 @@ import { z } from 'zod'
 import {
   getPlan, updatePlan, getGoal, updateGoal, getIntervalTrigger, listRuns, getOpenRun,
   listMemory, getGoalItems, getApprovalStats, MEMORY_BRIEF_CHARS,
-  getSchedule, setSchedule, getRunHold, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions,
+  getSchedule, setSchedule, getRunHold, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions, autoAfterOutsideWarning,
 } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
 import { itemView } from '@/lib/goal-views'
@@ -42,6 +42,9 @@ export async function GET(_req: NextRequest, { params }: Params) {
       health: listHealth(id, 30),
       tool_calls: listToolCalls(id, 20),
       suggestions: getAutonomySuggestions(id),
+      // Shown before the person keeps a category auto after outside text (#159)
+      auto_after_outside_warnings: Object.fromEntries([...new Set(Object.values(goal.tool_map))]
+        .map((c) => [c, autoAfterOutsideWarning(goal.tool_map, c)]).filter(([, w]) => w)),
       hold: getRunHold(),
     })
   } catch (e) {
@@ -55,6 +58,8 @@ const PatchSchema = z.object({
   instructions: z.string().optional(),
   status: z.enum(['active', 'paused', 'retired']).optional(),
   autonomy: z.record(z.string(), z.enum(['off', 'propose', 'auto'])).optional(),
+  /** Categories kept auto after a run reads outside content (#159); the page warns before adding a risky one. */
+  auto_after_outside: z.array(z.string().trim().min(1)).optional(),
   limits: z.object({
     max_run_minutes: z.number().int().min(1).max(120),
     max_items_per_run: z.number().int().min(1).max(500),
