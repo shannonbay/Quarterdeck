@@ -94,6 +94,12 @@ export const RememberSchema = z.object({
   source_ref: z.string().optional().describe('Item or run this came from'),
 })
 
+export const RunStepSchema = z.object({
+  goal_id: z.string().describe('ID of the goal'),
+  run_id: z.string().describe('Your run (the one in your run request)'),
+  text: z.string().describe('The part of the job you are starting, in a few words a person can follow, e.g. "Reviewing PR #139: running web tests" (one line, at most 60 characters)'),
+})
+
 export const ForgetSchema = z.object({
   memory_id: z.string().describe('ID of a memory you (an agent) created'),
 })

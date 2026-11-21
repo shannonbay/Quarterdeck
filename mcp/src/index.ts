@@ -20,7 +20,7 @@ import {
   ListGoalsSchema,
   GetGoalBriefSchema,
   AddItemSchema,
-  RememberSchema,
+  RememberSchema, RunStepSchema,
   RecallSchema,
   ProposeCurationSchema, ProposeWatchSchema,
   ForgetSchema,
@@ -64,7 +64,7 @@ import { provision_tasks } from './tools/provision_tasks.js'
 import { next_task } from './tools/next_task.js'
 import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
-import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal, request_run } from './tools/goals.js'
+import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal, request_run, run_step } from './tools/goals.js'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
@@ -187,6 +187,12 @@ const TOOLS = [
     description: "Save a fact, rule or preference to the goal's memory so future runs know it: only what a later run needs and can find nowhere else, never a log of what this run checked or skipped (the end_run summary keeps that). Keep each one short and general, and forget the entry it replaces.",
     inputSchema: zodToJsonSchema(RememberSchema),
     handler: remember,
+  },
+  {
+    name: 'run_step',
+    description: 'Say which part of the job your run is on, in a few words a person can follow ("Reviewing PR #139: running web tests"): set it as you start each distinct part (a new issue, PR or email, or the next stage of one), not for every call. One line, at most 60 characters. Shown while your run goes on; end_run clears it.',
+    inputSchema: zodToJsonSchema(RunStepSchema),
+    handler: run_step,
   },
   {
     name: 'propose_watch',

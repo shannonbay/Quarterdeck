@@ -300,6 +300,29 @@ export function reportRunEnd(
  */
 export type RunProgress = { event: 'tool' | 'waiting' | 'settled'; tool: string }
 
+/** The longest step a run may set (run_step); longer is refused, so the run shortens it rather than having it cut. */
+export const STEP_MAX = 60
+
+/**
+ * Sets the part of the job a running run is on, in its own words (#146). Only a
+ * running run; one line of 1 to STEP_MAX characters. The run's untrusted source
+ * goes with it, so the step is marked like an untrusted status. The same text
+ * again changes nothing (`changed: false`), so the plan's revision moves once per real change.
+ */
+export function setRunStep(db: Database, runId: string, text: string, now: Date = new Date()): { changed: boolean; step: string; untrusted: string | null } {
+  const run = getRun(db, runId)
+  if (!run) throw new Error(`Run ${runId} not found`)
+  if (run.status !== 'running') throw new Error(`Run ${runId} is ${run.status}, not running: only a running run has a step.`)
+  const step = text.trim()
+  if (!step) throw new Error('A step needs a few words saying what the run is on.')
+  if (/[\r\n]/.test(step)) throw new Error('A step is one line: say it without a new line.')
+  if (step.length > STEP_MAX) throw new Error(`A step is at most ${STEP_MAX} characters (this one has ${step.length}): say it in fewer words.`)
+  const untrusted = run.untrusted_source ?? null
+  if (run.step === step && (run.step_untrusted ?? null) === untrusted) return { changed: false, step, untrusted }
+  updateRun(db, runId, { step, step_at: now.toISOString(), step_untrusted: untrusted })
+  return { changed: true, step, untrusted }
+}
+
 export function reportRunProgress(db: Database, runId: string, { event, tool }: RunProgress, now: Date = new Date()): { updated: boolean } {
   const run = getRun(db, runId)
   if (!run || run.status !== 'running') return { updated: false }

@@ -370,6 +370,11 @@ export interface GoalRun {
   request: string | null
   /** 1 when any part of the request came from where the person did not see it (the MCP server's run_goal). */
   request_untrusted: number
+  /** The part of the job the run says it is on (run_step), and when; cleared when the run ends. */
+  step: string | null
+  step_at: string | null
+  /** The run's untrusted source when it set the step, so the step is marked like an untrusted status. */
+  step_untrusted: string | null
 }
 
 export type MemoryKind = 'fact' | 'rule' | 'preference'

@@ -3,6 +3,7 @@ import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, getGoal, getPlan, listMemory, insertMemory, queueRun, getRun, claimRun, schedulerPass, buildOverview,
   applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, clearRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
+  setRunStep, STEP_MAX, endRun, failRun, markRunUntrusted, updateRun,
 } from './index.js'
 
 let db: Database
@@ -255,5 +256,64 @@ describe('merge_categories', () => {
     expect(getGoal(db, 'm1')!.autonomy).toEqual({ 'github.pr': 'auto' })
     expect(getGoal(db, 'm1')!.tool_map).toEqual({ 'mcp__x__push': 'github.pr' })
     expect(() => applyGoalChanges(db, 'm1', { merge_categories: { a: 'a' } })).toThrow(/two different/)
+  })
+})
+
+describe("a run's step (#146)", () => {
+  const t0 = new Date(2099, 0, 5, 9, 0)
+  const at = (min: number) => new Date(t0.getTime() + min * 60_000)
+  const activity = () => buildOverview(db).goals[0]!.activity
+
+  it('leads with the step, the latest call as detail; a wait for permission still wins', () => {
+    const run = claimRun(db, 'g1', { holder: 'A', now: t0 })!
+    expect(setRunStep(db, run.run_id, '  Reviewing PR #139 ', at(1))).toEqual({ changed: true, step: 'Reviewing PR #139', untrusted: null })
+    expect(activity()).toMatchObject({ state: 'running', text: 'Reviewing PR #139', at: at(1).toISOString() })
+    expect(activity().detail).toBeUndefined()
+    reportRunProgress(db, run.run_id, { event: 'tool', tool: 'Bash: npm test' }, at(2))
+    expect(activity()).toMatchObject({ text: 'Reviewing PR #139', detail: 'Using Bash: npm test', at: at(2).toISOString() })
+    reportRunProgress(db, run.run_id, { event: 'waiting', tool: 'Bash: rm x' }, at(3))
+    expect(activity().text).toBe('Waiting for your permission: Bash: rm x')
+  })
+
+  it('changes nothing for the same text, once for a new one', () => {
+    const run = claimRun(db, 'g1', { holder: 'A', now: t0 })!
+    setRunStep(db, run.run_id, 'Issue #12', at(1))
+    const rev = getPlan(db, 'g1')!.revision
+    expect(setRunStep(db, run.run_id, 'Issue #12', at(2)).changed).toBe(false)
+    expect(getPlan(db, 'g1')!.revision).toBe(rev)
+    expect(getRun(db, run.run_id)!.step_at).toBe(at(1).toISOString())
+    expect(setRunStep(db, run.run_id, 'Issue #13', at(3)).changed).toBe(true)
+    expect(getPlan(db, 'g1')!.revision).toBe(rev + 1)
+  })
+
+  it('refuses a long, multi-line or empty step, and a run that is not running', () => {
+    const run = claimRun(db, 'g1', { holder: 'A', now: t0 })!
+    expect(() => setRunStep(db, run.run_id, 'x'.repeat(STEP_MAX + 1))).toThrow(/at most 60 characters/)
+    expect(setRunStep(db, run.run_id, 'x'.repeat(STEP_MAX)).changed).toBe(true)
+    expect(() => setRunStep(db, run.run_id, 'one\ntwo')).toThrow(/one line/)
+    expect(() => setRunStep(db, run.run_id, '   ')).toThrow(/few words/)
+    endRun(db, run.run_id, 'done')
+    expect(() => setRunStep(db, run.run_id, 'later')).toThrow(/not running/)
+  })
+
+  it('carries the untrusted source it was set after', () => {
+    const run = claimRun(db, 'g1', { holder: 'A', now: t0 })!
+    markRunUntrusted(db, run.run_id, 'Bash: gh issue view')
+    expect(setRunStep(db, run.run_id, 'Issue #12', at(1)).untrusted).toBe('Bash: gh issue view')
+    expect(activity()).toMatchObject({ text: 'Issue #12', untrusted: 'Bash: gh issue view' })
+  })
+
+  it('is cleared however the run ends', () => {
+    for (const end of [
+      (id: string) => endRun(db, id, 'done'),
+      (id: string) => failRun(db, id, 'failed', 'crashed'),
+      (id: string) => failRun(db, id, 'timed_out', 'too long'),
+      (id: string) => updateRun(db, id, { status: 'skipped', skip_reason: 'usage limit reached', ended_at: new Date().toISOString() }),
+    ]) {
+      const run = claimRun(db, 'g1', { holder: 'A' })!
+      setRunStep(db, run.run_id, 'Working')
+      end(run.run_id)
+      expect(getRun(db, run.run_id)).toMatchObject({ step: null, step_at: null, step_untrusted: null })
+    }
   })
 })
