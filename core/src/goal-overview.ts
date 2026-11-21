@@ -187,6 +187,12 @@ function describeEvent(e: ActivityInput['events'][number], itemGoal: (id: string
 }
 
 /** A one-line summary of what a goal is doing now, or what it does next. */
+/** A run's calls that Claude Code refused though the guard allowed them, one per tool and rule (#145). */
+export function refusedCalls(db: Database, runId: string): { tool: string; rule: string | null }[] {
+  return (db.prepare("SELECT tool_name AS tool, reason AS rule FROM goal_tool_calls WHERE run_id = ? AND decision = 'refused' GROUP BY tool_name, reason ORDER BY MIN(created_at)").all(runId) as { tool: string; rule: string | null }[])
+    .map((c) => ({ tool: c.tool, rule: c.rule ?? null }))
+}
+
 export function describeActivity({ goal, openRun, lastRun, events, items }: ActivityInput): Activity {
   if (openRun?.status === 'running') {
     if (openRun.waiting_tool && openRun.waiting_since) {
@@ -307,6 +313,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           untrusted: r.untrusted_source,
           // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
           request: r.request ? { text: clip(r.request, CLIP.summary)!, untrusted: r.request_untrusted === 1 } : null,
+          // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
+          refused: refusedCalls(db, r.id),
         })),
         needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
         open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),

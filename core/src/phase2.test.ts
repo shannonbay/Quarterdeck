@@ -8,7 +8,7 @@ import {
   parseCron, cronNext, getSchedule, setSchedule, nextScheduledRun, decideTick,
   enableEventTrigger, disableEventTrigger, verifyEventSecret,
   runHealthCheck, listHealth, healthDue, parseHealthValue, buildBrief,
-  matchToolCategory, commandParts, guardToolCallForRun, recordRefusal, listToolCalls, standingAllowRules, usableAsAllowRule, commandAllowRule, readsUntrusted, getRun,
+  matchToolCategory, commandParts, guardToolCallForRun, recordRefusal, refusedCalls, listToolCalls, standingAllowRules, usableAsAllowRule, commandAllowRule, readsUntrusted, getRun,
   insertMemory, updateMemory, markRunUntrusted, updateRun, MEMORY_BRIEF_CHARS,
   touchesQuarterdeckData, quarterdeckDataPaths, QUARTERDECK_DATA_CATEGORY,
 } from './index.js'
@@ -175,6 +175,14 @@ describe('goal guard', () => {
     expect(recordRefusal(db, run.id, 'mcp__gmail__send_message')).toEqual({ category: 'email.send', rule: 'mcp__gmail__send_message' })
     const refused = listToolCalls(db, 'g1').filter((c) => c.decision === 'refused')
     expect(refused.map((c) => c.reason)).toEqual(['mcp__gmail__send_message', null, 'Bash(git push*)', 'mcp__gmail__archive_thread'])
+    // The overview carries them per run, one per tool and rule, oldest first
+    recordRefusal(db, run.id, 'mcp__gmail__archive_thread')
+    expect(refusedCalls(db, run.id)).toEqual([
+      { tool: 'mcp__gmail__archive_thread', rule: 'mcp__gmail__archive_thread' },
+      { tool: 'Bash', rule: 'Bash(git push*)' },
+      { tool: 'Bash', rule: null },
+      { tool: 'mcp__gmail__send_message', rule: 'mcp__gmail__send_message' },
+    ])
     // After an untrusted read, an auto category needs approval, so a refusal of it isn't the guard's to report
     markRunUntrusted(db, run.id, 'WebFetch')
     expect(recordRefusal(db, run.id, 'mcp__gmail__archive_thread')).toBeNull()

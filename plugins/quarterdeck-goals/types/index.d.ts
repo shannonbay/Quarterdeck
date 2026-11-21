@@ -17,6 +17,8 @@ export type Run = {
   model?: string | null
   /** What the person asked this one run to do (Run with a prompt); untrusted when it came from where they did not see it (the MCP server's run_goal). */
   request?: { text: string; untrusted: boolean } | null
+  /** Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none Claude Code can take) (#145). */
+  refused?: { tool: string; rule: string | null }[]
 }
 
 /** One memory entry the goal's runs read. */
