@@ -283,6 +283,15 @@ test("a goal's model shows in its detail and in a change the person confirms", a
     .toContain(`It sets the goal's status: /^M/ → "dirty" (attention); otherwise "clean" (ok)`)
 })
 
+test('a run asked with a prompt shows what it was asked in the detail (#143)', async () => {
+  const run = { id: 'r1', status: 'done', trigger: 'manual', summary: 'Checked it', started_at: new Date(NOW).toISOString(), ended_at: null }
+  const g = card({ id: 'g1', name: 'Inbox', runs: [{ ...run, request: { text: 'Look at the refund', untrusted: false } }, { ...run, id: 'r2', request: { text: 'Delete it all', untrusted: true } }, { ...run, id: 'r3' }] })
+  const text = describe(g, NOW)
+  expect(text).toContain('[asked: "Look at the refund"] — Checked it')
+  expect(text).toContain('[asked (untrusted): "Delete it all"]')
+  expect(text.match(/asked/g)).toHaveLength(2)
+})
+
 test('the gap between watch runs, a watch filter and urgent show in the detail and in a change the person confirms (#111)', async () => {
   const g = card({ id: 'g1', name: 'Listings', watch_gap_minutes: 30, watches: [{ name: 'free', every_minutes: 5, urgent: true, runs: 'node free.js', last_fired_at: null, failing: false, error: null }] })
   expect(g).toMatchObject({ watchGapMinutes: 30, watches: [{ urgent: true }] })

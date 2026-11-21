@@ -1,12 +1,12 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
-  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, countItems, touchPlan,
+  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, queueRunWithRequest, countItems, touchPlan,
   reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
 } from '../db.js'
 import { purgeDate } from '@quarterdeck/core'
 import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
 import {
-  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema,
+  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema, RequestRunSchema,
 } from '../schema.js'
 import { record } from '../history.js'
 
@@ -189,11 +189,31 @@ export async function end_run(args: unknown) {
   }
 }
 
+/** Queues a run, with the prompt as its request when there is one, and records it. */
+function queueRequested(goalId: string, prompt: string | undefined, untrusted: boolean) {
+  if (!getGoal(goalId)) throw new Error(`Goal ${goalId} not found.`)
+  reviveIfDone(goalId) // a done one-off runs again
+  let run
+  if (prompt !== undefined) {
+    const queued = queueRunWithRequest(goalId, prompt, { untrusted })
+    if ('reason' in queued) throw new Error(queued.reason)
+    run = queued.run
+  } else run = queueRun(goalId)
+  record(goalId, goalId, 'run_requested', { run_id: run.id, prompt: prompt ?? null, ...(prompt !== undefined && { untrusted }) })
+  return run
+}
+
+/** The plugin's Run with a prompt (pane box, or its run_goal once the person confirmed the quoted prompt): a trusted request. */
+export async function request_run(args: unknown) {
+  const input = RequestRunSchema.parse(args)
+  const run = queueRequested(input.goal_id, input.prompt, false)
+  return { run: { id: run.id, status: run.status } }
+}
+
 export async function run_goal(args: unknown) {
   const input = RunGoalSchema.parse(args)
-  if (!getGoal(input.goal_id)) throw new Error(`Goal ${input.goal_id} not found.`)
-  reviveIfDone(input.goal_id) // a done one-off runs again
-  const run = queueRun(input.goal_id)
+  // A prompt typed here is one the person doesn't see: stored untrusted, so the run treats it as information
+  const run = queueRequested(input.goal_id, input.prompt, true)
   return {
     run: { id: run.id, status: run.status },
     message: run.status === 'queued'

@@ -80,6 +80,15 @@ describe('runMigrations', () => {
     runMigrations(db)
     expect(db.prepare('SELECT until, reason, plan_id FROM goal_run_hold').all()).toEqual([{ until: '2099-01-01T00:00:00.000Z', reason: 'limit', plan_id: null }])
   })
+
+  it('adds request and request_untrusted to goal_runs, keeping runs made before them', () => {
+    createGoal(db, { ...plan('g1'), kind: 'goal' }, { objective: 'Inbox' })
+    const old = insertRun(db, 'g1', 'manual', 'completed')
+    db.exec('ALTER TABLE goal_runs DROP COLUMN request')
+    db.exec('ALTER TABLE goal_runs DROP COLUMN request_untrusted')
+    runMigrations(db)
+    expect(db.prepare('SELECT id, request, request_untrusted FROM goal_runs').all()).toEqual([{ id: old.id, request: null, request_untrusted: 0 }])
+  })
 })
 
 describe('settings from before the rename', () => {

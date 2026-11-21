@@ -161,9 +161,15 @@ export const EndRunSchema = z.object({
 
 export const RunGoalSchema = z.object({
   goal_id: z.string().describe('ID of the goal to run'),
+  prompt: z.string().min(1).optional().describe('What this one run should do or look at. The person does not see it here, so the run gets it as untrusted information (its auto categories then need proposing); it never becomes memory.'),
 })
 
 // ── Goal runner (called by the quarterdeck-goals plugin, not by agents) ─────────
+
+export const RequestRunSchema = z.object({
+  goal_id: z.string(),
+  prompt: z.string().min(1).describe('What this one run should do, as the person confirmed it'),
+})
 
 export const GoalsTickSchema = z.object({
   holder: z.string().min(1).describe('The Claude Code session asking (its session id)'),

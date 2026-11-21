@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal } from '../../tools/goals.js'
+import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal, request_run } from '../../tools/goals.js'
 import { delete_goal, restore_goal, purge_goal } from '../../tools/goal_runner.js'
 import { set_status } from '../../tools/set_status.js'
 import { update_task } from '../../tools/update_task.js'
 import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun } from '../../db.js'
+import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun, getEvents, endRun } from '../../db.js'
 import { setOpenPlan } from '../../session.js'
 import { RememberSchema } from '../../schema.js'
 import { zodToJsonSchema } from 'zod-to-json-schema'
@@ -254,6 +254,31 @@ describe('goal tools', () => {
     const b = await run_goal({ goal_id: id })
     expect(a.run.status).toBe('queued')
     expect(b.run.id).toBe(a.run.id)
+  })
+
+  it('run_goal records the run, and stores a prompt as untrusted so the run proposes its auto actions', async () => {
+    const id = makeGoal()
+    const running = insertRun(id, 'manual', 'running')
+    const plain = await run_goal({ goal_id: id })
+    expect(plain.run.id).toBe(running.id)
+    expect(getEvents(id).find((e) => e.event_type === 'run_requested')?.payload).toMatchObject({ run_id: plain.run.id, prompt: null })
+    const asked = await run_goal({ goal_id: id, prompt: 'Look at the refund' })
+    expect(asked.run.id).not.toBe(plain.run.id)
+    expect(getEvents(id).filter((e) => e.event_type === 'run_requested').map((e) => e.payload)).toContainEqual(expect.objectContaining({ run_id: asked.run.id, prompt: 'Look at the refund' }))
+    endRun(plain.run.id, 'done')
+    const brief = (await get_goal_brief({ goal_id: id, run_id: asked.run.id })) as any
+    expect(brief.run!.request).toEqual({ text: 'Look at the refund', untrusted: true })
+    expect(brief.run!.untrusted).toMatchObject({ source: 'run request' })
+    expect(brief.memory).toEqual([])
+  })
+
+  it('request_run (the plugin, after the person confirmed the prompt) stores a trusted request', async () => {
+    const id = makeGoal()
+    const r = await request_run({ goal_id: id, prompt: 'Check the refund' })
+    const brief = (await get_goal_brief({ goal_id: id, run_id: r.run.id })) as any
+    expect(brief.run.request).toEqual({ text: 'Check the refund' })
+    expect(brief.run.untrusted).toBeNull()
+    expect(getEvents(id).find((e) => e.event_type === 'run_requested')?.payload).toMatchObject({ run_id: r.run.id, prompt: 'Check the refund', untrusted: false })
   })
 })
 
