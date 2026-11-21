@@ -184,9 +184,19 @@ footer {
 footer a { color: var(--muted); }
 
 @media (max-width: 860px) {
-  .hero { grid-template-columns: 1fr; gap: 32px; }
-  .hero-prompt { order: -1; }
+  /* Headline, then the prompt, then "That one prompt..." */
+  .hero { grid-template-columns: 1fr; gap: 0; }
+  .hero-text { display: contents; }
+  .hero h1 { order: 0; }
+  .hero-prompt { order: 1; margin: 8px 0 24px; }
+  .lede, .byline, .cta { order: 2; }
   .grid, .grid.two { grid-template-columns: 1fr; }
   .top nav { gap: 14px; }
   section { padding: 44px 0; }
+}
+
+@media (max-width: 520px) {
+  .top nav a:nth-child(-n+2) { display: none; }
+  .hero-prompt blockquote { padding-left: 1.9em; }
+  .hero-prompt figcaption { padding-left: calc(1.9 * clamp(1.45rem, 2.5vw, 2.05rem)); }
 }
