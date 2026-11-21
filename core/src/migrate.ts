@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 24
+export const SCHEMA_VERSION = 25
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -583,6 +583,23 @@ export function runMigrations(db: Database): void {
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_transcript_session ON transcript_messages(session_id, turn_index);
+  `)
+
+  // Checks guarded_run passed for a run that read outside content (#159; schema version 25):
+  // the exact staged command and a hash of each staged file, good for one call
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS guarded_checks (
+      id          TEXT PRIMARY KEY,
+      plan_id     TEXT NOT NULL REFERENCES plans(id),
+      run_id      TEXT NOT NULL,
+      category    TEXT NOT NULL,
+      command     TEXT NOT NULL,
+      file_hashes TEXT NOT NULL DEFAULT '{}',
+      used_at     TEXT,
+      recorded_at TEXT,
+      created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);
   `)
 
   // ── Renamed from Conductor: the MCP server's tools moved from mcp__conductor__* ──

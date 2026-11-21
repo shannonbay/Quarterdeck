@@ -11,6 +11,10 @@ import {
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { getRunHold } from './goal-changes.js'
+import { claimUsedGuardedCheck } from './guarded.js'
+
+/** Kept on an item recorded auto after outside content because the person allowed it (#159). */
+export const AFTER_OUTSIDE_ITEM_NOTE = 'Went through after outside content because you allowed it (checked by guarded_run)'
 import { listHealth } from './health.js'
 import { releaseWatchEvents, takeWatchEvents, type WatchNews } from './watches.js'
 import type { AutonomyMode, Goal, GoalMemory, GoalRun, MemoryKind, MemorySource, Task, TriggerKind } from './types.js'
@@ -206,7 +210,11 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   }
   const goalMode = autonomyFor(goal, input.action.category)
   const similar = similarCategories(knownCategories(db, planId), input.action.category)
-  const untrusted = goalMode === 'auto' && runId ? getRun(db, runId)?.untrusted_source ?? undefined : undefined
+  const marked = goalMode === 'auto' && runId ? getRun(db, runId)?.untrusted_source ?? undefined : undefined
+  // A listed category (#159) stays auto after outside content when guarded_run's check for it went through in this run
+  const guarded = marked !== undefined && goal.auto_after_outside.includes(input.action.category)
+    && claimUsedGuardedCheck(db, runId!, input.action.category)
+  const untrusted = guarded ? undefined : marked
   const mode: AutonomyMode = untrusted !== undefined ? 'propose' : goalMode
   if (mode === 'off') {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`)
@@ -217,7 +225,7 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   if (mode === 'propose' || input.ask_person) {
     insertTask(db, { ...base, status: 'active', state, requires_approval: true, review_requested_at: now })
   } else {
-    insertTask(db, { ...base, status: 'completed', state, result: input.result ?? `Done automatically: ${input.action.summary}` })
+    insertTask(db, { ...base, status: 'completed', state: guarded ? { ...state, after_outside: AFTER_OUTSIDE_ITEM_NOTE } : state, result: input.result ?? `Done automatically: ${input.action.summary}` })
   }
   return { task: getTask(db, planId, id)!, existing: false, mode: input.ask_person ? 'propose' : mode, ...(untrusted !== undefined && { untrusted }), ...(similar.length > 0 && { similar_categories: similar }) }
 }

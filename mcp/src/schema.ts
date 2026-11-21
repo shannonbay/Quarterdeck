@@ -273,6 +273,13 @@ export const GuardCheckSchema = z.object({
   input: z.record(z.string(), z.unknown()).optional().describe("The call's command and path fields, for the rule on Quarterdeck's own data"),
 })
 
+export const GuardedStageSchema = z.object({
+  run_id: z.string(),
+  command: z.string().describe('The command as the run would make it, naming its files by the paths given in files'),
+  files: z.array(z.object({ path: z.string(), contents: z.string() })).default([]).describe('Every file the command needs, in full'),
+  dry_run: z.boolean().optional().describe('Check only: stage nothing and record no check'),
+})
+
 export const RunRefusedSchema = z.object({
   run_id: z.string(),
   tool_name: z.string().describe('The tool Claude Code refused'),
