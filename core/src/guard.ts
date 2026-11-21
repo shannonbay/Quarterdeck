@@ -171,6 +171,8 @@ export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, inpu
 
 /** The reserved category a refusal to touch Quarterdeck's own data is recorded under. */
 export const QUARTERDECK_DATA_CATEGORY = 'quarterdeck-data'
+/** The reserved category a refusal to read secrets in a marked run holding auto_after_outside is recorded under (#159). */
+export const SECRETS_CATEGORY = 'secrets'
 
 /** Where Quarterdeck keeps its data: its folders, and the database file wherever it is. */
 export interface QuarterdeckDataPaths {
@@ -244,6 +246,38 @@ export function touchesQuarterdeckData(
   return null
 }
 
+/** Known secret locations a marked run holding auto_after_outside may not read (#159): ~/.ssh, ~/.aws, ~/.npmrc, ~/.config/gh, .env files. */
+const SECRET_PATH = /(^|[\\/\s"'`=])(\.ssh|\.aws|\.npmrc|\.config[\\/]gh|\.env(\.[\w.-]*)?)(?![\w-])/i
+/** Commands that print secrets: env, printenv, gh auth token, PowerShell's env: drive. */
+const SECRET_COMMAND = /^(env|printenv)(\s|$)|^gh\s+auth\s+token\b|^(get-childitem|gci|ls|dir|cat|type|get-content|gc)\s+env:/i
+
+/**
+ * The known secret location or command a call names, or null: a shell command
+ * naming a secret location or running a command that prints secrets, or a file
+ * tool's path at one. Rough on purpose, like touchesQuarterdeckData: a false
+ * match only refuses.
+ */
+export function touchesSecrets(toolName: string, input: Record<string, unknown> | undefined): string | null {
+  if (!input) return null
+  const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : '')
+  if (SHELL_TOOLS.has(toolName)) {
+    const command = str('command')
+    if (!command) return null
+    const found = SECRET_PATH.exec(command)
+    if (found) return found[2]!
+    for (const part of commandParts(command)) {
+      if (SECRET_COMMAND.test(part)) return part
+    }
+    return null
+  }
+  if (FILE_TOOLS.has(toolName)) {
+    for (const field of ['file_path', 'notebook_path', 'path', 'pattern']) {
+      if (SECRET_PATH.test(str(field))) return str(field)
+    }
+  }
+  return null
+}
+
 function record(db: Database, run: GoalRun, toolName: string, category: string, decision: 'allow' | 'deny' | 'refused', reason: string | null): void {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -292,6 +326,15 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     const reason = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, 'deny', reason)
     return { decision: 'deny', category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason }
+  }
+  // A marked run holding the setting may not read known secret locations: a guarded call could carry them out (#159)
+  if (goal.auto_after_outside.length > 0 && getRun(db, run.id)?.untrusted_source) {
+    const secret = touchesSecrets(toolName, input)
+    if (secret !== null) {
+      const reason = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`
+      record(db, run, toolName, SECRETS_CATEGORY, 'deny', reason)
+      return { decision: 'deny', category: SECRETS_CATEGORY, run_id: run.id, reason }
+    }
   }
   const untrustedRead = untrustedLabel(goal.tool_map, toolName, input)
   if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead)

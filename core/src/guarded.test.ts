@@ -5,8 +5,34 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
-  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck,
+  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY,
 } from './index.js'
+
+describe('touchesSecrets (#159)', () => {
+  it('names secret locations and commands that print secrets', () => {
+    expect(touchesSecrets('Bash', { command: 'cat ~/.ssh/id_ed25519' })).toBe('.ssh')
+    expect(touchesSecrets('Bash', { command: 'ls $HOME/.aws' })).toBe('.aws')
+    expect(touchesSecrets('Bash', { command: 'cat ~/.npmrc' })).toBe('.npmrc')
+    expect(touchesSecrets('Bash', { command: 'cat ~/.config/gh/hosts.yml' })).toBe('.config/gh')
+    expect(touchesSecrets('Bash', { command: 'cat .env.local' })).toBe('.env.local')
+    expect(touchesSecrets('Bash', { command: 'printenv' })).toBe('printenv')
+    expect(touchesSecrets('Bash', { command: 'git status && env | grep TOKEN' })).toBe('env')
+    expect(touchesSecrets('Bash', { command: 'gh auth token' })).toBe('gh auth token')
+    expect(touchesSecrets('PowerShell', { command: 'Get-ChildItem env:' })).toBe('Get-ChildItem env:')
+    expect(touchesSecrets('Read', { file_path: 'C:\\Users\\me\\.ssh\\id_rsa' })).toBe('C:\\Users\\me\\.ssh\\id_rsa')
+    expect(touchesSecrets('Read', { file_path: '/repo/.env' })).toBe('/repo/.env')
+  })
+
+  it('leaves ordinary calls alone', () => {
+    expect(touchesSecrets('Bash', { command: 'npm test' })).toBeNull()
+    expect(touchesSecrets('Bash', { command: 'git commit -m "update environment docs"' })).toBeNull()
+    expect(touchesSecrets('Bash', { command: 'node scripts/envelope.js' })).toBeNull()
+    expect(touchesSecrets('Bash', { command: 'gh auth status' })).toBeNull()
+    expect(touchesSecrets('Read', { file_path: '/repo/src/env.ts' })).toBeNull()
+    expect(touchesSecrets('Read', { file_path: '/repo/.environment.md' })).toBeNull()
+    expect(touchesSecrets('WebFetch', { url: 'https://x/.ssh' })).toBeNull()
+  })
+})
 
 describe('guardRun with auto_after_outside (#159)', () => {
   let db: Database
@@ -41,6 +67,20 @@ describe('guardRun with auto_after_outside (#159)', () => {
     const label = `gh issue edit 1 --body-file ${path}`
     stage(run.id, 'gh.label', label, 'Hi')
     expect(call(label)).toMatchObject({ decision: 'deny', category: 'gh.label' })
+  })
+
+  it('a marked run holding the setting is refused secret reads; unmarked runs and goals without it are not', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const call = (tool: string, input: Record<string, unknown>) => guardToolCallForRun(db, run.id, tool, input, paths)
+    expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
+    markRunUntrusted(db, run.id, 'mail')
+    expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY, reason: expect.stringMatching(/can't read secrets \(\.ssh\)/) })
+    expect(call('Bash', { command: 'gh auth token' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
+    expect(call('Read', { file_path: '/repo/.env' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
+    expect(listToolCalls(db, 'g1')[0]).toMatchObject({ category: SECRETS_CATEGORY, decision: 'deny' })
+    expect(call('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
+    updateGoal(db, 'g1', { auto_after_outside: [] })
+    expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
   })
 
   it('a staged file changed after the check: falls back to approval, naming why', () => {
