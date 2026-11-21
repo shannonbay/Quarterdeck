@@ -268,3 +268,48 @@ test("a run's call refused by Claude Code is reported to Quarterdeck; other agen
   expect(refusals).toEqual([{ run_id: 'run_abc123', tool_name: 'Bash', input: { command: 'git push origin x' } }])
   expect(seen).toEqual(['Bash', 'Bash', 'Bash'])
 })
+
+/** guarded_run's world: guarded_stage on the server, and a model that answers `answer` (null: no answer). */
+function guardedWorld(on: On, answer: string | null) {
+  world(on)
+  const stages: { command: string; dry_run: boolean }[] = []
+  on('tool.call', { tool: 'mcp__quarterdeck__guarded_stage' }, (_, e) => {
+    const { command, dry_run } = e as unknown as { command: string; dry_run: boolean }
+    stages.push({ command, dry_run })
+    if (command.includes('BLOCKED')) return { result: JSON.stringify({ ok: false, reason: 'file a contains what looks like a GitHub token' }) } as never
+    return { result: JSON.stringify(dry_run ? { ok: true, category: 'gh.review', command, files: [] } : { ok: true, category: 'gh.review', command: command.replace('body.md', '/staged/body.md'), files: ['/staged/body.md'] }) } as never
+  })
+  const prompts: string[] = []
+  on('model.complete', (_, e) => {
+    prompts.push((e as unknown as { prompt: string }).prompt)
+    return { value: answer === null ? { isAnswered: false, reason: 'timeout' } : { isAnswered: true, text: answer } } as never
+  })
+  return { stages, prompts }
+}
+
+const guarded = (extra: Record<string, unknown>) => call({ tool: 'mcp__quarterdeck-guard__guarded_run', agentId: 'run-agent', files: [{ path: 'body.md', contents: 'Looks good.' }], ...extra })
+
+test('guarded_run checks on the server, asks the model, then stages and returns the command without running it (#159)', async ($, on) => {
+  const { stages, prompts } = guardedWorld(on, 'YES')
+  await $.session.start(START)
+  const r = JSON.parse(said(await $.tool.call(guarded({ command: 'gh pr review 1 --body-file body.md' }))))
+  expect(r).toMatchObject({ staged: true, category: 'gh.review', command: 'gh pr review 1 --body-file /staged/body.md' })
+  expect(stages.map((s) => s.dry_run)).toEqual([true, false])
+  expect(prompts[0]).toContain('Looks good.')
+})
+
+test('guarded_run refuses on a rule hit without asking the model, and on a model no or no answer', async ($, on) => {
+  const { stages, prompts } = guardedWorld(on, 'NO: it carries a token')
+  await $.session.start(START)
+  expect(said(await $.tool.call(guarded({ command: 'gh pr review 1 BLOCKED' })))).toMatch(/didn't stage this call: file a contains/)
+  expect(prompts).toHaveLength(0)
+  expect(said(await $.tool.call(guarded({ command: 'gh pr review 1 --body-file body.md' })))).toMatch(/model check said no: it carries a token/)
+  expect(stages.every((s) => s.dry_run)).toBe(true)
+})
+
+test('guarded_run with no model answer falls back, and is only for goal runs', async ($, on) => {
+  guardedWorld(on, null)
+  await $.session.start(START)
+  expect(said(await $.tool.call(guarded({ command: 'gh pr review 1 --body-file body.md' })))).toMatch(/no answer within 15 seconds/)
+  expect(said(await $.tool.call(guarded({ command: 'x', agentId: 'model-agent' })))).toMatch(/only for Quarterdeck goal runs/)
+})

@@ -37,6 +37,7 @@ import {
   FailRunSchema,
   GuardCheckSchema,
   RunRefusedSchema,
+  GuardedStageSchema,
   CreateGoalSchema,
   DeleteMemorySchema, RestoreMemorySchema,
   TrustMemorySchema,
@@ -67,7 +68,7 @@ import { get_history } from './tools/get_history.js'
 import { verify_task } from './tools/verify_task.js'
 import { list_goals, goal_brief_tool, add_item, remember, recall, propose_curation, propose_watch, forget, end_run, run_goal, request_run, run_step } from './tools/goals.js'
 import {
-  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check, run_refused,
+  goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, clear_run_hold, attach_agent, fail_run, guard_check, run_refused, guarded_stage,
   create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, delete_goal, restore_goal, purge_goal, watch_report, run_progress,
 } from './tools/goal_runner.js'
 import { todo_list, todo_add, todo_set } from './tools/todos.js'
@@ -289,6 +290,7 @@ const TOOLS = [
     ['attach_agent', 'Records which subagent is doing a goal run.', AttachAgentSchema, attach_agent],
     ['fail_run', 'Marks a goal run failed or timed out.', FailRunSchema, fail_run],
     ['guard_check', "Applies a goal's autonomy to a tool call made during a run.", GuardCheckSchema, guard_check],
+    ['guarded_stage', "Checks and stages a goal run's guarded call (the guard plugin's guarded_run); never runs it.", GuardedStageSchema, guarded_stage],
     ['run_refused', "Records a goal run's call that Claude Code refused although the guard allowed it, with the allow rule it needs.", RunRefusedSchema, run_refused],
     ['create_goal', 'Creates a goal for the human.', CreateGoalSchema, create_goal],
     ['delete_memory', "Forgets one of a goal's memories for the human: it goes inactive and can be restored.", DeleteMemorySchema, delete_memory],

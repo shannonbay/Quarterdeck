@@ -5,14 +5,14 @@
  * (see plugins/quarterdeck-goals/hooks/guard.ts); agents use the goal tools.
  */
 import {
-  schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal,
+  schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal, stageGuardedCall,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, RunRefusedSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
 import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
@@ -153,6 +153,16 @@ export async function fail_run(args: unknown) {
 export async function guard_check(args: unknown) {
   const input = GuardCheckSchema.parse(args)
   return guardToolCallForRun(input.run_id, input.tool_name, input.input)
+}
+
+/**
+ * guarded_run's server half (#159): the guard plugin checks a marked run's call here
+ * (dry_run), makes its Haiku check, then stages it. Quarterdeck owns the data folder,
+ * so the server writes the staged files. It never runs the command.
+ */
+export async function guarded_stage(args: unknown) {
+  const input = GuardedStageSchema.parse(args)
+  return stageGuardedCall(input.run_id, input.command, input.files, input.dry_run ?? false)
 }
 
 /**
