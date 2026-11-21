@@ -844,14 +844,26 @@ export function needsRefinementWatch(): string {
   return `gh api "repos/{owner}/{repo}/issues?state=open&labels=${NEEDS_REFINEMENT_LABEL}&sort=updated&per_page=100" --jq ".[] | select(.pull_request == null and ${notLabelled(REFINED_LABEL)} and ${notLabelled(CLARIFY_LABEL)}) | .number"`
 }
 
+/** How the PR reviewer opens a review that raises nothing. The issue fixer's comment watch leaves these out by this wording. */
+export const cleanReview = (sha: string) => `Reviewed at ${sha}: no problems found`
+
+/**
+ * jq that keeps a comment or review the fixer should act on: not a clean review
+ * (cleanReview), which asks for nothing but would still start a full run. The
+ * pattern has no `^`, cmd.exe's escape character, which it would strip from the
+ * jq string (cmd.exe reads it as unquoted).
+ */
+const NOT_CLEAN_REVIEW = `((.body // \\"\\") | test(\\"${cleanReview('[0-9a-f]+')}\\") | not)`
+
 /**
  * The issue fixer's comment watch: comments and reviews by trusted authors on its own open
- * pull requests, as `<number> <comment or review id>`. Only ids reach the run. No jq variables
- * (`$n`), since sh would expand them inside the double quotes cmd.exe needs.
+ * pull requests, as `<number> <comment or review id>`, leaving out the PR reviewer's clean
+ * reviews. Only ids reach the run. No jq variables (`$n`), since sh would expand them inside
+ * the double quotes cmd.exe needs.
  */
 export function prCommentWatch(): string {
   const assoc = `(.authorAssociation | IN(${TRUSTED_ASSOCIATIONS.map((a) => `\\"${a}\\"`).join(',')}))`
-  return `gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select(${assoc}) | .id] | .[0] + \\" \\" + .[1:][]"`
+  return `gh pr list --state open --limit 50 --json number,headRefName,comments,reviews --jq ".[] | select(.headRefName | startswith(\\"${ISSUE_FIX_BRANCH}\\")) | [(.number | tostring)] + [(.comments + .reviews)[] | select(${assoc} and ${NOT_CLEAN_REVIEW}) | .id] | .[0] + \\" \\" + .[1:][]"`
 }
 
 /** A branch name as typed, if it can go in a command as it is. */
@@ -1030,7 +1042,7 @@ export const PR_REVIEW_ROUNDS = 3
 export const prRereview = (forge: Forge) => [
   'A re-review raises only real problems: a bug, a failing check or test, or a security problem, in what changed or left unaddressed from before.',
   `Smaller points (style, naming, nice-to-haves) go in your end_run summary for me, not on ${forge.name}: a posted review can start another goal's run to act on it (the Issue Fixer acts on reviews of its pull requests), so each one should be worth a round.`,
-  'When a re-review finds no real problem, still propose the review (a github.review item as below) with no inline comments, so the pull request shows it was looked at: its body names the commit ("Reviewed at <sha>: no problems found"), says which earlier points are now addressed and gives the check results. It does not count as one of the rounds below, which count only reviews that raise something.',
+  `When a re-review finds no real problem, still propose the review (a github.review item as below) with no inline comments, so the pull request shows it was looked at: its body names the commit ("${cleanReview('<sha>')}"), says which earlier points are now addressed and gives the check results. It does not count as one of the rounds below, which count only reviews that raise something.`,
   `Keep count of the reviews you've posted that raise something on each pull request in memory. Once ${PR_REVIEW_ROUNDS} are posted on one, ask me (add_item with ask_person, external_ref github-pr-rounds:<number>@<sha>) before proposing another, with what you'd raise; propose it only if I say yes.`,
 ].join(' ')
 export const PR_REREVIEW = prRereview(GITHUB)
@@ -1047,7 +1059,7 @@ export function prReview(forge: Forge = GITHUB): string {
   PR_TESTING,
   'Remember each review as "reviewed #<number> at <sha>". When a pull request you reviewed is pushed to, review only what changed (git diff <last sha>..<new sha>) if the last sha is still an ancestor of the new head, otherwise (a force-push) the whole pull request. Don\'t repeat points you made before, and say which of them are now addressed.',
   prRereview(forge),
-  "Look for correctness bugs, missing tests, security problems, and fit with the repo's existing style and design. Each inline comment goes on a line of the diff, says concretely what's wrong and why, and suggests a fix when there's an obvious one. Don't comment for the sake of it: when you find nothing, the review says so with the check results, as \"Reviewed at <sha>: no problems found\", and is still posted: a pull request with no review looks unreviewed.",
+  `Look for correctness bugs, missing tests, security problems, and fit with the repo's existing style and design. Each inline comment goes on a line of the diff, says concretely what's wrong and why, and suggests a fix when there's an obvious one. Don't comment for the sake of it: when you find nothing, the review says so with the check results, as "${cleanReview('<sha>')}", and is still posted: a pull request with no review looks unreviewed.`,
   'Then propose one github.review item (external_ref github-pr-review:<number>@<sha>) with the exact review: its summary, the check results and every inline comment (path:line and its text).',
   `Once I approve, write the review as JSON {commit_id: <sha>, event: "COMMENT", body, comments: [{path, line, side: "RIGHT", body}]} to a file outside your clone, post it with ${r.postReview}, then complete the item.${r.repoNote ? ` ${r.repoNote}` : ''}`,
   `End the review body with the line "${signLine('Reviewed')}"`,
