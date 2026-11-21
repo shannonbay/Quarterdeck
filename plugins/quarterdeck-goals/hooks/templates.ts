@@ -847,7 +847,7 @@ export function baseRecoveredWatch(): string {
     + ' | group_by(.k) | [.[] | {m: (map(select(.e == "push")) | sort_by(.t) | reverse), p: (map(select(.e == "pull_request")) | group_by(.b) | map(max_by(.t)))}'
     + ' | select(.m[0].c == "success") | {m, r: .p[]} | select(.r.c == "failure" and .r.t < .m[0].t)'
     + ' | select(([.m[], .r] | sort_by(.t) | .[(map(.e == "pull_request") | index(true)) - 1].c) == "failure") | .r.b + "@" + .r.s] | unique | .[]'
-  return `gh api "repos/{owner}/{repo}/actions/runs?per_page=100" --jq "${jq.replace(/"/g, '\\"')}"`
+  return `gh api "repos/{owner}/{repo}/actions/runs?per_page=100" --jq "${jq.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
 }
 /**
  * The issue fixer's watch when it waits for `refined`: open issues carrying it
