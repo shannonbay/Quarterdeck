@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal, request_run } from '../../tools/goals.js'
+import { list_goals, get_goal_brief, goal_brief_tool, add_item, remember, recall, propose_curation, forget, end_run, run_goal, request_run, run_step } from '../../tools/goals.js'
 import { delete_goal, restore_goal, purge_goal } from '../../tools/goal_runner.js'
 import { set_status } from '../../tools/set_status.js'
 import { update_task } from '../../tools/update_task.js'
@@ -7,7 +7,7 @@ import { next_task } from '../../tools/next_task.js'
 import { get_history } from '../../tools/get_history.js'
 import { create_plan } from '../../tools/create_plan.js'
 import { createGoal, queueRun, approveTask, rejectTask, getRun, getTask, insertMemory, getMemory, markRunUntrusted, updateGoal, insertRun, getEvents, endRun } from '../../db.js'
-import { setOpenPlan } from '../../session.js'
+import { setOpenPlan, withScope } from '../../session.js'
 import { RememberSchema } from '../../schema.js'
 import { zodToJsonSchema } from 'zod-to-json-schema'
 
@@ -340,5 +340,26 @@ describe('deleting, restoring and purging a goal', () => {
     await delete_goal({ goal_id: id })
     await purge_goal({ goal_id: id })
     expect((await list_goals({ status: 'all', deleted: 'include' })).goals.map((g) => g.id)).not.toContain(id)
+  })
+})
+
+describe('run_step (#146)', () => {
+  it('sets the step from the run itself, records a change once, and is refused without its run_scope', async () => {
+    const id = makeGoal()
+    const run = insertRun(id, 'manual', 'running')
+    await expect(run_step({ goal_id: id, run_id: run.id, text: 'Issue #12' })).rejects.toThrow(/run_scope/)
+    await expect(withScope({ planId: id, runId: 'run_other' }, () => run_step({ goal_id: id, run_id: run.id, text: 'Issue #12' }))).rejects.toThrow(/run_scope/)
+    const step = (text: string) => withScope({ planId: id, runId: run.id }, () => run_step({ goal_id: id, run_id: run.id, text }))
+    const before = getEvents(id).filter((e) => e.event_type === 'step_set').length
+    expect(await step('Issue #12: running tests')).toEqual({ step: 'Issue #12: running tests', changed: true })
+    expect(await step('Issue #12: running tests')).toEqual({ step: 'Issue #12: running tests', changed: false })
+    expect(getEvents(id).filter((e) => e.event_type === 'step_set')).toHaveLength(before + 1)
+    await expect(step('x'.repeat(61))).rejects.toThrow(/at most 60 characters/)
+    markRunUntrusted(run.id, 'Bash: gh issue view')
+    expect(await step('Issue #13')).toEqual({ step: 'Issue #13', changed: true, untrusted: true })
+    expect(getRun(run.id)!.step_untrusted).toBe('Bash: gh issue view')
+    endRun(run.id, 'done')
+    expect(getRun(run.id)!.step).toBeNull()
+    await expect(step('later')).rejects.toThrow(/not running/)
   })
 })

@@ -1,12 +1,12 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
   listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, queueRunWithRequest, countItems, touchPlan,
-  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch,
+  reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch, setRunStep,
 } from '../db.js'
 import { purgeDate } from '@quarterdeck/core'
-import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun } from '../session.js'
+import { getOpenPlan, setOpenPlan, getOpenRun, setOpenRun, scopedRunId } from '../session.js'
 import {
-  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema, RequestRunSchema,
+  ListGoalsSchema, GetGoalBriefSchema, AddItemSchema, RememberSchema, ForgetSchema, RecallSchema, ProposeCurationSchema, ProposeWatchSchema, EndRunSchema, RunGoalSchema, RequestRunSchema, RunStepSchema,
 } from '../schema.js'
 import { record } from '../history.js'
 
@@ -126,6 +126,21 @@ export async function remember(args: unknown) {
   const m = insertMemory({ plan_id: planId, kind: input.kind, text: input.text, source: 'agent', source_ref: input.source_ref ?? runId, untrusted_source: untrusted, untrusted_root: run?.untrusted_root ?? null })
   record(planId, planId, 'memory_added', { memory_id: m.id, kind: m.kind, text: m.text })
   return { memory: { id: m.id, kind: m.kind, text: m.text, ...(untrusted && { untrusted: true }) } }
+}
+
+/**
+ * A running run says which part of the job it is on (#146). Only its own agent:
+ * the call's run_scope must name the run. Shown in the Goals pane, the status
+ * line and the web goal page while the run goes on; never on the phone or as an alert.
+ */
+export async function run_step(args: unknown) {
+  const { goal_id, run_id, text } = RunStepSchema.parse(args)
+  if (scopedRunId() !== run_id) throw new Error('Only the run itself sets its step: pass run_scope set to your run id.')
+  const run = getRun(run_id)
+  if (!run || run.plan_id !== goal_id) throw new Error(`Run ${run_id} is not a run of goal ${goal_id}.`)
+  const r = setRunStep(run_id, text)
+  if (r.changed) record(goal_id, goal_id, 'step_set', { run_id, text: r.step })
+  return { step: r.step, changed: r.changed, ...(r.untrusted && { untrusted: true }) }
 }
 
 /** A run proposes a watch: it waits under Needs you and nothing runs until the person approves it. */

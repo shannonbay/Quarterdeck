@@ -142,11 +142,15 @@ export type Activity = {
   at: string | null
   /** A running agent's tool call waiting for the person's permission answer (`text` says so too). */
   waiting?: { tool: string; since: string }
+  /** With a step set by the run (run_step, in `text`): what it is doing within it, the latest call or event (#146). */
+  detail?: string
+  /** The run's untrusted source when it set the step shown in `text`, marked like an untrusted status. */
+  untrusted?: string
 }
 
 type ActivityInput = {
   goal: Pick<Goal, 'status'>
-  openRun: Pick<GoalRun, 'status' | 'trigger' | 'started_at'> & Partial<Pick<GoalRun, 'now_tool' | 'now_tool_at' | 'waiting_tool' | 'waiting_since'>> | null
+  openRun: Pick<GoalRun, 'status' | 'trigger' | 'started_at'> & Partial<Pick<GoalRun, 'now_tool' | 'now_tool_at' | 'waiting_tool' | 'waiting_since' | 'step' | 'step_at' | 'step_untrusted'>> | null
   lastRun: Pick<GoalRun, 'summary'> | null
   /** The goal's recent events, newest first. */
   events: Pick<Event, 'event_type' | 'actor' | 'task_id' | 'payload' | 'created_at'>[]
@@ -209,8 +213,13 @@ export function describeActivity({ goal, openRun, lastRun, events, items }: Acti
     const tool = openRun.now_tool && openRun.now_tool_at && openRun.now_tool_at >= openRun.started_at
       ? { state: 'running' as const, text: `Using ${openRun.now_tool}`, at: openRun.now_tool_at }
       : null
-    if (tool && (!latest || tool.at > latest.at!)) return tool
-    return latest ?? { state: 'running', text: 'Starting: reading the brief', at: openRun.started_at }
+    const now: Activity = tool && (!latest || tool.at > latest.at!) ? tool : latest ?? { state: 'running', text: 'Starting: reading the brief', at: openRun.started_at }
+    // The part of the job the run says it is on leads, with what it is doing within it as detail (#146)
+    if (openRun.step && openRun.step_at && openRun.step_at >= openRun.started_at) {
+      const at = now.at && now.at > openRun.step_at ? now.at : openRun.step_at
+      return { state: 'running', text: openRun.step, at, ...(now.at && now.at >= openRun.step_at && { detail: now.text }), ...(openRun.step_untrusted && { untrusted: openRun.step_untrusted }) }
+    }
+    return now
   }
   if (openRun) return { state: 'queued', text: `Queued (${openRun.trigger}) — starts within a minute while Claude Code is open`, at: openRun.started_at }
   if (goal.status === 'paused') return { state: 'paused', text: 'Paused', at: null }

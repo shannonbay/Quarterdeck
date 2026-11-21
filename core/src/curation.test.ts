@@ -30,7 +30,7 @@ function curationRun(): string {
 
 describe('schema', () => {
   it('is version 21, with goals.curated_at and goals.deleted_at', () => {
-    expect(SCHEMA_VERSION).toBe(21)
+    expect(SCHEMA_VERSION).toBe(22)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
     expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
