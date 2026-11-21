@@ -242,7 +242,7 @@ export function touchesQuarterdeckData(
   return null
 }
 
-function record(db: Database, run: GoalRun, toolName: string, category: string, decision: 'allow' | 'deny', reason: string | null): void {
+function record(db: Database, run: GoalRun, toolName: string, category: string, decision: 'allow' | 'deny' | 'refused', reason: string | null): void {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -330,6 +330,48 @@ export function commandAllowRule(pattern: string): boolean {
   if (star < 0) return true
   const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean)
   return words.length >= 2 && words.slice(1).some((w) => !w.startsWith('-'))
+}
+
+/** What recordRefusal stored: the category, and the allow rule the call needs (null when Claude Code can't take one). */
+export interface RecordedRefusal {
+  category: string
+  rule: string | null
+}
+
+/**
+ * Records a call of a goal run that the guard allowed but Claude Code refused
+ * (its PermissionDenied hook), as decision `refused` with the allow rule it needs
+ * as the reason: the matched tool-map pattern when Claude Code takes it as a rule
+ * (commandAllowRule), otherwise the plain tool name, or none for a shell call whose
+ * rule it can't take. Records nothing, and returns null, for a call that maps to no
+ * category or that the guard would have refused itself (#145).
+ */
+export function recordRefusal(
+  db: Database, runId: string, toolName: string,
+  input?: Record<string, unknown>, paths: QuarterdeckDataPaths = quarterdeckDataPaths(),
+): RecordedRefusal | null {
+  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND status IN ('queued', 'running')").get(runId) as GoalRun | undefined
+  const goal = run ? getGoal(db, run.plan_id) : null
+  if (!run || !goal) return null
+  const workingDir = (db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string } | undefined)?.working_dir ?? process.cwd()
+  if (touchesQuarterdeckData(toolName, input, workingDir, paths) !== null) return null
+  const matched = matchToolRule(goal.tool_map, toolName, input)
+  if (!matched || matched.category === UNTRUSTED_CATEGORY) return null
+  const { category, pattern } = matched
+  const mode = autonomyFor(goal, category)
+  if (mode === 'off') return null
+  const untrusted = getRun(db, run.id)?.untrusted_source ?? null
+  if (mode !== 'auto' || untrusted !== null) {
+    const approved = (db.prepare(`
+      SELECT COUNT(*) AS n FROM tasks
+      WHERE plan_id = ? AND status = 'active' AND archived_at IS NULL AND approved_at IS NOT NULL
+        AND json_extract(state, '$.action.category') = ?
+    `).get(run.plan_id, category) as { n: number }).n
+    if (approved === 0) return null
+  }
+  const rule = commandAllowRule(pattern) ? pattern : SHELL_TOOLS.has(toolName) ? null : toolName
+  record(db, run, toolName, category, 'refused', rule)
+  return { category, rule }
 }
 
 /**

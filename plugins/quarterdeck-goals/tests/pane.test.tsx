@@ -1004,6 +1004,25 @@ test("an expanded goal lists its Claude Code allow rules when opened, and Claude
   await ui.unmount()
 })
 
+test("an expanded goal says what Claude Code refused in its last run, and its rules join the ones Claude is asked to add (#145)", async ($, on) => {
+  const { prompts } = engine(on)
+  fakeQuarterdeck(on, [
+    goal({
+      id: 'g1', name: 'Inbox', autonomy: { shell: 'auto', 'email.send': 'propose' }, tool_map: { Bash: 'shell', 'mcp__gmail__send_message': 'email.send' },
+      runs: [{ id: 'r1', status: 'completed', trigger: 'manual', summary: 'done', started_at: '2026-01-01T00:00:00Z', ended_at: '2026-01-01T00:01:00Z', refused: [{ tool: 'mcp__gmail__send_message', rule: 'mcp__gmail__send_message' }] }],
+    }),
+  ])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  expect((await ui.find({ type: 'Text', text: /^Claude Code refused/ }))?.text).toBe('Claude Code refused mcp__gmail__send_message: add allow rule mcp__gmail__send_message')
+  expect((await ui.find({ key: 'allow-toggle-g1' }))?.props.label).toBe('▸ 2 allow rules')
+  await ui.press({ key: 'allow-toggle-g1' })
+  await ui.press({ key: 'allow-ask-g1' })
+  expect(prompts.at(-1)).toContain('- `mcp__gmail__send_message`')
+  await ui.unmount()
+})
+
 test('a clipped question or proposal opens to its full text, fetched once with get_item', async ($, on) => {
   engine(on)
   const long = `Which approach should I build? ${'more detail '.repeat(30)}`

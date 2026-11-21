@@ -34,7 +34,7 @@ const GateFields = {
 export const CreateTaskSchema = z.object({
   goal: z.string().min(1).describe('What this task should accomplish'),
   parent_id: z.string().optional().describe('ID of the parent task. Omit only when creating the first root task on an empty tree.'),
-  initial_state: z.record(z.unknown()).optional().describe('Freeform starting state (default {})'),
+  initial_state: z.record(z.string(), z.unknown()).optional().describe('Freeform starting state (default {})'),
   depends_on: z.array(z.string()).optional().describe('Sibling task IDs that must complete first'),
   status: z.enum(['active', 'pending']).default('active').describe('Initial status'),
   ...GateFields,
@@ -43,7 +43,7 @@ export const CreateTaskSchema = z.object({
 export const UpdateTaskSchema = z.object({
   task_id: z.string().describe('ID of the task to update'),
   result: z.string().optional().describe('Human-readable summary of progress or outcome'),
-  state_patch: z.record(z.unknown()).optional().describe('Shallow-merge patch applied to state'),
+  state_patch: z.record(z.string(), z.unknown()).optional().describe('Shallow-merge patch applied to state'),
   notes: z.string().nullable().optional().describe('Freeform text scratchpad — use for mid-task observations, corrections, or context for downstream tasks. Unlike result, notes can be set and updated at any point. Pass null to clear.'),
   goal: z.string().min(1).optional().describe('Rename the task goal. Only allowed while the task is still pending — throws if the task is active, completed, or abandoned.'),
   ...GateFields,
@@ -78,7 +78,7 @@ export const AddItemSchema = z.object({
   action: z.object({
     category: z.string().min(1).describe('Action category, e.g. "email.send". Reuse one from known_categories in the brief when it fits the action; invent a new one only for a different kind of action. Its autonomy mode is in the brief.'),
     summary: z.string().min(1).describe('One line the human will read when approving, e.g. "Send reply confirming Thursday 2pm"'),
-    params: z.record(z.unknown()).optional().describe('Exact details needed to carry the action out later (ids, draft id, labels)'),
+    params: z.record(z.string(), z.unknown()).optional().describe('Exact details needed to carry the action out later (ids, draft id, labels)'),
   }).optional().describe(
     'An action this item is about. "propose" categories create an item that waits for human approval; "auto" categories record an action you already took; "off" categories are refused.'),
   status: z.enum(['pending', 'active']).optional().describe('For items without an action (default pending)'),
@@ -109,18 +109,18 @@ const PinnedFlag = z.boolean().optional().describe('true when the memory changed
 
 const StepsSchema = z.array(z.object({
   tool: z.string().trim().min(1),
-  input: z.record(z.unknown()).optional().describe('May use {{name}} for a value an earlier step picked'),
-  pick: z.record(z.union([z.object({ regex: z.string() }), z.object({ json: z.string() })])).optional().describe('Name to {regex: "one group"} or {json: "a.b[0]"} over this step answer text, for later inputs as {{name}}'),
+  input: z.record(z.string(), z.unknown()).optional().describe('May use {{name}} for a value an earlier step picked'),
+  pick: z.record(z.string(), z.union([z.object({ regex: z.string() }), z.object({ json: z.string() })])).optional().describe('Name to {regex: "one group"} or {json: "a.b[0]"} over this step answer text, for later inputs as {{name}}'),
   expect: z.string().optional().describe('A regular expression this step answer text must match; an answer that does not is a failed check, so a problem the tool answers as plain text is not read as "nothing new"'),
   retry: z.number().int().min(1).max(5).optional().describe('Tries in all, 1 to 5: when this step errors, misses expect or a pick, wait about 2 s and call it again (a page still loading); only this step repeats, and the waits count toward the 30 s limit'),
 })).min(1).max(4).describe('Instead of tool + input: up to 4 read-only calls in order (e.g. a browser navigate, then get_page_text with {{tabId}}); the last answer is read with match')
-const FinallySchema = z.object({ tool: z.string().trim().min(1), input: z.record(z.unknown()).optional() }).describe('With steps: a call that always runs after them, even after a failure (e.g. close the tab)')
+const FinallySchema = z.object({ tool: z.string().trim().min(1), input: z.record(z.string(), z.unknown()).optional() }).describe('With steps: a call that always runs after them, even after a failure (e.g. close the tab)')
 
 export const ProposeWatchSchema = z.object({
   name: z.string().min(1).describe('A short name for the watch; an existing name means replacing that watch'),
   command: z.string().optional().describe('A shell command whose output lines are what to watch (give this or tool)'),
   tool: z.string().optional().describe('An mcp__ connector tool to call instead of a command (read-only)'),
-  input: z.record(z.unknown()).optional().describe("The tool's input"),
+  input: z.record(z.string(), z.unknown()).optional().describe("The tool's input"),
   steps: StepsSchema.optional(),
   finally: FinallySchema.optional(),
   match: z.string().optional().describe("A regular expression: the tool's answer lines that count, or for a command the output lines that count"),
@@ -157,7 +157,7 @@ export const EndRunSchema = z.object({
     repo: z.string().describe('owner/name on GitHub'),
     number: z.number().int().positive().describe('The pull request or issue number'),
     holds_while: z.array(z.string()).min(1).describe('The states for which the status still holds: OPEN, CLOSED, MERGED (MERGED only for github_pr)'),
-    otherwise: z.record(z.union([z.string(), z.object({
+    otherwise: z.record(z.string(), z.union([z.string(), z.object({
       status: z.string().describe('The new status text'),
       tone: StatusToneSchema.optional().describe('Its tone; left out, the status keeps its current tone'),
     })])).optional().describe('What the status becomes for other states: plain text (the tone stays) or {status, tone}, e.g. {"MERGED": {"status": "PR #12 merged", "tone": "ok"}, "CLOSED": {"status": "PR #12 closed", "tone": "problem"}}; any other state shows the status as stale'),
@@ -270,7 +270,13 @@ export const FailRunSchema = z.object({
 export const GuardCheckSchema = z.object({
   run_id: z.string(),
   tool_name: z.string().describe('The tool the run agent is about to call'),
-  input: z.record(z.unknown()).optional().describe("The call's command and path fields, for the rule on Quarterdeck's own data"),
+  input: z.record(z.string(), z.unknown()).optional().describe("The call's command and path fields, for the rule on Quarterdeck's own data"),
+})
+
+export const RunRefusedSchema = z.object({
+  run_id: z.string(),
+  tool_name: z.string().describe('The tool Claude Code refused'),
+  input: z.record(z.unknown()).optional().describe("The call's command and path fields, to match the goal's command rules"),
 })
 
 const GoalScheduleSchema = z.union([
@@ -286,7 +292,7 @@ const GoalScheduleSchema = z.union([
 const WatchSchema = z.object({
   command: z.string().trim().min(1).optional().describe('A shell command, run in the goal\'s directory, that prints one line per current item (an issue number, a feed entry\'s id). Lines not seen before start a run; the first check only records what is there. Must exit 0'),
   tool: z.string().trim().min(1).optional().describe('Instead of a command: a connector or MCP tool (mcp__…) that only reads, called by the session that runs goals, e.g. a mail search'),
-  input: z.record(z.unknown()).optional().describe("The tool's arguments"),
+  input: z.record(z.string(), z.unknown()).optional().describe("The tool's arguments"),
   steps: StepsSchema.optional(),
   finally: FinallySchema.optional(),
   match: z.string().optional().describe('A regular expression over the tool\'s answer; each match (its first group) is one line. Left out: every "id" in a JSON answer. For a command: only the output lines it matches count (whole lines, before the line cap)'),
@@ -310,11 +316,11 @@ export const CreateGoalSchema = z.object({
   objective: z.string().trim().min(1),
   working_dir: z.string().min(1).describe('Where its runs work'),
   instructions: z.string().optional(),
-  autonomy: z.record(z.enum(['off', 'propose', 'auto'])).optional().describe('Category → off | propose | auto'),
-  tool_map: z.record(z.string()).optional().describe('Tool name pattern → category'),
+  autonomy: z.record(z.string(), z.enum(['off', 'propose', 'auto'])).optional().describe('Category → off | propose | auto'),
+  tool_map: z.record(z.string(), z.string()).optional().describe('Tool name pattern → category'),
   schedule: GoalScheduleSchema.optional().describe('When it runs on its own; left out or null, on demand'),
   one_off: z.boolean().optional().describe('Runs once now; done when its run leaves nothing open'),
-  watches: z.record(WatchSchema).optional().describe('Watch name → what it checks: a run starts when a watch sees something new'),
+  watches: z.record(z.string(), WatchSchema).optional().describe('Watch name → what it checks: a run starts when a watch sees something new'),
   model: z.string().nullable().optional().describe("The model its runs use: haiku, sonnet, opus or a full model id; left out or null, the model of the session that starts each run"),
 })
 
@@ -355,12 +361,12 @@ export const UpdateGoalSchema = z.object({
   instructions: z.string().optional().describe('Standing instructions; "" clears them'),
   instructions_edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).optional()
     .describe('Replacements in the current instructions, applied in order: each old must appear exactly once. Not with instructions'),
-  autonomy: z.record(Mode.nullable()).optional().describe('Category → off | propose | auto; null removes the category'),
-  tool_map: z.record(z.string().nullable()).optional().describe('Tool name pattern → category; null removes the rule'),
-  merge_categories: z.record(z.string().trim().min(1)).optional().describe('Old action category → the category to merge it into: past items, autonomy and tool rules take the new name, so earlier approvals count toward the Switch to auto suggestion'),
+  autonomy: z.record(z.string(), Mode.nullable()).optional().describe('Category → off | propose | auto; null removes the category'),
+  tool_map: z.record(z.string(), z.string().nullable()).optional().describe('Tool name pattern → category; null removes the rule'),
+  merge_categories: z.record(z.string(), z.string().trim().min(1)).optional().describe('Old action category → the category to merge it into: past items, autonomy and tool rules take the new name, so earlier approvals count toward the Switch to auto suggestion'),
   add_memory: z.array(z.object({ kind: z.enum(['fact', 'rule', 'preference']), text: z.string().trim().min(1), pinned: z.boolean().optional() })).optional(),
   forget_memory: z.array(z.string()).optional().describe('Memory ids to forget'),
-  watches: z.record(WatchSchema.nullable()).optional().describe('Watch name → what it checks; null removes the watch. A run starts when a watch sees something new'),
+  watches: z.record(z.string(), WatchSchema.nullable()).optional().describe('Watch name → what it checks; null removes the watch. A run starts when a watch sees something new'),
   status: z.enum(['active', 'paused']).optional(),
   model: z.string().nullable().optional().describe("The model its runs use: haiku, sonnet, opus or a full model id; null: the model of the session that starts each run"),
   min_watch_gap_minutes: z.number().int().min(0).max(1440).optional().describe("Minutes after a watch-started run before watch news starts another (0: none): news in between waits and shares the next run; an urgent watch's still starts one"),
@@ -408,7 +414,7 @@ const TaskSpecSchema = z.object({
   goal: z.string().min(1).describe('What this task should accomplish'),
   status: z.enum(['active', 'pending']).default('pending').describe('Initial status'),
   depends_on: z.array(z.string()).optional().describe('Sibling task IDs that must complete first'),
-  initial_state: z.record(z.unknown()).optional().describe('Freeform starting state (default {})'),
+  initial_state: z.record(z.string(), z.unknown()).optional().describe('Freeform starting state (default {})'),
   ...GateFields,
 })
 

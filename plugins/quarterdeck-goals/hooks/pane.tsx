@@ -20,7 +20,7 @@ import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '..
 import { answerItem, approve, baseUrl, clearRunHold, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
-import { ago, allowRules, allowRulesPrompt, clip, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
+import { ago, allowRules, allowRulesPrompt, clip, lastRefusals, refusalText, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
 import { connectRemote, markActive } from './alerts'
 import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
@@ -759,6 +759,7 @@ function details($: Engine, e: E, view: View, g: GoalCard) {
     <Box key={`details-${g.id}`} flexDirection="column" marginTop={1}>
       {clippedText($, e, view, `objective:${g.id}`, `objective-${g.id}`, g.objective, 0)}
       {factsLine($, e, view, g)}
+      {lastRefusals(g).map((c, i) => <Text key={`refused-${g.id}-${i}`} color="yellow">{refusalText(c)}</Text>)}
       {watchSection($, e, view, g)}
       {allowSection($, e, view, g)}
 

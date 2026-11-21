@@ -6,7 +6,7 @@ import { createGoal, listGoals, purgeDate, getGoalItems, listRuns, GoalError, se
 import { recordEvent } from '@/lib/event-log'
 import { ok, err, serverError, refuseIfOutdated } from '@/lib/api-utils'
 
-const AutonomySchema = z.record(z.enum(['off', 'propose', 'auto']))
+const AutonomySchema = z.record(z.string(), z.enum(['off', 'propose', 'auto']))
 
 const CreateGoalSchema = z.object({
   name: z.string().trim().min(1),

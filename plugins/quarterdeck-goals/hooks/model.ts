@@ -25,7 +25,7 @@ export type OverviewGoal = {
   open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
   activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string }; detail?: string; untrusted?: string }
-  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null }[]
+  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
   needs_you_count?: number
@@ -82,7 +82,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     openItemCount: g.open_item_count,
     // step: the part of the job the run says it is on (run_step, #146); then activity.text is that step
     openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status, step: g.open_run.step ?? null } : null,
-    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null })),
+    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
@@ -260,7 +260,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Open items${g.openItemCount > g.openItems.length ? ` (first ${g.openItems.length} of ${g.openItemCount})` : ''}:\n${g.openItems.map((i) => `- item ${i.id}: ${i.title}`).join('\n')}`
       : null,
     g.runs.length > 0
-      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
+      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
       : null,
     g.instructions.trim() ? `Instructions: ${g.instructions.trim()}` : null,
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
@@ -566,10 +566,13 @@ const OWN_SERVER_PREFIXES = ['mcp__plugin_quarterdeck-goals_quarterdeck__', 'mcp
  * adds these themselves. A tool rule Claude Code can't take as an allow rule
  * (a glob outside `mcp__<server>__`, such as `mcp__*`, or a shell rule
  * commandAllowRule refuses, such as `Bash(git -C * push*)`) is listed in `skipped`.
+ * With the goal's runs, the rules its last finished run was refused for are added
+ * too (#145): an approved proposal's tool, say, which no auto rule covers.
  */
-export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'>): { rules: string[]; skipped: string[] } {
+export function allowRules(g: Pick<GoalCard, 'autonomy' | 'toolMap'> & Partial<Pick<GoalCard, 'runs'>>): { rules: string[]; skipped: string[] } {
   const rules = new Set<string>()
   const skipped: string[] = []
+  for (const c of lastRefusals(g)) if (c.rule) rules.add(c.rule)
   for (const [pattern, category] of Object.entries(g.toolMap)) {
     if (g.autonomy[category] !== 'auto') continue
     const own = OWN_SERVER_PREFIXES.find((p) => pattern.startsWith(p))
@@ -603,6 +606,18 @@ export function commandAllowRule(pattern: string): boolean {
   if (star < 0) return true
   const words = m[1].slice(0, star).trim().split(/\s+/).filter(Boolean)
   return words.length >= 2 && words.slice(1).some((w) => !w.startsWith('-'))
+}
+
+/** The calls Claude Code refused in the goal's last finished run, though the guard allowed them (#145). */
+export function lastRefusals(g: Partial<Pick<GoalCard, 'runs'>>): { tool: string; rule: string | null }[] {
+  return g.runs?.find((r) => r.status !== 'queued' && r.status !== 'running')?.refused ?? []
+}
+
+/** One refused call as the pane and goal_detail say it: the allow rule to add, or that none can be. */
+export function refusalText(c: { tool: string; rule: string | null }): string {
+  return c.rule
+    ? `Claude Code refused ${c.tool}: add allow rule ${c.rule}`
+    : `Claude Code refused ${c.tool}: its tool rule can't be an allow rule, so Claude Code asks each time`
 }
 
 /** The prompt behind the pane's "Ask Claude to add them": Claude shows the change and waits for a yes. */

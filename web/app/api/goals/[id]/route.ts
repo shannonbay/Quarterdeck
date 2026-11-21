@@ -54,7 +54,7 @@ const PatchSchema = z.object({
   objective: z.string().trim().min(1).optional(),
   instructions: z.string().optional(),
   status: z.enum(['active', 'paused', 'retired']).optional(),
-  autonomy: z.record(z.enum(['off', 'propose', 'auto'])).optional(),
+  autonomy: z.record(z.string(), z.enum(['off', 'propose', 'auto'])).optional(),
   limits: z.object({
     max_run_minutes: z.number().int().min(1).max(120),
     max_items_per_run: z.number().int().min(1).max(500),

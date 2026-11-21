@@ -5,14 +5,14 @@
  * (see plugins/quarterdeck-goals/hooks/guard.ts); agents use the goal tools.
  */
 import {
-  schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun,
+  schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, RunRefusedSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
 import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
@@ -153,6 +153,19 @@ export async function fail_run(args: unknown) {
 export async function guard_check(args: unknown) {
   const input = GuardCheckSchema.parse(args)
   return guardToolCallForRun(input.run_id, input.tool_name, input.input)
+}
+
+/**
+ * The guard plugin reports a goal run's call that Claude Code refused (its PermissionDenied
+ * hook). Recorded, with the allow rule it needs, only when the guard would have allowed it (#145).
+ */
+export async function run_refused(args: unknown) {
+  const input = RunRefusedSchema.parse(args)
+  const refused = recordRefusal(input.run_id, input.tool_name, input.input)
+  const run = refused ? getRun(input.run_id) : null
+  if (!refused || !run) return { recorded: false }
+  record(run.plan_id, run.plan_id, 'tool_refused', { run_id: run.id, tool_name: input.tool_name, category: refused.category, rule: refused.rule }, { via: 'plugin' })
+  return { recorded: true, ...refused }
 }
 
 export async function create_goal(args: unknown) {

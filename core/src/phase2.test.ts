@@ -8,7 +8,7 @@ import {
   parseCron, cronNext, getSchedule, setSchedule, nextScheduledRun, decideTick,
   enableEventTrigger, disableEventTrigger, verifyEventSecret,
   runHealthCheck, listHealth, healthDue, parseHealthValue, buildBrief,
-  matchToolCategory, commandParts, guardToolCallForRun, listToolCalls, standingAllowRules, usableAsAllowRule, commandAllowRule, readsUntrusted, getRun,
+  matchToolCategory, commandParts, guardToolCallForRun, recordRefusal, refusedCalls, listToolCalls, standingAllowRules, usableAsAllowRule, commandAllowRule, readsUntrusted, getRun,
   insertMemory, updateMemory, markRunUntrusted, updateRun, MEMORY_BRIEF_CHARS,
   touchesQuarterdeckData, quarterdeckDataPaths, QUARTERDECK_DATA_CATEGORY,
 } from './index.js'
@@ -152,6 +152,40 @@ describe('goal guard', () => {
     expect(guardToolCallForRun(db, 'run_other', 'mcp__gmail__send_message')).toEqual({ decision: 'allow' })
     const run = startRun()
     expect(guardToolCallForRun(db, run.id, 'Bash').decision).toBe('allow')
+  })
+
+  it('records a call Claude Code refused only when the guard would have allowed it, with the allow rule it needs (#145)', () => {
+    updateGoal(db, 'g1', {
+      tool_map: { ...MAP, 'Bash(git push*)': 'code.pull_request', 'Bash(git -C * push*)': 'code.pull_request', 'Bash(gh issue view*)': 'untrusted' },
+      autonomy: { 'email.archive': 'auto', 'email.delete': 'off', 'email.send': 'propose', 'code.pull_request': 'auto' },
+    })
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    expect(recordRefusal(db, 'run_other', 'mcp__gmail__archive_thread')).toBeNull() // not a goal run
+    expect(recordRefusal(db, run.id, 'Read')).toBeNull() // maps to nothing
+    expect(recordRefusal(db, run.id, 'Bash', { command: 'gh issue view 1' })).toBeNull() // an untrusted read
+    expect(recordRefusal(db, run.id, 'mcp__gmail__delete_message')).toBeNull() // off: the guard refuses it itself
+    expect(recordRefusal(db, run.id, 'mcp__gmail__send_message')).toBeNull() // propose, not approved
+    expect(recordRefusal(db, run.id, 'mcp__gmail__archive_thread')).toEqual({ category: 'email.archive', rule: 'mcp__gmail__archive_thread' })
+    const pushCmd = ['git', 'push', 'origin', 'x'].join(' ')
+    expect(recordRefusal(db, run.id, 'Bash', { command: pushCmd })).toEqual({ category: 'code.pull_request', rule: 'Bash(git push*)' })
+    const pushInRepo = ['git', '-C', 'repo', 'push'].join(' ')
+    expect(recordRefusal(db, run.id, 'Bash', { command: pushInRepo })).toEqual({ category: 'code.pull_request', rule: null }) // a rule Claude Code warns about
+    const item = addItem(db, 'g1', run.id, { goal: 'Reply', action: { category: 'email.send', summary: 'send' } }).task
+    approveTask(db, 'g1', item.id)
+    expect(recordRefusal(db, run.id, 'mcp__gmail__send_message')).toEqual({ category: 'email.send', rule: 'mcp__gmail__send_message' })
+    const refused = listToolCalls(db, 'g1').filter((c) => c.decision === 'refused')
+    expect(refused.map((c) => c.reason)).toEqual(['mcp__gmail__send_message', null, 'Bash(git push*)', 'mcp__gmail__archive_thread'])
+    // The overview carries them per run, one per tool and rule, oldest first
+    recordRefusal(db, run.id, 'mcp__gmail__archive_thread')
+    expect(refusedCalls(db, run.id)).toEqual([
+      { tool: 'mcp__gmail__archive_thread', rule: 'mcp__gmail__archive_thread' },
+      { tool: 'Bash', rule: 'Bash(git push*)' },
+      { tool: 'Bash', rule: null },
+      { tool: 'mcp__gmail__send_message', rule: 'mcp__gmail__send_message' },
+    ])
+    // After an untrusted read, an auto category needs approval, so a refusal of it isn't the guard's to report
+    markRunUntrusted(db, run.id, 'WebFetch')
+    expect(recordRefusal(db, run.id, 'mcp__gmail__archive_thread')).toBeNull()
   })
 
   it('denies off categories and allows auto ones', () => {

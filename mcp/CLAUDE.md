@@ -50,6 +50,8 @@ scripts/bundle.mjs
 
 The server reads the `release` branch's plugin.json from GitHub (at most every 6 hours, in the background, never from a checkout, off with `QUARTERDECK_UPDATE_CHECK=0`) and `goals_overview` carries `update: { installed, latest }` when it is newer, folded into the etag. The pane shows it with "Ask Claude to install it" (`updatePrompt` in `hooks/model.ts`, sent with `sendToChat`). When Claude Code has already installed a newer version on disk (auto-update, or an update from another session) than the server runs, `update` has `ready: true` (`versionOnDisk` reads `installed_plugins.json` in `CLAUDE_CONFIG_DIR` or `~/.claude`) and the pane offers **Reload now** instead, which runs `/reload-plugins` with `$.command.run` (built-ins are in `$.command.list()`; the run waits until the session is idle), else a toast says to type it; the `outdated` notice has the same button. Never reload without the person's press: a goal run's agent may be working.
 
+The server is also listed on its own in the official MCP Registry (`io.github.shannonbay/quarterdeck`, an MCPB bundle on each GitHub release: `mcpb/manifest.json`, packed by `scripts/mcpb.mjs`). Run that way it is only the MCP tools over the database: no scheduled runs, guard or Goals pane, which come from the plugins. Its update check finds no `installed_plugins.json` entry, so it stays quiet.
+
 ## Tests
 
 Tests live in `src/tests/`. `vitest.config.ts` sets `QUARTERDECK_DB=:memory:`. Each test gets a clean slate via `beforeEach` in `src/tests/setup.ts`. Call tool handlers directly as async functions — no MCP transport needed.

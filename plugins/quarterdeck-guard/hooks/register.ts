@@ -101,7 +101,7 @@ async function runIdFor($: Engine, agentId: string | undefined): Promise<string 
  */
 let guardCallsInFlight = 0
 /** The person-only tools this plugin itself calls, inside a run's loop. */
-const OWN_CALLS = new Set(['guard_check', 'report_run_end', 'run_progress'])
+const OWN_CALLS = new Set(['guard_check', 'report_run_end', 'run_progress', 'run_refused'])
 
 type Verdict = { decision: 'allow' | 'deny'; category?: string; reason?: string }
 
@@ -346,6 +346,20 @@ export const register: Register = (on) => {
   on('classic.PermissionRequest', async ($, e, next) => {
     const runId = await runIdFor($, e.agent_id)
     if (runId) void reportProgress($, runId, 'waiting', toolLabel(e.tool_name, e.tool_input))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Claude Code (auto mode) refused a run's call before it reached tool.call: Quarterdeck
+  // records it when its guard would have allowed the call, with the allow rule it needs,
+  // so the pane and goal_detail can say so (#145). The event always passes on as it came.
+  on('classic.PermissionDenied', async ($, e, next) => {
+    const runId = await runIdFor($, e.agent_id)
+    if (runId) {
+      guardCallsInFlight++
+      void callServer($, 'run_refused', { run_id: runId, tool_name: e.tool_name, ...(() => { const input = callInput(e.tool_input); return Object.keys(input).length ? { input } : {} })() })
+        .catch(() => {})
+        .finally(() => { guardCallsInFlight-- })
+    }
     return next(e)
   }).catch(($, e, next) => next(e))
 

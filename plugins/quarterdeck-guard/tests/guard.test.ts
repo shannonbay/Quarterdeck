@@ -247,3 +247,24 @@ test("a run's calls are reported for the Goals pane, and a call put to the perso
     { run_id: 'run_abc123', event: 'settled', label: 'notes send' },
   ])
 })
+
+test("a run's call refused by Claude Code is reported to Quarterdeck; other agents' are not, and the event goes on", async ($, on) => {
+  world(on)
+  const refusals: unknown[] = []
+  on('tool.call', { tool: 'mcp__quarterdeck__run_refused' }, (_, e) => {
+    const { run_id, tool_name, input } = e as unknown as Record<string, unknown>
+    refusals.push({ run_id, tool_name, input })
+    return { result: '{"recorded":true}' } as never
+  })
+  const seen: unknown[] = []
+  on('classic.PermissionDenied', (_, e) => { seen.push(e.tool_name); return e as never })
+  await $.session.start(START)
+  const denied = (agent_id: string | undefined) =>
+    $.classic.PermissionDenied({ agent_id, tool_name: 'Bash', tool_input: { command: 'git push origin x', description: 'Push' }, tool_use_id: 'tu1', reason: 'auto mode' } as never)
+  await denied('run-agent')
+  await denied('model-agent')
+  await denied(undefined)
+  await new Promise((r) => setTimeout(r, 20))
+  expect(refusals).toEqual([{ run_id: 'run_abc123', tool_name: 'Bash', input: { command: 'git push origin x' } }])
+  expect(seen).toEqual(['Bash', 'Bash', 'Bash'])
+})
