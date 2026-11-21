@@ -72,6 +72,7 @@ export function GoalView({ goalId }: { goalId: string }) {
   const [data, setData] = useState<GoalData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [prompt, setPrompt] = useState<string | null>(null) // Run with a prompt… box, null while closed
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/goals/${goalId}`)
@@ -153,6 +154,10 @@ export function GoalView({ goalId }: { goalId: string }) {
               <button onClick={() => call('run', `/api/goals/${goalId}/run`)} disabled={busy !== null || goal.status !== 'active' || open_run !== null}
                 className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50">{busy === 'run' ? 'Queuing…' : 'Run now'}</button>
             )}
+            {open_run?.status !== 'running' && prompt === null && (
+              <button onClick={() => setPrompt('')} disabled={busy !== null || goal.status !== 'active'}
+                className="px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">Run with a prompt…</button>
+            )}
             <button onClick={() => patch({ status: goal.status === 'active' ? 'paused' : 'active' }, 'status')} disabled={busy !== null}
               className="px-3 py-1.5 text-sm border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
               {goal.status === 'active' ? 'Pause' : 'Resume'}
@@ -160,6 +165,20 @@ export function GoalView({ goalId }: { goalId: string }) {
             </>}
           </div>
         </div>
+        {prompt !== null && !goal.deleted_at && (
+          <form className="mt-3 flex flex-col gap-2" onSubmit={async (e) => {
+            e.preventDefault()
+            if (await call('run-prompt', `/api/goals/${goalId}/run`, { method: 'POST', body: JSON.stringify({ prompt }) })) setPrompt(null)
+          }}>
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} autoFocus
+              placeholder="What should this run do or look at? It's for this one run and isn't kept as memory."
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg" />
+            <div className="flex gap-2">
+              <button disabled={busy !== null || !prompt.trim()} className="px-3 py-1.5 text-sm bg-gray-900 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50">{busy === 'run-prompt' ? 'Queuing…' : 'Run'}</button>
+              <button type="button" onClick={() => setPrompt(null)} className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-800">Cancel</button>
+            </div>
+          </form>
+        )}
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-8">
@@ -208,6 +227,7 @@ export function GoalView({ goalId }: { goalId: string }) {
                       <span className="text-gray-500">{r.trigger}</span>
                       <span className="text-gray-400 ml-auto">{when(r.started_at)}</span>
                     </div>
+                    {r.request && <p className="text-xs text-gray-600 mt-1 whitespace-pre-wrap">Asked{r.request_untrusted ? ' (untrusted, from a tool call you did not see)' : ''}: {r.request}</p>}
                     {r.status === 'skipped' ? <p className="text-xs text-gray-500 mt-1">{r.skip_reason}</p>
                       : r.summary && <p className="text-gray-700 mt-1 whitespace-pre-wrap">{r.summary}</p>}
                     {r.untrusted_source && <p className="text-xs text-amber-700 mt-1">Read outside content ({r.untrusted_source}): auto actions needed approval</p>}

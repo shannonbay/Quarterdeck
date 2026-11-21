@@ -630,7 +630,7 @@ function proposalRow($: Engine, e: E, view: View, g: GoalCard, item: GoalCard['n
 }
 
 function controls($: Engine, e: E, view: View, g: GoalCard) {
-  const { Box, Text, Button } = parts($, e)
+  const { Box, Text, Button, Input } = parts($, e)
   const isCancelling = view.pending?.kind === 'cancel-run' && view.pending.goalId === g.id
   const isDeleting = view.pending?.kind === 'delete-goal' && view.pending.goalId === g.id
 
@@ -672,6 +672,23 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     )
   }
 
+  // Run with a prompt… (#143): what the person types goes to this one run as run.request, trusted, not to memory
+  const promptKey = `prompt-${g.id}`
+  if (view.open === promptKey && Input && canRun(g)) {
+    const send = (text: string) => {
+      if (!text.trim()) return
+      void act($, `run:${g.id}`, 'start the run', () => runNow($, g.id, text.trim())).then((ok) => {
+        if (ok) void setRejecting($, null)
+      })
+    }
+    return (
+      <Box key={`controls-${g.id}`} flexDirection="column" marginTop={1}>
+        <Input key={`prompt-input-${g.id}`} label="What should this run do or look at? (for this run only, not kept as memory)" submitLabel="Run" autoFocus onSubmit={send} />
+        {action($, e, { key: `prompt-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
+      </Box>
+    )
+  }
+
   // The buttons that apply, joined by dots so they don't read as one phrase
   const buttons: RenderChildren[] = []
   const run = lastRun(g)
@@ -688,6 +705,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
   if (canRun(g)) {
     buttons.push(
       action($, e, { key: `run-${g.id}`, label: view.doing === `run:${g.id}` ? 'Starting…' : 'Run now', hotkey: view.runnable === g.id ? 'n' : undefined, onPress: () => void act($, `run:${g.id}`, 'start the run', () => runNow($, g.id)) }),
+      action($, e, { key: `run-prompt-${g.id}`, label: 'Run with a prompt…', onPress: () => void setRejecting($, promptKey) }),
     )
   }
   if (g.openRun) {
