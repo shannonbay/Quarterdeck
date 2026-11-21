@@ -48,6 +48,8 @@ import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
 import { autonomyFor } from './goal-engine.js'
 import { getGoal, getRun, markRunUntrusted, newId } from './goals.js'
+import { consumeGuardedCheck, hasUnusedGuardedCheck } from './guarded.js'
+import { readFileSync } from 'fs'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
 
 export type GuardDecision =
@@ -254,6 +256,11 @@ function record(db: Database, run: GoalRun, toolName: string, category: string, 
  * call's input (the plugin sends the command and path fields), for the rule on
  * Quarterdeck's own data.
  */
+/** Recorded as the reason on a call the guard let through after outside content because the person allowed it (#159). */
+export const AFTER_OUTSIDE_NOTE = 'went through after outside content because you allowed it (checked by guarded_run)'
+
+const readStaged = (path: string): Buffer | null => { try { return readFileSync(path) } catch { return null } }
+
 export function guardToolCallForRun(
   db: Database, runId: string, toolName: string,
   input?: Record<string, unknown>, paths: QuarterdeckDataPaths = quarterdeckDataPaths(),
@@ -266,6 +273,20 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   const goal = getGoal(db, run.plan_id)
   if (!goal) return { decision: 'allow' }
   const workingDir = (db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string } | undefined)?.working_dir ?? process.cwd()
+  // A category the person let stay auto after outside content (#159): a command guarded_run checked and
+  // staged (naming its copies in the data folder) goes through once, made exactly as it was returned
+  const command = SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' ? input.command : null
+  const listed = matchToolCategory(goal.tool_map, toolName, input)
+  let guardedMiss: string | null = null
+  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === 'auto'
+    && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command)) {
+    const match = consumeGuardedCheck(db, run.id, listed, command, readStaged)
+    if (match.ok) {
+      record(db, run, toolName, listed, 'allow', AFTER_OUTSIDE_NOTE)
+      return { decision: 'allow', category: listed, run_id: run.id }
+    }
+    guardedMiss = match.reason
+  }
   const touched = touchesQuarterdeckData(toolName, input, workingDir, paths)
   if (touched !== null) {
     const reason = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`
@@ -288,6 +309,9 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     record(db, run, toolName, category, 'allow', null)
     return { decision: 'allow', category, run_id: run.id }
   }
+  if (guardedMiss === null && mode === 'auto' && goal.auto_after_outside.includes(category)) {
+    guardedMiss = 'this call was not staged by guarded_run'
+  }
   if (mode === 'off') {
     const reason = `Quarterdeck goal guard: "${category}" is off for this goal, so ${toolName} is not allowed. Don't take or propose this action.`
     record(db, run, toolName, category, 'deny', reason)
@@ -306,8 +330,9 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     return { decision: 'allow', category, run_id: run.id }
   }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`
+  const guardedHow = guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : ''
   const reason = untrusted !== null
-    ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it. ${how}`
+    ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it.${guardedHow} ${how}`
     : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`
   record(db, run, toolName, category, 'deny', reason)
   return { decision: 'deny', category, run_id: run.id, reason }

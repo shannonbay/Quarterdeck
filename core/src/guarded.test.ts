@@ -1,6 +1,71 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
-import { openDatabase, createGoal, checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck } from './index.js'
+import { mkdtempSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import {
+  openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE,
+  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck,
+} from './index.js'
+
+describe('guardRun with auto_after_outside (#159)', () => {
+  let db: Database
+  let dir: string
+  const now = new Date().toISOString()
+  const paths = { dirs: ['/nowhere/qd-data'], db: null }
+
+  beforeEach(() => {
+    db = openDatabase(':memory:')
+    dir = mkdtempSync(join(tmpdir(), 'qd-guarded-'))
+    createGoal(db, { id: 'g1', name: 'G', description: null, status: 'active', working_dir: '/tmp', created_at: now, updated_at: now }, { objective: 'o', instructions: '', autonomy: { 'gh.review': 'auto', 'gh.label': 'auto' } })
+    updateGoal(db, 'g1', { tool_map: { 'Bash(gh pr review*)': 'gh.review', 'Bash(gh issue edit*)': 'gh.label' }, auto_after_outside: ['gh.review'] })
+  })
+
+  const stage = (runId: string, category: string, command: string, body: string) => {
+    const path = join(dir, 'body.md')
+    writeFileSync(path, body)
+    recordGuardedCheck(db, { id: runId, plan_id: 'g1' }, category, command, [{ path, contents: body }])
+  }
+
+  it('a marked run: a listed category goes through once via a staged check; direct calls and unlisted categories need approval', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const path = join(dir, 'body.md')
+    const cmd = `gh pr review 1 --comment --body-file ${path}`
+    const call = (c: string) => guardToolCallForRun(db, run.id, 'Bash', { command: c }, paths)
+    expect(call(cmd)).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/not staged by guarded_run/) })
+    stage(run.id, 'gh.review', cmd, 'Looks good.')
+    expect(call(cmd)).toMatchObject({ decision: 'allow', category: 'gh.review' })
+    expect(listToolCalls(db, 'g1')[0]).toMatchObject({ decision: 'allow', reason: AFTER_OUTSIDE_NOTE })
+    expect(call(cmd)).toMatchObject({ decision: 'deny' })
+    const label = `gh issue edit 1 --body-file ${path}`
+    stage(run.id, 'gh.label', label, 'Hi')
+    expect(call(label)).toMatchObject({ decision: 'deny', category: 'gh.label' })
+  })
+
+  it('a staged file changed after the check: falls back to approval, naming why', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const path = join(dir, 'body.md')
+    const cmd = `gh pr review 1 --comment --body-file ${path}`
+    stage(run.id, 'gh.review', cmd, 'Looks good.')
+    writeFileSync(path, 'Something planted')
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, paths)).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/changed after guarded_run/) })
+  })
+
+  it('a staged command naming the data folder passes only through its check', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const file = join(dir, 'x.db')
+    const dataPaths = { dirs: ['/nowhere/qd-data'], db: file }
+    const cmd = `gh pr review 1 --comment --body-file ${file}`
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, dataPaths)).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/own data/) })
+    writeFileSync(file, 'Looks good.')
+    recordGuardedCheck(db, { id: run.id, plan_id: 'g1' }, 'gh.review', cmd, [{ path: file, contents: 'Looks good.' }])
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, dataPaths)).toMatchObject({ decision: 'allow' })
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }, dataPaths)).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/own data/) })
+  })
+})
 
 const env = { HOME: '/home/me', API_SECRET: 'hunter2hunter2', SHORT: 'abc' }
 

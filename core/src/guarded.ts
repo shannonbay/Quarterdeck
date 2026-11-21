@@ -117,3 +117,8 @@ export function consumeGuardedCheck(
   db.prepare('UPDATE guarded_checks SET used_at = ? WHERE id = ? AND used_at IS NULL').run(usedAt, check.id)
   return { ok: true, check: { ...check, used_at: usedAt } }
 }
+
+/** Whether the run holds an unused check for exactly this command, in any category (without using it). */
+export function hasUnusedGuardedCheck(db: Database, runId: string, command: string): boolean {
+  return db.prepare('SELECT 1 FROM guarded_checks WHERE run_id = ? AND command = ? AND used_at IS NULL LIMIT 1').get(runId, command) !== undefined
+}
