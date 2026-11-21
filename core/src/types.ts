@@ -144,6 +144,11 @@ export interface Goal {
   next_run_at: string | null
   /** Tool name pattern ("mcp__gmail__send*") → action category, enforced by the goal-guard hook. */
   tool_map: Record<string, string>
+  /**
+   * Categories the person chose to keep 'auto' after a run has read outside content, instead of
+   * falling back to 'propose'. Counts only while the category's mode is 'auto'. Only the person sets it.
+   */
+  auto_after_outside: string[]
   /** Goal-level check: a shell command that exits 0 when the goal is being met; the last number it prints is tracked as a trend. */
   health_command: string | null
   health_every_minutes: number

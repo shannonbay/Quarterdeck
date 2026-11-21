@@ -28,6 +28,11 @@ export interface GoalChanges {
   /** Tool name pattern → category; null removes the rule. */
   tool_map?: Record<string, string | null>
   /**
+   * Category → true to keep it auto after a run reads outside content, false to stop.
+   * Person-only: the guard refuses update_goal from a run.
+   */
+  auto_after_outside?: Record<string, boolean>
+  /**
    * Old category → the category to merge it into: past items' actions, the
    * autonomy setting and tool rules take the new name, so earlier approvals
    * count toward the "Switch to auto" suggestion.
@@ -73,6 +78,35 @@ export const MAX_WATCH_GAP_MINUTES = 1440
 
 const MODES = new Set(['off', 'propose', 'auto'])
 
+/** Whole tools that run or write anything: a rule naming one alone is broad. */
+const BROAD_TOOLS = new Set(['bash', 'powershell', 'edit', 'write', 'multiedit', 'notebookedit', '*'])
+/** Commands that push code or create or merge a pull request. */
+const PUSH_OR_PR = /\bgit\b.*\bpush\b|\bgh\s+pr\s+(create|merge)\b/i
+
+/** Whether a tool rule pushes code, creates or merges a pull request, or is broad (a whole tool or MCP server). */
+export function isRiskyToolRule(pattern: string): boolean {
+  const p = pattern.trim()
+  if (BROAD_TOOLS.has(p.toLowerCase())) return true
+  if (p.startsWith('mcp__') && p.endsWith('__*')) return true // every tool of an MCP server
+  return PUSH_OR_PR.test(p)
+}
+
+/**
+ * The tool rules that would make keeping `category` auto after outside content risky: ones that
+ * push code, create or merge a pull request, or are broad. A planted instruction could then push
+ * code or open a pull request without review. Shown as a warning; it doesn't refuse.
+ */
+export function autoAfterOutsideRisks(toolMap: Record<string, string>, category: string): string[] {
+  return Object.entries(toolMap).filter(([pattern, c]) => c === category && isRiskyToolRule(pattern)).map(([pattern]) => pattern)
+}
+
+/** The warning for turning on auto_after_outside for `category`, or null when its rules look narrow. */
+export function autoAfterOutsideWarning(toolMap: Record<string, string>, category: string): string | null {
+  const risky = autoAfterOutsideRisks(toolMap, category)
+  if (!risky.length) return null
+  return `${category} has tool rules that push code, create or merge a pull request, or are broad (${risky.join(', ')}): a planted instruction in outside content could then push code or open a pull request without review.`
+}
+
 /** Applies a set of changes the person confirmed. Returns one line per change made. */
 export function applyGoalChanges(db: Database, planId: string, changes: GoalChanges): string[] {
   const goal = getGoal(db, planId)
@@ -94,6 +128,10 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
   const gap = changes.min_watch_gap_minutes
   if (gap !== undefined && (!Number.isInteger(gap) || gap < 0 || gap > MAX_WATCH_GAP_MINUTES)) {
     throw new GoalError(`The gap between watch runs is whole minutes from 0 to ${MAX_WATCH_GAP_MINUTES}, not ${gap}.`)
+  }
+  for (const [category, on] of Object.entries(changes.auto_after_outside ?? {})) {
+    if (!category.trim()) throw new GoalError('Give a category name to keep auto after outside content.')
+    if (typeof on !== 'boolean') throw new GoalError(`Keeping ${category} auto after outside content is true or false, not ${JSON.stringify(on)}.`)
   }
   const edited = changes.instructions_edits?.length ? applyInstructionEdits(goal.instructions, changes.instructions_edits) : undefined
 
@@ -135,6 +173,24 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
       }
       updateGoal(db, planId, { tool_map: toolMap })
     }
+    if (changes.auto_after_outside && Object.keys(changes.auto_after_outside).length) {
+      const current = getGoal(db, planId)!
+      const list = new Set(current.auto_after_outside)
+      for (const [raw, on] of Object.entries(changes.auto_after_outside)) {
+        const category = raw.trim()
+        if (on === list.has(category)) continue
+        if (on) {
+          list.add(category)
+          const mode = current.autonomy[category] ?? 'propose'
+          const warning = autoAfterOutsideWarning(current.tool_map, category)
+          done.push(`${category}: auto, even after reading outside text${mode === 'auto' ? '' : ` (counts only while it is auto; it is ${mode})`}${warning ? `. Warning: ${warning}` : ''}`)
+        } else {
+          list.delete(category)
+          done.push(`${category}: back to propose after reading outside text`)
+        }
+      }
+      updateGoal(db, planId, { auto_after_outside: [...list] })
+    }
     for (const [rawFrom, rawTo] of Object.entries(changes.merge_categories ?? {})) {
       const from = rawFrom.trim(), to = rawTo.trim()
       const items = db.prepare(`UPDATE tasks SET state = json_set(state, '$.action.category', ?)
@@ -146,7 +202,8 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
         delete autonomy[from]
       }
       const toolMap = Object.fromEntries(Object.entries(current.tool_map).map(([pattern, c]) => [pattern, c === from ? to : c]))
-      updateGoal(db, planId, { autonomy, tool_map: toolMap })
+      const afterOutside = [...new Set(current.auto_after_outside.map((c) => (c === from ? to : c)))]
+      updateGoal(db, planId, { autonomy, tool_map: toolMap, auto_after_outside: afterOutside })
       done.push(`merged ${from} into ${to} (${items} ${items === 1 ? 'item' : 'items'})`)
     }
     for (const m of changes.add_memory ?? []) {
