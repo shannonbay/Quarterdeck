@@ -697,8 +697,18 @@ export type GoalChanges = {
   min_watch_gap_minutes?: number
 }
 
-/** A watch as update_goal takes it: a command to run, or a tool to call with its input. */
-export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** A watch as update_goal takes it: a command to run, a tool to call with its input, or steps (several calls in order). */
+export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; steps?: WatchStepChange[]; finally?: WatchCallChange; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** One call of a steps watch, and the clean-up call after them. */
+export type WatchCallChange = { tool: string; input?: Record<string, unknown> }
+export type WatchStepChange = WatchCallChange & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string; retry?: number }
+
+/** A steps watch's calls in order and its clean-up, as the person reads them before saying yes (core's describeWatch wording). */
+export function describeWatchSteps(steps: WatchStepChange[], last?: WatchCallChange): string {
+  const call = (c: WatchCallChange & Partial<WatchStepChange>) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
+  return `${steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${last ? `; finally ${call(last)}` : ''}`
+}
+
 /** Rules by which a watch sets the goal's status (and tone) from its lines, with no run. */
 export type WatchStatusOutcome = { status: string; tone?: 'ok' | 'attention' | 'problem'; run?: boolean }
 export type WatchStatusChange = { rules?: (WatchStatusOutcome & { match: string })[]; default?: WatchStatusOutcome }
@@ -767,6 +777,7 @@ export function describeGoalChanges(g: GoalCard, c: GoalChanges): string[] {
   for (const [name, w] of Object.entries(c.watches ?? {})) {
     const had = g.watches.some((x) => x.name === name.trim())
     if (w === null) lines.push(`Watch removed: ${name}`)
+    else if (w.steps?.length) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min these tools are called in order without asking you, and a run starts when ${w.fires === 'change' ? 'the last answer changes' : "the last answer has something it hasn't before"}: ${describeWatchSteps(w.steps, w.finally)}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else if (w.tool) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this tool is called without asking you, and a run starts when ${w.fires === 'change' ? 'its answer changes' : "its answer has something it hasn't before"}: ${w.tool} ${JSON.stringify(w.input ?? {})}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this command runs on your computer, and a run starts when ${w.fires === 'change' ? 'its output changes' : "it prints a line it hasn't before"}: ${w.command ?? ''}${w.match ? ` (only lines matching ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
   }

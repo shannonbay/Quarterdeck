@@ -100,6 +100,17 @@ test('update_goal applies confirmed changes', async ($, on) => {
   expect(fake.of('update_goal')[0]?.input).toEqual({ goal_id: 'g1', autonomy: { 'email.delete': 'off' } })
 })
 
+test('update_goal passes a steps watch and its clean-up call to the server unchanged (#183)', async ($, on) => {
+  const { asked } = engine(on, { answer: 'Apply changes' })
+  const fake = fakeQuarterdeck(on, [failed()])
+  await $.session.start(START)
+  const watch = { steps: [{ tool: 'browser_navigate', input: { url: 'https://example.com' }, pick: { tab: { regex: 'tab (\d+)' } } }, { tool: 'browser_text', input: { tab: '{{tab}}' }, expect: 'Results', retry: 2 }], finally: { tool: 'browser_close', input: { tab: '{{tab}}' } }, every_minutes: 30 }
+  await $.tool.call({ tool: 'mcp__quarterdeck-goals__update_goal', goal: 'unsub', watches: { results: watch } } as never)
+  expect(fake.of('update_goal')[0]?.input).toEqual({ goal_id: 'g1', watches: { results: watch } })
+  expect(asked.join(' ')).toContain('1. browser_navigate')
+  expect(asked.join(' ')).toContain('finally browser_close')
+})
+
 test('update_goal takes edits to part of the instructions, shows just those, and refuses one that would miss', async ($, on) => {
   const asked = engine(on, { answer: 'Apply changes' })
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Unsubscribe', instructions: 'Find stale senders. Propose one item per sender. Never send mail.' })])
