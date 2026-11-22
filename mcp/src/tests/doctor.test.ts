@@ -206,6 +206,27 @@ describe('doctor', () => {
   })
 })
 
+describe('checkUnmappedNetwork', () => {
+  it('lists network commands a goal run reached that its map does not name (#173)', async () => {
+    const { checkUnmappedNetwork } = await import('../doctor.js')
+    const dbFile = join(dir, 'net.db')
+    const opts = { ...o, env: { QUARTERDECK_DB: dbFile } }
+    const core = await import('@quarterdeck/core')
+    const db = core.openDatabase(dbFile)
+    const now = new Date().toISOString()
+    core.createGoal(db, { id: 'g', name: 'Inbox', description: null, status: 'active', working_dir: dir, created_at: now, updated_at: now }, { objective: 'x' })
+    const run = core.insertRun(db, 'g', 'manual', 'running')
+    core.guardToolCallForRun(db, run.id, 'Bash', { command: 'grep x .' })
+    db.close()
+    expect(await checkUnmappedNetwork(opts)).toBeNull()
+
+    const db2 = core.openDatabase(dbFile)
+    core.guardToolCallForRun(db2, run.id, 'Bash', { command: 'curl https://example.com' })
+    db2.close()
+    expect(await checkUnmappedNetwork(opts)).toMatchObject({ level: 'warn', detail: expect.stringContaining('Inbox: curl'), fix: expect.stringContaining('Bash(curl*)') })
+  })
+})
+
 describe('checkGoals', () => {
   it('is silent without active goals and warns when goals cannot run', async () => {
     const { checkGoals } = await import('../doctor.js')

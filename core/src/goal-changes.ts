@@ -9,7 +9,7 @@ import { getGoal, getMemory, getRun, insertMemory, normalizeModel, updateGoal, u
 import { failRun, GoalError } from './goal-engine.js'
 import { UNTRUSTED_CATEGORY } from './guard.js'
 import type { AutonomyMode, MemoryKind, WatchSpec } from './types.js'
-import { describeStatusRules, describeWatch, listWatches, releaseWatchEvents, removeWatch, setWatch } from './watches.js'
+import { describeStatusRules, describeWatch, listWatches, releaseWatchEvents, removeWatch, matchWarning, setWatch } from './watches.js'
 
 // ── Goal changes ──────────────────────────────────────────────────────────────
 
@@ -224,7 +224,7 @@ export function applyGoalChanges(db: Database, planId: string, changes: GoalChan
       const after = setWatch(db, planId, name, spec) // throws on a watch with no command
       if (before && describeWatch(before) === describeWatch(after) && before.every_minutes === after.every_minutes && before.fires === after.fires
         && JSON.stringify(before.status_rules) === JSON.stringify(after.status_rules)) continue
-      done.push(`watch "${after.name}" ${before ? 'changed' : 'added'}: every ${after.every_minutes} min, ${after.kind === 'tool' ? 'calls' : 'runs'} ${describeWatch(after)}${after.fires === 'change' ? ', starts a run when its output changes' : ''}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ''}`)
+      done.push(`watch "${after.name}" ${before ? 'changed' : 'added'}: every ${after.every_minutes} min, ${after.kind === 'tool' ? 'calls' : 'runs'} ${describeWatch(after)}${after.fires === 'change' ? ', starts a run when its output changes' : ''}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ''}${matchWarning(after) ? `. Warning: ${matchWarning(after)}` : ''}`)
     }
     if (model !== undefined && model !== goal.model) {
       updateGoal(db, planId, { model })

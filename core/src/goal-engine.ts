@@ -206,6 +206,9 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
     return { task: getTask(db, planId, id)!, existing: false }
   }
 
+  if (input.action.category === 'trusted-read') {
+    throw new GoalError('"trusted-read" is the tool-rule category for commands the goal trusts to reach the network, not an action category. Use the category of the action itself.')
+  }
   if (input.action.category === 'untrusted') {
     throw new GoalError('"untrusted" is the tool-rule category for tools that read outside content, not an action category. Use the category of the action itself.')
   }
