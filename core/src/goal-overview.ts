@@ -119,35 +119,38 @@ export interface AutonomySuggestion {
 }
 
 /**
- * Categories whose last PROMOTE_AFTER human decisions were all approvals: one at
- * "propose" is a candidate for "auto"; one at "auto" and not yet in
- * auto_after_outside (its proposals came from runs marked by outside text) is a
- * candidate for keeping it auto after outside text. The streak counts every
- * approval, marked run or not; a rejection breaks it.
+ * Categories whose last PROMOTE_AFTER human decisions were all approvals. One at "propose"
+ * is a candidate for "auto", counting every approval. One at "auto" and not yet in
+ * auto_after_outside is a candidate for keeping it auto after outside text, counting only
+ * proposals a marked run made of its auto actions (`state.outside_text`), so approvals from
+ * while it was "propose" don't count. Any rejection in the category breaks both streaks.
  */
 export function getAutonomySuggestions(db: Database, planId: string): AutonomySuggestion[] {
   const goal = getGoal(db, planId)
   if (!goal) return []
   const rows = db.prepare(`
-    SELECT json_extract(t.state, '$.action.category') AS category, v.passed
+    SELECT json_extract(t.state, '$.action.category') AS category, v.passed,
+      json_extract(t.state, '$.outside_text') IS NOT NULL AS marked
     FROM verifications v JOIN tasks t ON t.plan_id = v.plan_id AND t.id = v.task_id
     WHERE v.plan_id = ? AND v.gate = 'approval' AND json_extract(t.state, '$.action.category') IS NOT NULL
     ORDER BY v.created_at DESC, v.rowid DESC
-  `).all(planId) as { category: string; passed: number }[]
-  const streak = new Map<string, { n: number; broken: boolean }>()
+  `).all(planId) as { category: string; passed: number; marked: number }[]
+  const streak = new Map<string, { all: number; marked: number; broken: boolean }>()
   for (const r of rows) {
-    const s = streak.get(r.category) ?? { n: 0, broken: false }
-    if (!s.broken) { if (r.passed) s.n++; else s.broken = true }
+    const s = streak.get(r.category) ?? { all: 0, marked: 0, broken: false }
+    if (!s.broken) {
+      if (!r.passed) s.broken = true
+      else { s.all++; if (r.marked) s.marked++ }
+    }
     streak.set(r.category, s)
   }
   const out: AutonomySuggestion[] = []
   for (const [category, s] of streak) {
-    if (s.n < PROMOTE_AFTER) continue
     const mode = autonomyFor(goal, category)
-    if (mode === 'propose') out.push({ category, approved_in_a_row: s.n, kind: 'auto' })
-    else if (mode === 'auto' && !(goal.auto_after_outside ?? []).includes(category)) {
+    if (mode === 'propose' && s.all >= PROMOTE_AFTER) out.push({ category, approved_in_a_row: s.all, kind: 'auto' })
+    else if (mode === 'auto' && s.marked >= PROMOTE_AFTER && !(goal.auto_after_outside ?? []).includes(category)) {
       const warning = autoAfterOutsideWarning(goal.tool_map ?? {}, category)
-      out.push({ category, approved_in_a_row: s.n, kind: 'after_outside', ...(warning && { warning }) })
+      out.push({ category, approved_in_a_row: s.marked, kind: 'after_outside', ...(warning && { warning }) })
     }
   }
   return out

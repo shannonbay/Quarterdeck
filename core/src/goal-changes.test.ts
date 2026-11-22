@@ -363,35 +363,54 @@ describe('auto after outside content', () => {
 })
 
 describe('autonomy suggestions (#189)', () => {
-  // Proposals as a marked run makes them; the category's mode is put back afterwards
-  const decide = (category: string, approvals: number, rejectFirst = false) => {
-    const mode = getGoal(db, 'g1')!.autonomy[category]
-    at(category, 'propose')
-    if (rejectFirst) rejectTask(db, 'g1', addItem(db, 'g1', null, { goal: `${category} no`, action: { category, summary: 's' } }).task.id, 'no')
-    for (let i = 0; i < approvals; i++) approveTask(db, 'g1', addItem(db, 'g1', null, { goal: `${category} ${i}`, action: { category, summary: 's' } }).task.id)
-    if (mode) at(category, mode)
-  }
   const at = (category: string, mode: 'off' | 'propose' | 'auto') => updateGoal(db, 'g1', { autonomy: { ...getGoal(db, 'g1')!.autonomy, [category]: mode } })
+  // Each proposal from a run of its own: marked (it read outside text) or not, in the category's current mode
+  let n = 0
+  const propose = (category: string, marked: boolean) => {
+    const run = claimRun(db, 'g1', { holder: 'A' })!
+    if (marked) markRunUntrusted(db, run.run_id, 'Bash: gh issue view')
+    const r = addItem(db, 'g1', run.run_id, { goal: `${category} ${n++}`, action: { category, summary: 's' } })
+    endRun(db, run.run_id, 'done')
+    return r
+  }
+  const approve = (category: string, times: number, marked: boolean) => {
+    for (let i = 0; i < times; i++) approveTask(db, 'g1', propose(category, marked).task.id)
+  }
 
-  it('suggests auto for a propose category, as before', () => {
-    decide('email.reply', PROMOTE_AFTER)
+  it('marks a proposal a marked run made of an auto action, and no other', () => {
+    expect(propose('email.archive', true).task.state.outside_text).toBe('Bash: gh issue view')
+    expect(propose('email.archive', false).task.state.outside_text).toBeUndefined() // auto, done at once
+    expect(propose('email.reply', true).task.state.outside_text).toBeUndefined() // propose anyway
+  })
+
+  it('suggests auto for a propose category, counting every approval', () => {
+    approve('email.reply', PROMOTE_AFTER, false)
     expect(getAutonomySuggestions(db, 'g1')).toEqual([{ category: 'email.reply', approved_in_a_row: 10, kind: 'auto' }])
   })
 
-  it('suggests keeping an auto category auto after outside text, with the risky-rule warning', () => {
-    decide('email.archive', PROMOTE_AFTER) // proposals made by marked runs, approved every time
-    decide('github.write', PROMOTE_AFTER)
+  it('suggests keeping an auto category auto after outside text only for its marked proposals', () => {
+    at('email.archive', 'propose')
+    approve('email.archive', PROMOTE_AFTER, false) // approved while it was propose
+    at('email.archive', 'auto')
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([]) // switching to auto doesn't bring up the next hint
+    approve('email.archive', PROMOTE_AFTER - 1, true)
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([])
+    approve('email.archive', 1, true)
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([{ category: 'email.archive', approved_in_a_row: 10, kind: 'after_outside' }])
+  })
+
+  it('carries the risky-rule warning', () => {
     at('github.write', 'auto')
     updateGoal(db, 'g1', { tool_map: { 'Bash(gh pr create*)': 'github.write' } })
-    const got = getAutonomySuggestions(db, 'g1')
-    expect(got).toContainEqual({ category: 'email.archive', approved_in_a_row: 10, kind: 'after_outside' })
-    expect(got.find((s) => s.category === 'github.write')).toMatchObject({ kind: 'after_outside', warning: expect.stringContaining('Bash(gh pr create*)') })
+    approve('github.write', PROMOTE_AFTER, true)
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([{ category: 'github.write', approved_in_a_row: 10, kind: 'after_outside', warning: expect.stringContaining('Bash(gh pr create*)') }])
   })
 
   it('suggests nothing after a recent rejection, once listed, or at off', () => {
-    decide('email.archive', PROMOTE_AFTER - 1, true)
+    rejectTask(db, 'g1', propose('email.archive', true).task.id, 'no')
+    approve('email.archive', PROMOTE_AFTER - 1, true)
     expect(getAutonomySuggestions(db, 'g1')).toEqual([])
-    decide('email.archive', 1)
+    approve('email.archive', 1, true)
     expect(getAutonomySuggestions(db, 'g1')).toHaveLength(1)
     applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': true } })
     expect(getAutonomySuggestions(db, 'g1')).toEqual([])
