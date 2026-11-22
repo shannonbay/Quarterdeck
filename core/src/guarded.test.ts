@@ -354,6 +354,18 @@ describe('guardedTarget and the target pin (#168)', () => {
     expect(normaliseRepo('https://github.com/shannonbay/Quarterdeck.git\n')).toBe(own)
     expect(normaliseRepo('git@github.com:shannonbay/Quarterdeck.git')).toBe(own)
     expect(normaliseRepo('https://gitlab.com/a/b')).toBeNull()
+    expect(normaliseRepo('https://github.com/shannonbay/Quarterdeck/')).toBe(own)
+    expect(normaliseRepo('ssh://git@github.com/shannonbay/Quarterdeck.git')).toBe(own)
+    expect(normaliseRepo('github.com/github.com/shannonbay/Quarterdeck')).toBe(own)
+    expect(normaliseRepo('https://github.com/a/b/c')).toBeNull()
+    expect(normaliseRepo('https://github.com/a b/c')).toBeNull()
+    expect(normaliseRepo('https://github.com//c')).toBeNull()
+  })
+
+  it('normaliseRepo stays fast on a long run of github.com: (CodeQL polynomial regex)', () => {
+    const start = Date.now()
+    expect(normaliseRepo('github.com/' + 'github.com:!'.repeat(50_000))).toBeNull()
+    expect(Date.now() - start).toBeLessThan(1000)
   })
 
   it('checkGuardedTarget: every target must be the goal repo and a number in the set', () => {

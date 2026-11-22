@@ -173,8 +173,25 @@ export interface GuardedTarget { repo: string; number: number }
 
 /** owner/name from a GitHub remote URL (https or ssh), lower-cased; null if it isn't one. */
 export function normaliseRepo(url: string): string | null {
-  const m = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(url.trim())
-  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null
+  // Read from the end with string steps, not one unanchored regex: that one is slow on
+  // a long run of `github.com:` (CodeQL polynomial regex).
+  let t = url.trim()
+  if (t.endsWith('/')) t = t.slice(0, -1)
+  const q = t.lastIndexOf('/')
+  if (q < 0) return null
+  let name = t.slice(q + 1)
+  if (name.length > 4 && name.toLowerCase().endsWith('.git')) name = name.slice(0, -4)
+  const head = t.slice(0, q)
+  const p = head.lastIndexOf('/')
+  const plain = (s: string) => s.length > 0 && !/\s/.test(s)
+  if (!plain(name)) return null
+  // https://github.com/owner/name: github.com then / then the owner
+  if (p >= 0 && head.slice(0, p).toLowerCase().endsWith('github.com') && plain(head.slice(p + 1))) return `${head.slice(p + 1)}/${name}`.toLowerCase()
+  // git@github.com:owner/name: github.com: inside the last segment
+  const seg = head.slice(p + 1)
+  const k = seg.toLowerCase().indexOf('github.com:')
+  const owner = k >= 0 ? seg.slice(k + 'github.com:'.length) : ''
+  return plain(owner) ? `${owner}/${name}`.toLowerCase() : null
 }
 
 const repoCache = new Map<string, string | null>()
