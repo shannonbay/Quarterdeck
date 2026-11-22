@@ -398,14 +398,16 @@ export const WATCH_NEVER_SAW_CHECKS = 3
  * True when a watch has never seen anything (#185): every check since its baseline saw zero lines
  * or the same one line, it has never fired, and its baseline is older than
  * max(24 h, 3 × every_minutes). A second distinct line or an event clears it; editing the
- * watch resets its baseline, and so the flag.
+ * watch resets its baseline, and so the flag. A status watch is never flagged (it reads one
+ * value by design and starts no run while nothing needs one), and a 'change' watch only for zero lines.
  */
 export function watchNeverSaw(
-  watch: Pick<Watch, 'baseline_at' | 'seen' | 'every_minutes' | 'last_fired_at'>,
+  watch: Pick<Watch, 'baseline_at' | 'seen' | 'every_minutes' | 'last_fired_at' | 'fires' | 'status_rules'>,
   now: Date = new Date(),
 ): boolean {
   if (!watch.baseline_at) return false
-  if (watch.seen.length > 1) return false
+  if (watch.status_rules) return false
+  if (watch.seen.length > (watch.fires === 'change' ? 0 : 1)) return false
   const baseline = new Date(watch.baseline_at).getTime()
   if (watch.last_fired_at && new Date(watch.last_fired_at).getTime() >= baseline) return false
   const wait = Math.max(WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS * watch.every_minutes * 60_000)

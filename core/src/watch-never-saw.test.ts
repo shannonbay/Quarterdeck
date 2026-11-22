@@ -55,6 +55,23 @@ describe('a watch that has never seen anything (#185)', () => {
     expect(watchNeverSaw(getWatch(db, w.id)!, at(30))).toBe(false)
   })
 
+  it('is never flagged for a status watch, which reads one value and may never fire', () => {
+    const w = setWatch(db, 'g1', 'pr', { command: 'echo', every_minutes: 60, status: { rules: [{ match: 'OPEN', status: 'PR open' }] } })
+    recordWatchLines(db, w.id, { lines: ['OPEN'] }, at(0))
+    recordWatchLines(db, w.id, { lines: ['OPEN'] }, at(30))
+    expect(watchNeverSaw(getWatch(db, w.id)!, at(31))).toBe(false)
+  })
+
+  it("is not flagged for a 'change' watch that keeps seeing one value, only for zero lines", () => {
+    const w = setWatch(db, 'g1', 'price', { command: 'echo', every_minutes: 60, fires: 'change' })
+    recordWatchLines(db, w.id, { lines: ['v1'] }, at(0))
+    recordWatchLines(db, w.id, { lines: ['v1'] }, at(30))
+    expect(watchNeverSaw(getWatch(db, w.id)!, at(31))).toBe(false)
+    const empty = setWatch(db, 'g1', 'empty', { command: 'echo', every_minutes: 60, fires: 'change' })
+    recordWatchLines(db, empty.id, { lines: [] }, at(0))
+    expect(watchNeverSaw(getWatch(db, empty.id)!, at(30))).toBe(true)
+  })
+
   it('resets when the watch is edited', () => {
     const w = setWatch(db, 'g1', 'inbox', { command: 'echo', every_minutes: 60 })
     recordWatchLines(db, w.id, { lines: [] }, at(0))
