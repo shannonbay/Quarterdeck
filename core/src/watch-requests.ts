@@ -52,7 +52,7 @@ export function proposeWatch(db: Database, planId: string, runId: string | null,
   const run = runId ? getRun(db, runId) : undefined
   if (!run || run.plan_id !== planId || run.status !== 'running') throw new GoalError('propose_watch needs an open run of this goal.')
   if (run.trigger === 'curate') throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.")
-  const { label } = validateWatchSpec(db, planId, input.name, input.spec)
+  const { label, warnings } = validateWatchSpec(db, planId, input.name, input.spec)
   const waiting = getAllTasks(db, planId).find((t) => isWatchRequest(t) && (t.state as { watch: WatchRequestState }).watch.name === label && t.review_requested_at)
   if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`)
   const existing = listWatches(db, planId).find((w) => w.name === label)
@@ -60,6 +60,7 @@ export function proposeWatch(db: Database, planId: string, runId: string | null,
   const notes = [
     ...(state.replaces ? [`Now:\n${describeSpec(state.replaces)}`, `Proposed:\n${describeSpec(state.spec)}`] : [describeSpec(state.spec)]),
     ...(state.reason ? [`Why: ${state.reason}`] : []),
+    ...warnings.map((w) => `Warning: ${w}`),
   ].join('\n\n')
   const now = new Date().toISOString()
   const id = nextChildId(db, planId, null)

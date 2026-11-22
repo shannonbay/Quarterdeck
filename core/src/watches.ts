@@ -140,6 +140,26 @@ export function getWatch(db: Database, id: string): Watch | undefined {
 }
 
 /**
+ * True when a tool watch's match has no capturing group and can only match fixed text (#181):
+ * once escaped characters and bracket classes are taken out, nothing in it can vary.
+ */
+export function fixedMatch(pattern: string): boolean {
+  // A capturing group: ( not escaped and not followed by ?
+  if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false
+  const rest = pattern.replace(/\[(?:\\.|[^\]\\])*\]/g, '').replace(/\\[^wWdDsS]/g, '').replace(/\(\?<?[:=!]/g, '(')
+  return !/[.+*?{|]|\\[wWdDsS]/.test(rest)
+}
+
+/** The warning for a tool watch whose match can only give one fixed line, or null. */
+export function matchWarning(w: { kind: Watch['kind']; match: string | null; fires: string }): string | null {
+  if (w.kind !== 'tool' || !w.match || !fixedMatch(w.match)) return null
+  const fix = 'capture something that differs per item, e.g. (\\w[^·\\n]*) · <listing title>'
+  return w.fires === 'change'
+    ? `match "${w.match}" can only give one fixed line, so it only tells "present" from "absent", not one item from another: to tell items apart, ${fix}`
+    : `match "${w.match}" can only give one fixed line, so every item looks the same: ${fix}`
+}
+
+/**
  * Adds a goal's watch, or changes the one with that name. A new command
  * starts over: what the old one saw says nothing about the new one's lines.
  */
@@ -251,7 +271,9 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
     what.match = given.match?.trim() || null
   }
 
-  return { label, every, fires, statusRules, rulesText, what, ignore, urgent }
+  const warning = matchWarning({ kind: what.kind, match: what.match, fires })
+  const warnings = warning ? [warning] : []
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent, warnings }
 }
 
 export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
