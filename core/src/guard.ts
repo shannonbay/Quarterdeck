@@ -50,6 +50,7 @@ import { autonomyFor } from './goal-engine.js'
 import { getGoal, getRun, markRunUntrusted, newId } from './goals.js'
 import { consumeGuardedCheck, hasUnusedGuardedCheck } from './guarded.js'
 import { readFileSync } from 'fs'
+import { execFileSync } from 'child_process'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
 
 export type GuardDecision =
@@ -156,7 +157,7 @@ export function readsUntrusted(toolMap: Goal['tool_map'], toolName: string, inpu
  * nothing untrusted. A command rule names the rule that matched (`Bash: gh issue view`
  * for `Bash(gh issue view*)`); a name-only rule and the built-in readers give the tool name.
  */
-export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, input?: Record<string, unknown>): string | null {
+export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, input?: Record<string, unknown>, ownOrigin: string | null = null): string | null {
   const rule = matchToolRule(toolMap, toolName, input)
   if (rule?.category === UNTRUSTED_CATEGORY) {
     const command = COMMAND_RULE.exec(rule.pattern)
@@ -166,7 +167,74 @@ export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, inpu
     }
     return toolName
   }
-  return matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null ? toolName : null
+  if (matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null) return toolName
+  // A rule of any category (trusted-read included) wins over the built-in network list
+  const network = !rule && SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' ? builtinNetworkPart(input.command, ownOrigin) : null
+  return network !== null ? `${toolName}: ${network} (built-in network command)` : null
+}
+
+/**
+ * The reserved tool-rule category for a command the goal trusts to reach the network
+ * (`Bash(git fetch*)` in a goal that fetches only its own repo): never refused, it marks nothing (#173).
+ */
+export const TRUSTED_READ_CATEGORY = 'trusted-read'
+
+/**
+ * Shell commands that reach the network, matched per simple command ignoring case: they
+ * mark the run unless the goal's tool map names the command (#173). `gh api` with a method
+ * other than GET and git's own-origin fetches are left out (see builtinNetworkPart).
+ */
+export const BUILTIN_NETWORK: readonly string[] = [
+  'curl*', 'wget*', 'Invoke-WebRequest*', 'iwr *', 'Invoke-RestMethod*', 'irm *', 'ssh *', 'scp *', 'nc *', 'ncat *',
+  'npm install*', 'npm i *', 'npm view*', 'npm info*', 'npx *', 'pip install*', 'pip download*',
+  'gh api*',
+  'git clone*', 'git fetch*', 'git pull*', 'git ls-remote*',
+]
+const BUILTIN_NETWORK_RES = BUILTIN_NETWORK.map((p) => [p, globRegExp(p, 'i')] as const)
+
+/** A remote URL without its scheme, credentials, trailing slash and `.git`, lower-cased, for comparing. */
+function normaliseRemote(url: string): string {
+  return url.trim().replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]+@/, '').replace(/:(?!\d)/, '/').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase()
+}
+
+/** Whether a git network command (`git fetch`, `git pull`, `git ls-remote`, `git clone`) uses only the goal's own origin. */
+function gitOwnRemote(part: string, ownOrigin: string | null): boolean {
+  const words = part.split(/\s+/).slice(2).filter((w) => !w.startsWith('-'))
+  if (/^git\s+clone\b/i.test(part)) return ownOrigin !== null && words.length > 0 && normaliseRemote(words[0]) === normaliseRemote(ownOrigin)
+  const remote = words[0]
+  if (remote === undefined || remote.toLowerCase() === 'origin') return true
+  return ownOrigin !== null && normaliseRemote(remote) === normaliseRemote(ownOrigin)
+}
+
+/**
+ * The first simple command in a shell command that the built-in network list marks, as
+ * the list's pattern without its `*` (`curl`, `git clone`), or null. `ownOrigin` is the
+ * goal's working folder's origin URL, so a fetch from it marks nothing.
+ */
+export function builtinNetworkPart(command: string, ownOrigin: string | null = null): string | null {
+  for (const part of commandParts(command)) {
+    const hit = BUILTIN_NETWORK_RES.find(([, re]) => re.test(part))
+    if (!hit) continue
+    const name = hit[0].replace(/\*$/, '').trim()
+    if (/^gh\s+api\b/i.test(part)) {
+      const method = /(?:^|\s)(?:-X|--method)(?:\s+|=)(\S+)/.exec(part)?.[1]
+      if (method && method.replace(/["']/g, '').toUpperCase() !== 'GET') continue
+    }
+    if (/^git\s/i.test(part) && gitOwnRemote(part, ownOrigin)) continue
+    return name
+  }
+  return null
+}
+
+const originCache = new Map<string, string | null>()
+/** The working folder's `origin` URL, or null when it has none (cached per folder). */
+export function originUrl(workingDir: string): string | null {
+  if (!originCache.has(workingDir)) {
+    let url: string | null = null
+    try { url = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: workingDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim() || null } catch { url = null }
+    originCache.set(workingDir, url)
+  }
+  return originCache.get(workingDir)!
 }
 
 /** The reserved category a refusal to touch Quarterdeck's own data is recorded under. */
@@ -312,7 +380,7 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   const command = SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' ? input.command : null
   const listed = matchToolCategory(goal.tool_map, toolName, input)
   let guardedMiss: string | null = null
-  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === 'auto'
+  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) === 'auto'
     && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command)) {
     const match = consumeGuardedCheck(db, run.id, listed, command, readStaged)
     if (match.ok) {
@@ -336,10 +404,16 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
       return { decision: 'deny', category: SECRETS_CATEGORY, run_id: run.id, reason }
     }
   }
-  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input)
-  if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead)
   const category = matchToolCategory(goal.tool_map, toolName, input)
-  if (!category) return { decision: 'allow', run_id: run.id }
+  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input, category === null && command !== null ? originUrl(workingDir) : null)
+  if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead)
+  if (!category) {
+    // A built-in network mark is recorded, so the doctor and goal_detail can list the command to map (#173)
+    const network = untrustedRead?.endsWith(' (built-in network command)') ? untrustedRead.slice(untrustedRead.indexOf(': ') + 2, -' (built-in network command)'.length) : null
+    if (network !== null) record(db, run, toolName, UNTRUSTED_CATEGORY, 'allow', `built-in network command: ${network}`)
+    return { decision: 'allow', run_id: run.id }
+  }
+  if (category === TRUSTED_READ_CATEGORY) return { decision: 'allow', category, run_id: run.id }
   if (category === UNTRUSTED_CATEGORY) {
     record(db, run, toolName, category, 'allow', null)
     return { decision: 'allow', category, run_id: run.id }
@@ -424,7 +498,7 @@ export function recordRefusal(
   const workingDir = (db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string } | undefined)?.working_dir ?? process.cwd()
   if (touchesQuarterdeckData(toolName, input, workingDir, paths) !== null) return null
   const matched = matchToolRule(goal.tool_map, toolName, input)
-  if (!matched || matched.category === UNTRUSTED_CATEGORY) return null
+  if (!matched || matched.category === UNTRUSTED_CATEGORY || matched.category === TRUSTED_READ_CATEGORY) return null
   const { category, pattern } = matched
   const mode = autonomyFor(goal, category)
   if (mode === 'off') return null
