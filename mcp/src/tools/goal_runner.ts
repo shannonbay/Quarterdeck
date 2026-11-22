@@ -8,7 +8,7 @@ import {
   schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal, stageGuardedCall,
   getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
-  listWatches, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
+  listWatches, watchHealth, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
@@ -50,7 +50,10 @@ export async function goals_tick(args: unknown) {
 export async function goals_overview(args: unknown) {
   const input = GoalsOverviewSchema.parse(args)
   const { body, etag } = overviewWithEtag(input.detail ?? 'all', standingSessionId(), input.full_instructions === true, input.only === true)
-  return overviewAnswer(input.etag, body, etag, availableUpdate())
+  const answer = overviewAnswer(input.etag, body, etag, availableUpdate())
+  // Read fresh beside the overview, not in it: last_checked_at changes every few minutes and would change the etag (#184)
+  if (!input.watch_health || !answer.changed || !Array.isArray(input.detail)) return answer
+  return { ...answer, watch_health: Object.fromEntries(input.detail.map((id) => [id, watchHealth(id)])) }
 }
 
 /** The overview's answer; a published update is part of it, so the etag changes when one appears. */

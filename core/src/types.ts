@@ -224,6 +224,8 @@ export interface Watch {
   /** When the first check that worked recorded what was there; null before it. */
   baseline_at: string | null
   last_checked_at: string | null
+  /** Lines the last check that worked saw, after match and ignore; null before the first (#184). */
+  last_line_count: number | null
   /** For a tool watch: when its call was handed to the plugin, until the answer is reported. */
   asked_at: string | null
   last_fired_at: string | null

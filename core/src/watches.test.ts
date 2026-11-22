@@ -8,7 +8,7 @@ import {
   setWatch, removeWatch, listWatches, getWatch, watchDue, watchFailing, watchStopped, toLines, recordWatchLines, checkCommandWatch, listWatchEvents,
   takeWatchEvents, checkWatches, checkWatchesAtClaim, queueForWatchEvents, applyGoalChanges, reportRunEnd, buildOverview, deleteGoal, purgeGoal,
   WATCH_MAX_LINES, WATCH_SEEN_MAX, WATCH_LINE_CHARS, WATCH_BRIEF_LINES, WATCH_REPORT_GRACE_MS,
-  matchLines, commandLines, describeWatch, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
+  matchLines, commandLines, describeWatch, watchHealth, overviewWithEtag, reportToolWatch, takeDueToolWatches, runMigrations, markRunUntrusted, getRun, WATCH_EVENTS_SOURCE, WATCH_FAILING_AFTER, queueRun, startRun,
 } from './index.js'
 import { statusNote } from './goal-overview.js'
 
@@ -27,6 +27,33 @@ beforeEach(() => {
 })
 
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+describe('watch health (#184)', () => {
+  it('records how many lines the last check saw after match and ignore, and resets it when the command changes', async () => {
+    items('#1 bug', '#2 docs', '#3 bug', 'noise')
+    const w = setWatch(db, 'g1', 'bugs', { command: LIST, match: '^#', ignore: 'docs' })
+    expect(watchHealth(db, 'g1')).toEqual([{ name: 'bugs', last_checked_at: null, last_line_count: null, last_fired_at: null, fail_count: 0 }])
+    await checkCommandWatch(db, w.id)
+    expect(getWatch(db, w.id)!.last_line_count).toBe(2)
+    items()
+    await checkCommandWatch(db, w.id, later(10))
+    expect(watchHealth(db, 'g1')[0]).toMatchObject({ last_line_count: 0, fail_count: 0 })
+    expect(watchHealth(db, 'g1')[0].last_checked_at).not.toBeNull()
+    setWatch(db, 'g1', 'bugs', { command: 'echo other' })
+    expect(getWatch(db, w.id)!.last_line_count).toBeNull()
+  })
+
+  it('leaves the overview and its etag unchanged by a check that finds nothing new', () => {
+    const w = setWatch(db, 'g1', 'list', { command: 'echo 1' })
+    recordWatchLines(db, w.id, { lines: ['a'] })
+    const before = overviewWithEtag(db)
+    recordWatchLines(db, w.id, { lines: ['a'] }, later(10))
+    const after = overviewWithEtag(db)
+    expect(after.etag).toBe(before.etag)
+    expect(after.body).toBe(before.body)
+    expect(after.body).not.toContain('last_line_count')
+  })
+})
 
 describe('setWatch', () => {
   it('adds a watch, changes it by name, and starts over when the command changes', () => {

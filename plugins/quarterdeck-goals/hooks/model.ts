@@ -296,6 +296,15 @@ export function spark(values: number[]): string {
   return shown.map((v) => BARS[Math.round(((v - min) / span) * (BARS.length - 1))]).join('')
 }
 
+/** goal_detail's watch health (#184), one line per watch; nothing when the goal has no watches or the server sent none. */
+export function describeWatchHealth(health: readonly { name: string; last_checked_at: string | null; last_line_count: number | null; last_fired_at: string | null; fail_count: number }[], now: number): string {
+  if (!health.length) return ''
+  const line = (w: (typeof health)[number]) => w.last_checked_at
+    ? `- ${w.name}: checked ${ago(w.last_checked_at, now)}, ${w.last_line_count === null ? 'lines seen not recorded' : `saw ${w.last_line_count} line${w.last_line_count === 1 ? '' : 's'}`}, ${w.last_fired_at ? `last fired ${ago(w.last_fired_at, now)}` : 'never fired'}, ${w.fail_count} failure${w.fail_count === 1 ? '' : 's'} in a row`
+    : `- ${w.name}: not checked yet`
+  return `\n\nWatch health:\n${health.map(line).join('\n')}`
+}
+
 export function ago(iso: string | null, now: number): string {
   if (!iso) return '—'
   const s = Math.round((now - Date.parse(iso)) / 1000)

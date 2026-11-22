@@ -30,6 +30,23 @@ test('goal_detail asks the overview for that goal alone, not every goal card (#1
   expect(fake.of('goals_overview').some((c) => c.input.only === true && JSON.stringify(c.input.detail) === '["g2"]' && c.input.full_instructions === true)).toBe(true)
 })
 
+test("goal_detail shows each watch's health, read fresh beside the overview (#184)", async ($, on) => {
+  engine(on)
+  const checked = new Date(Date.now() - 40 * 60_000).toISOString()
+  const fake = fakeQuarterdeck(on, [inbox()], { watchHealth: { g1: [
+    { name: 'fb-marketplace-inbox', last_checked_at: checked, last_line_count: 0, last_fired_at: null, fail_count: 0 },
+    { name: 'new mail', last_checked_at: checked, last_line_count: 1, last_fired_at: checked, fail_count: 2 },
+    { name: 'later', last_checked_at: null, last_line_count: null, last_fired_at: null, fail_count: 0 },
+  ] } })
+  await $.session.start(START)
+  const text = String((await $.tool.call({ tool: 'mcp__quarterdeck-goals__goal_detail', goal: 'inbox' } as never)).result)
+  expect(text).toContain('Watch health:')
+  expect(text).toMatch(/- fb-marketplace-inbox: checked [^,]+, saw 0 lines, never fired, 0 failures in a row/)
+  expect(text).toMatch(/- new mail: checked [^,]+, saw 1 line, last fired [^,]+, 2 failures in a row/)
+  expect(text).toContain('- later: not checked yet')
+  expect(fake.of('goals_overview').some((c) => c.input.watch_health === true)).toBe(true)
+})
+
 const OLD_JOBS = { id: 'g9', name: 'Old jobs', deleted_at: '2026-11-06T08:00:00Z', purge_at: '2026-12-06T08:00:00Z' }
 const DELETED_LINE = '"Old jobs" was deleted on 2026-11-06; it is purged on 2026-12-06 unless restored. Restore it from Recently deleted in the goals pane.'
 

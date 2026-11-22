@@ -201,6 +201,7 @@ export const GoalsOverviewSchema = z.object({
   detail: z.array(z.string()).optional().describe('Goal ids to give in full (runs, memory, open items, instructions, tool rules); the rest are cards. Left out: every goal in full'),
   full_instructions: z.boolean().optional().describe('Give the instructions uncut (otherwise long ones are cut, as the pane shows them)'),
   only: z.boolean().optional().describe('With detail: answer with only the goals in detail (no cards for other goals, no deleted list); a deleted goal named there still comes in deleted_detail'),
+  watch_health: z.boolean().optional().describe('With detail: add watch_health, each detailed goal\x27s watches with when each was last checked, the lines its last check saw, when it last fired and its failures in a row, read fresh (goal_detail asks for it; the pane never does)'),
 })
 
 export const DecideItemSchema = z.object({
