@@ -3,7 +3,7 @@ import { tmpdir } from 'os'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, insertRun, addItem, getRun, guardToolCallForRun, listToolCalls,
-  builtinNetworkPart, untrustedLabel, TRUSTED_READ_CATEGORY, trimTrailing,
+  builtinNetworkPart, untrustedLabel, TRUSTED_READ_CATEGORY, unmappedNetworkCommands, trimTrailing,
 } from './index.js'
 
 describe('trimTrailing (CodeQL polynomial regex)', () => {
@@ -75,6 +75,17 @@ describe('built-in network commands', () => {
     expect(guardToolCallForRun(db, run.id, 'PowerShell', { command: 'Invoke-WebRequest https://x' }).decision).toBe('allow')
     expect(getRun(db, run.id)!.untrusted_source).toBe('PowerShell: Invoke-WebRequest (built-in network command)')
     expect(listToolCalls(db, 'g1')).toEqual([expect.objectContaining({ category: 'untrusted', decision: 'allow', reason: 'built-in network command: Invoke-WebRequest' })])
+  })
+
+  it('lists each unmapped network command from recent runs with the rule to add', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    guardToolCallForRun(db, run.id, 'Bash', { command: 'curl https://x' })
+    guardToolCallForRun(db, run.id, 'Bash', { command: 'curl https://y' })
+    guardToolCallForRun(db, run.id, 'PowerShell', { command: 'Invoke-WebRequest https://x' })
+    expect(unmappedNetworkCommands(db, 'g1')).toEqual([
+      { tool: 'PowerShell', command: 'Invoke-WebRequest', rule: 'PowerShell(Invoke-WebRequest*)' },
+      { tool: 'Bash', command: 'curl', rule: 'Bash(curl*)' },
+    ])
   })
 
   it('never refuses or marks a trusted-read command, and refuses it as an action category', () => {
