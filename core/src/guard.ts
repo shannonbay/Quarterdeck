@@ -162,7 +162,7 @@ export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, inpu
   if (rule?.category === UNTRUSTED_CATEGORY) {
     const command = COMMAND_RULE.exec(rule.pattern)
     if (command) {
-      const pattern = command[2].trim().replace(/\*+$/, '').trim()
+      const pattern = trimTrailing(command[2].trim(), '*').trim()
       return pattern ? `${command[1]}: ${pattern}` : command[1]
     }
     return toolName
@@ -203,7 +203,17 @@ const BUILTIN_NETWORK_RES = BUILTIN_NETWORK.map((p) => [p, globRegExp(p, 'i')] a
 
 /** A remote URL without its scheme, credentials, trailing slash and `.git`, lower-cased, for comparing. */
 function normaliseRemote(url: string): string {
-  return url.trim().replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]+@/, '').replace(/:(?!\d)/, '/').replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase()
+  return trimTrailing(url.trim().replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]+@/, '').replace(/:(?!\d)/, '/'), '/').replace(/\.git$/i, '').toLowerCase()
+}
+
+/**
+ * A string without the run of `ch` at its end. A loop, not `/x+$/`: that regex is
+ * slow on a long run of `ch` that isn't at the end (CodeQL polynomial regex).
+ */
+export function trimTrailing(s: string, ch: string): string {
+  let end = s.length
+  while (end > 0 && s[end - 1] === ch) end--
+  return s.slice(0, end)
 }
 
 /** Whether a git network command (`git fetch`, `git pull`, `git ls-remote`, `git clone`) uses only the goal's own origin. */

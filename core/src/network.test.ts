@@ -3,8 +3,20 @@ import { tmpdir } from 'os'
 import type { Database } from './sqlite.js'
 import {
   openDatabase, createGoal, updateGoal, insertRun, addItem, getRun, guardToolCallForRun, listToolCalls,
-  builtinNetworkPart, untrustedLabel, TRUSTED_READ_CATEGORY, unmappedNetworkCommands,
+  builtinNetworkPart, untrustedLabel, TRUSTED_READ_CATEGORY, unmappedNetworkCommands, trimTrailing,
 } from './index.js'
+
+describe('trimTrailing (CodeQL polynomial regex)', () => {
+  it('drops only the run at the end, and stays fast on a long run elsewhere', () => {
+    expect(trimTrailing('gh issue view***', '*')).toBe('gh issue view')
+    expect(trimTrailing('a*b', '*')).toBe('a*b')
+    expect(trimTrailing('///', '/')).toBe('')
+    const start = Date.now()
+    expect(trimTrailing('/'.repeat(200_000) + 'x', '/')).toHaveLength(200_001)
+    expect(trimTrailing('*'.repeat(200_000) + 'x', '*')).toHaveLength(200_001)
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+})
 
 // #173: shell commands that reach the network mark the run unless the goal's map names them
 const OWN = 'https://github.com/me/repo.git'
