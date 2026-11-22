@@ -65,6 +65,35 @@ describe('proposal staged calls (#167)', () => {
     expect(again.reason).toContain('already made')
   })
 
+  it('lets an approved staged call through when its copies live under a .quarterdeck data dir, with the default data paths', () => {
+    const qdDir = join(dataDir, '.quarterdeck')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    const [cmd] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir: qdDir })
+    expect(cmd).toContain('.quarterdeck')
+    approve(id)
+    const decision = guardToolCallForRun(db, run.id, 'Bash', { command: cmd })
+    expect(decision.decision).toBe('allow')
+    expect(decision.category).toBe('gh.review')
+    // Used once: the same call again is refused (as Quarterdeck's own data, now nothing covers it)
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }).decision).toBe('deny')
+  })
+
+  it('still refuses an approved staged call that names the data folder beyond its staged copies', () => {
+    const qdDir = join(dataDir, '.quarterdeck')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    const [cmd] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: `gh pr review 12 --body-file /work/review.md && cat ${join(qdDir, 'tasks.db')}`, files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir: qdDir })
+    approve(id)
+    const decision = guardToolCallForRun(db, run.id, 'Bash', { command: cmd })
+    expect(decision.decision).toBe('deny')
+    expect(decision.category).toBe('quarterdeck-data')
+  })
+
   it('refuses a staged call whose file changed or is gone', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
     const id = propose(run.id, 'a')

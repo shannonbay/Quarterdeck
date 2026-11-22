@@ -374,6 +374,25 @@ export function proposalHasCalls(db: Database, key: string): boolean {
 }
 
 /**
+ * The approved proposal (active, not done) in this category with an unused
+ * staged call for exactly this command (#167), with that call's staged file
+ * copies, or null. The guard checks it before its rule on Quarterdeck's own
+ * data, since staged copies live in the data folder.
+ */
+export function approvedStagedCall(
+  db: Database, planId: string, category: string, command: string,
+): { key: string; files: string[] } | null {
+  const row = db.prepare(`
+    SELECT g.task_id AS key, g.file_hashes AS file_hashes FROM guarded_checks g
+    JOIN tasks t ON g.task_id = t.plan_id || '/' || t.id
+    WHERE t.plan_id = ? AND t.status = 'active' AND t.archived_at IS NULL AND t.approved_at IS NOT NULL
+      AND json_extract(t.state, '$.action.category') = ? AND g.command = ? AND g.used_at IS NULL
+    ORDER BY t.created_at, t.rowid, g.created_at, g.rowid LIMIT 1
+  `).get(planId, category, command) as { key: string; file_hashes: string } | undefined
+  return row ? { key: row.key, files: Object.keys(JSON.parse(row.file_hashes) as Record<string, string>) } : null
+}
+
+/**
  * Uses up an approved proposal's unused staged call for exactly this command
  * when its staged files still hash as recorded (#167). Keyed by the item, not
  * the run, so a later run can carry out the approval.
