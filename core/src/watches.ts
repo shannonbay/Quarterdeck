@@ -134,9 +134,71 @@ export function listWatches(db: Database, planId: string): Watch[] {
   return (db.prepare('SELECT * FROM goal_watches WHERE plan_id = ? ORDER BY name').all(planId) as Row[]).map(deserializeWatch)
 }
 
+/** One watch's health for goal_detail (#184): read fresh, never part of the overview, whose etag would change on every check. */
+export interface WatchHealth {
+  name: string
+  last_checked_at: string | null
+  last_line_count: number | null
+  last_fired_at: string | null
+  fail_count: number
+}
+
+/** A goal's watches' health, by name. */
+export function watchHealth(db: Database, planId: string): WatchHealth[] {
+  return db.prepare('SELECT name, last_checked_at, last_line_count, last_fired_at, fail_count FROM goal_watches WHERE plan_id = ? ORDER BY name')
+    .all(planId) as unknown as WatchHealth[]
+}
+
 export function getWatch(db: Database, id: string): Watch | undefined {
   const r = db.prepare('SELECT * FROM goal_watches WHERE id = ?').get(id) as Row | undefined
   return r ? deserializeWatch(r) : undefined
+}
+
+/**
+ * True when a tool watch's match has no capturing group and can only match fixed text (#181):
+ * once escaped characters and bracket classes are taken out, nothing in it can vary.
+ */
+export function fixedMatch(pattern: string): boolean {
+  // A capturing group: ( not escaped and not followed by ?
+  if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false
+  const rest = withoutClassesAndEscapes(pattern).replace(/\(\?<?[:=!]/g, '(')
+  return !/[.+*?{|]|\\[wWdDsS]/.test(rest)
+}
+
+/**
+ * A pattern with its bracket classes and escaped characters taken out, keeping the
+ * escapes that vary (\w \W \d \D \s \S). One pass, so a long run of `[` can't make it slow.
+ */
+function withoutClassesAndEscapes(pattern: string): string {
+  let out = ''
+  // Once a [ finds no closing ], no later one can: they would scan the same rest.
+  let unclosed = false
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]
+    if (c === '\\') {
+      const next = pattern[i + 1]
+      if (next !== undefined && 'wWdDsS'.includes(next)) out += c + next
+      i++
+      continue
+    }
+    if (c === '[' && !unclosed) {
+      let j = i + 1
+      while (j < pattern.length && pattern[j] !== ']') j += pattern[j] === '\\' ? 2 : 1
+      if (j < pattern.length) { i = j; continue }
+      unclosed = true
+    }
+    out += c
+  }
+  return out
+}
+
+/** The warning for a tool watch whose match can only give one fixed line, or null. */
+export function matchWarning(w: { kind: Watch['kind']; match: string | null; fires: string }): string | null {
+  if (w.kind !== 'tool' || !w.match || !fixedMatch(w.match)) return null
+  const fix = 'capture something that differs per item, e.g. (\\w[^·\\n]*) · <listing title>'
+  return w.fires === 'change'
+    ? `match "${w.match}" can only give one fixed line, so it only tells "present" from "absent", not one item from another: to tell items apart, ${fix}`
+    : `match "${w.match}" can only give one fixed line, so every item looks the same: ${fix}`
 }
 
 /**
@@ -251,7 +313,9 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
     what.match = given.match?.trim() || null
   }
 
-  return { label, every, fires, statusRules, rulesText, what, ignore, urgent }
+  const warning = matchWarning({ kind: what.kind, match: what.match, fires })
+  const warnings = warning ? [warning] : []
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent, warnings }
 }
 
 export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
@@ -280,7 +344,7 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   } else {
     db.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+        last_checked_at = NULL, last_line_count = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
     `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(existing.id)
   }
@@ -420,8 +484,8 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     const insert = db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)')
     for (const line of fresh) insert.run(newId('wev'), watchId, watch.plan_id, line, at, duringRun)
     // last_error and last_fired_at are written only when they change: the pane re-reads on those
-    db.prepare('UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?')
-      .run(JSON.stringify(seen), at, at, watchId)
+    db.prepare('UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, last_line_count = ?, fail_count = 0 WHERE id = ?')
+      .run(JSON.stringify(seen), at, at, result.lines.length, watchId)
     if (watch.last_error !== null) db.prepare('UPDATE goal_watches SET last_error = NULL WHERE id = ?').run(watchId)
     if (fresh.length) db.prepare('UPDATE goal_watches SET last_fired_at = ? WHERE id = ?').run(at, watchId)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NOT NULL AND created_at < ?')

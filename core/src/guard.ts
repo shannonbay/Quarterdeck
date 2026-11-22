@@ -46,7 +46,7 @@ import { homedir } from 'os'
 import { join, posix } from 'path'
 import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
-import { autonomyFor } from './goal-engine.js'
+import { autonomyFor, tripRun } from './goal-engine.js'
 import { afterOutsideApplies, getGoal, getRun, markRunSecretsRead, markRunUntrusted, newId, secretsReadReason } from './goals.js'
 import { consumeGuardedCheck, hasUnusedGuardedCheck } from './guarded.js'
 import { readFileSync } from 'fs'
@@ -386,6 +386,27 @@ export function secretFilePaths(toolName: string, input: Record<string, unknown>
   return [...new Set(found.map((p) => resolvePath(workingDir, p)))]
 }
 
+/** Probing refusals a marked run may have before it trips (#174). */
+export const TRIP_THRESHOLD = 3
+/** Refusals that suggest probing (#174), besides calls to an `off` category. A plain `propose` fallback doesn't count. */
+export const PROBING_CATEGORIES: readonly string[] = [QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY]
+const OFF_REASON = 'is off for this goal'
+/** Category recorded on a call a tripped run made. */
+export const TRIPPED_CATEGORY = 'tripped'
+const TRIPPED_ALLOWED = new Set(['end_run', 'fail_run'])
+
+/** After a probing refusal: trip a marked run that has reached TRIP_THRESHOLD of them (#174). */
+function tripIfProbing(db: Database, run: GoalRun): void {
+  // Only refusals since the run was marked count: before that, nothing planted could have asked for them
+  const markedAt = getRun(db, run.id)?.untrusted_at
+  if (!markedAt) return
+  const rows = db.prepare(`SELECT category FROM goal_tool_calls WHERE run_id = ? AND decision = 'deny' AND created_at >= ?
+    AND (category IN (${PROBING_CATEGORIES.map(() => '?').join(', ')}) OR reason LIKE ?)`)
+    .all(run.id, markedAt, ...PROBING_CATEGORIES, `%${OFF_REASON}%`) as { category: string }[]
+  if (rows.length < TRIP_THRESHOLD) return
+  tripRun(db, run.id, `${rows.length} refusals (${[...new Set(rows.map((r) => r.category))].join(', ')})`)
+}
+
 function record(db: Database, run: GoalRun, toolName: string, category: string, decision: 'allow' | 'deny' | 'refused', reason: string | null): void {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -407,13 +428,21 @@ export function guardToolCallForRun(
   db: Database, runId: string, toolName: string,
   input?: Record<string, unknown>, paths: QuarterdeckDataPaths = quarterdeckDataPaths(),
 ): GuardDecision {
-  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND status IN ('queued', 'running')").get(runId) as GoalRun | undefined
+  // A tripped run stays guarded after it was failed (#174)
+  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND (status IN ('queued', 'running') OR tripped_at IS NOT NULL)").get(runId) as GoalRun | undefined
   return run ? guardRun(db, run, toolName, input, paths) : { decision: 'allow' }
 }
 
 function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<string, unknown> | undefined, paths: QuarterdeckDataPaths): GuardDecision {
   const goal = getGoal(db, run.plan_id)
   if (!goal) return { decision: 'allow' }
+  if (run.tripped_at) {
+    const tool = canonicalToolName(toolName)
+    if (tool.startsWith(QUARTERDECK_TOOL_PREFIX) && TRIPPED_ALLOWED.has(tool.slice(QUARTERDECK_TOOL_PREFIX.length))) return { decision: 'allow', run_id: run.id }
+    const reason = `Quarterdeck goal guard: this run tripped (${run.tripped_reason ?? 'repeated refusals'}) and has been ended. Only end_run and fail_run are allowed now: stop.`
+    record(db, run, toolName, TRIPPED_CATEGORY, 'deny', reason)
+    return { decision: 'deny', category: TRIPPED_CATEGORY, run_id: run.id, reason }
+  }
   const workingDir = (db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string } | undefined)?.working_dir ?? process.cwd()
   // A category the person let stay auto after outside content (#159): a command guarded_run checked and
   // staged (naming its copies in the data folder) goes through once, made exactly as it was returned
@@ -435,6 +464,7 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   if (touched !== null) {
     const reason = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, 'deny', reason)
+    tripIfProbing(db, run)
     return { decision: 'deny', category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason }
   }
   // A marked run holding the setting may not read known secret locations: a guarded call could carry them out (#159).
@@ -445,6 +475,7 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
       if (getRun(db, run.id)?.untrusted_source) {
         const reason = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`
         record(db, run, toolName, SECRETS_CATEGORY, 'deny', reason)
+        tripIfProbing(db, run)
         return { decision: 'deny', category: SECRETS_CATEGORY, run_id: run.id, reason }
       }
       for (const path of secretFilePaths(toolName, input, workingDir)) markRunSecretsRead(db, run.id, secret, path)
@@ -480,6 +511,7 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   if (mode === 'off') {
     const reason = `Quarterdeck goal guard: "${category}" is off for this goal, so ${toolName} is not allowed. Don't take or propose this action.`
     record(db, run, toolName, category, 'deny', reason)
+    tripIfProbing(db, run)
     return { decision: 'deny', category, run_id: run.id, reason }
   }
 

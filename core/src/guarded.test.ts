@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { Database } from './sqlite.js'
-import { mkdtempSync, writeFileSync } from 'fs'
+import { mkdtempSync, writeFileSync, existsSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
   checkGuardedPayload, GUARDED_MAX_BYTES, GUARDED_JOB_CHARS, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
+  guardedTarget, normaliseRepo, checkGuardedTarget, runTargets,
   getRun, runSecretPaths, secretFilePaths, secretFileValues, buildOverview,
 } from './index.js'
 import { readFileSync } from 'fs'
@@ -80,9 +81,14 @@ describe('guardRun with auto_after_outside (#159)', () => {
     expect(call('Bash', { command: 'gh auth token' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
     expect(call('Read', { file_path: '/repo/.env' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
     expect(listToolCalls(db, 'g1')[0]).toMatchObject({ category: SECRETS_CATEGORY, decision: 'deny' })
-    expect(call('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
+    // Three such refusals trip the run (#174): carry on in another marked run
+    expect(getRun(db, run.id)!.tripped_at).not.toBeNull()
+    const next = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, next.id, 'mail')
+    const call2 = (tool: string, input: Record<string, unknown>) => guardToolCallForRun(db, next.id, tool, input, paths)
+    expect(call2('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
     updateGoal(db, 'g1', { auto_after_outside: [] })
-    expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
+    expect(call2('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
   })
 
   it('stageGuardedCall: stages a listed call under the data folder, and the staged call goes through once', () => {
@@ -92,9 +98,10 @@ describe('guardRun with auto_after_outside (#159)', () => {
     const stagePaths = { dirs: [dataDir], db: null }
     const cmd = 'gh pr review 1 --comment --body-file review.md'
     const files = [{ path: 'review.md', contents: 'Looks good.' }]
-    expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true })).toMatchObject({ ok: true, category: 'gh.review', files: [] })
+    startedFor(db, run.id, '1@abc')
+    expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true, repo: 'o/r' })).toMatchObject({ ok: true, category: 'gh.review', files: [] })
     expect(listToolCalls(db, 'g1')).toHaveLength(0)
-    const staged = stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {} })
+    const staged = stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, repo: 'o/r' })
     if (!staged.ok) throw new Error(staged.reason)
     expect(staged.files).toHaveLength(1)
     expect(staged.files[0]!.startsWith(join(dataDir, 'guarded', run.id))).toBe(true)
@@ -108,18 +115,33 @@ describe('guardRun with auto_after_outside (#159)', () => {
 
   it('stageGuardedCall: refuses unlisted categories, unmatched commands, oversized and secret payloads', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
-    const opts = { dataDir: join(dir, 'data'), env: { API_SECRET: 'hunter2hunter2' } }
+    const opts = { dataDir: join(dir, 'data'), env: { API_SECRET: 'hunter2hunter2' }, repo: 'o/r' }
+    startedFor(db, run.id, '1@abc')
     expect(stageGuardedCall(db, run.id, 'gh issue edit 1 --add-label x', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/gh\.label/) })
     expect(stageGuardedCall(db, run.id, 'rm -rf /', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/tool rules/) })
     expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'x'.repeat(GUARDED_MAX_BYTES) }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/limit/) })
     expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'key hunter2hunter2' }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/API_SECRET/) })
   })
 
+  it('stageGuardedCall: refuses a call naming another number, another repo, or no target, and stages nothing (#168)', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const dataDir = join(dir, 'data168')
+    const opts = { dataDir, env: {}, repo: 'o/r' }
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body x', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/wasn.t started for a PR or issue/) })
+    startedFor(db, run.id, '1@abc')
+    expect(stageGuardedCall(db, run.id, 'gh pr review 2 --comment --body x', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/names #2, but this run was started for #1/) })
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 -R evil/repo --comment --body x', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/evil\/repo/) })
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body-file a', [{ path: 'a', contents: 'ok' }], { ...opts, repo: null })).toMatchObject({ ok: false, reason: expect.stringMatching(/origin remote/) })
+    expect(existsSync(join(dataDir, 'guarded'))).toBe(false)
+    expect(stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body x', [], opts)).toMatchObject({ ok: true })
+  })
+
   it("stageGuardedCall: a dry run returns the goal's name and its job, the instructions clipped (#170)", () => {
     updateGoal(db, 'g1', { objective: 'Review pull requests', instructions: `Leave a review. ${'x'.repeat(GUARDED_JOB_CHARS * 2)}` })
     const run = insertRun(db, 'g1', 'manual', 'running')
     markRunUntrusted(db, run.id, 'mail')
-    const opts = { dataDir: join(dir, 'data'), env: {}, dryRun: true }
+    startedFor(db, run.id, '1@abc')
+    const opts = { dataDir: join(dir, 'data'), env: {}, dryRun: true, repo: 'o/r' }
     const r = stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body-file a', [{ path: 'a', contents: 'Looks good.' }], opts)
     if (!r.ok) throw new Error(r.reason)
     expect(r.goal_name).toBe('G')
@@ -203,7 +225,8 @@ describe('guardRun with auto_after_outside (#159)', () => {
       const dataDir = join(dir, 'data')
       const cmd = 'gh pr review 1 --comment --body-file review.md'
       const files = [{ path: 'review.md', contents: 'Looks good.' }]
-      expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true }))
+      startedFor(db, run.id, '1@abc')
+      expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true, repo: 'o/r' }))
         .toMatchObject({ ok: false, reason: expect.stringMatching(/read secrets \(\/repo\/\.env\) before it read outside content, so "gh\.review" isn't auto/) })
       const path = join(dir, 'body.md')
       const staged = `gh pr review 1 --comment --body-file ${path}`
@@ -303,5 +326,81 @@ describe('guarded checks', () => {
     expect(consumeGuardedCheck(db, 'r1', 'github.review', cmd, read)).toEqual({ ok: false, reason: expect.stringMatching(/is gone/) })
     files['/data/guarded/r1/body.md'] = 'Looks good.'
     expect(consumeGuardedCheck(db, 'r1', 'github.review', cmd, read).ok).toBe(true)
+  })
+})
+
+/** Gives a run watch lines, as if its brief had taken them (#168). */
+function startedFor(db: Database, runId: string, ...lines: string[]) {
+  for (const [i, line] of lines.entries()) {
+    db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, run_id) VALUES (?, ?, ?, ?, ?, ?)').run(`we-${runId}-${i}`, 'w1', 'g1', line, new Date().toISOString(), runId)
+  }
+}
+
+describe('guardedTarget and the target pin (#168)', () => {
+  const own = 'shannonbay/quarterdeck'
+  it('reads gh api paths, {owner}/{repo} placeholders, gh pr/issue numbers, -R and URLs', () => {
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews -f body=x', own)).toEqual([{ repo: own, number: 12 }])
+    expect(guardedTarget('gh api -X POST repos/Other/Thing/issues/3/comments', own)).toEqual([{ repo: 'other/thing', number: 3 }])
+    expect(guardedTarget('gh pr review 31 --comment --body-file a.md', own)).toEqual([{ repo: own, number: 31 }])
+    expect(guardedTarget('gh issue edit 7 -R evil/repo --add-label x', own)).toEqual([{ repo: 'evil/repo', number: 7 }])
+    expect(guardedTarget('gh pr comment --repo=evil/repo 7 --body x', own)).toEqual([{ repo: 'evil/repo', number: 7 }])
+    expect(guardedTarget('gh pr comment -R github.com/shannonbay/Quarterdeck 7 --body x', own)).toEqual([{ repo: own, number: 7 }])
+    expect(guardedTarget('gh pr comment -R evil.com/shannonbay/Quarterdeck 7 --body x', own)).toEqual([{ repo: 'evil.com/shannonbay/quarterdeck', number: 7 }])
+    expect(guardedTarget('gh pr review https://github.com/evil/repo/pull/9 --approve', own)).toEqual([{ repo: 'evil/repo', number: 9 }])
+    expect(guardedTarget('gh pr review --approve', own)).toBeNull()
+    expect(guardedTarget('gh api graphql -f query=x', own)).toBeNull()
+    // Every gh api part needs its own path: a pinned one can't carry an unpinned one
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews --input f.json && gh api repos/evil/x/gists --input g.json', own)).toBeNull()
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews --input f.json; gh api graphql -f query=x', own)).toBeNull()
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews --input f.json & gh api user', own)).toBeNull()
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews | gh api repos/{owner}/{repo}/issues/12/comments', own)).toEqual([{ repo: own, number: 12 }, { repo: own, number: 12 }])
+    expect(guardedTarget('curl https://example.com', own)).toBeNull()
+  })
+
+  it('normaliseRepo reads https and ssh remotes', () => {
+    expect(normaliseRepo('https://github.com/shannonbay/Quarterdeck.git\n')).toBe(own)
+    expect(normaliseRepo('git@github.com:shannonbay/Quarterdeck.git')).toBe(own)
+    expect(normaliseRepo('https://gitlab.com/a/b')).toBeNull()
+    expect(normaliseRepo('https://github.com/shannonbay/Quarterdeck/')).toBe(own)
+    expect(normaliseRepo('ssh://git@github.com/shannonbay/Quarterdeck.git')).toBe(own)
+    expect(normaliseRepo('github.com/shannonbay/Quarterdeck')).toBe(own)
+    expect(normaliseRepo('https://github.com/a/b/c')).toBeNull()
+    // The whole host must be github.com (CodeQL incomplete URL sanitization)
+    expect(normaliseRepo('https://evilgithub.com/shannonbay/Quarterdeck')).toBeNull()
+    expect(normaliseRepo('https://evil.com/github.com/shannonbay/Quarterdeck')).toBeNull()
+    expect(normaliseRepo('git@evilgithub.com:shannonbay/Quarterdeck.git')).toBeNull()
+    expect(normaliseRepo('git@evil.com/x/github.com:shannonbay/Quarterdeck.git')).toBeNull()
+    expect(normaliseRepo('https://github.com/a b/c')).toBeNull()
+    expect(normaliseRepo('https://github.com//c')).toBeNull()
+  })
+
+  it('normaliseRepo stays fast on a long run of github.com: (CodeQL polynomial regex)', () => {
+    const start = Date.now()
+    expect(normaliseRepo('github.com/' + 'github.com:!'.repeat(50_000))).toBeNull()
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+
+  it('checkGuardedTarget: every target must be the goal repo and a number in the set', () => {
+    expect(checkGuardedTarget('gh pr review 31 --approve', own, [31, 32])).toBeNull()
+    expect(checkGuardedTarget('gh pr review 12 --approve', own, [31, 32])).toMatch(/names #12, but this run was started for #31, #32/)
+    expect(checkGuardedTarget('gh pr review 31 -R evil/repo --approve', own, [31])).toMatch(/evil\/repo #31/)
+    expect(checkGuardedTarget('gh pr review 31 --approve && gh pr comment 40 --body x', own, [31])).toMatch(/#40/)
+    expect(checkGuardedTarget('gh pr review 31 --approve && gh pr comment 32 --body x', own, [31, 32])).toBeNull()
+    expect(checkGuardedTarget('gh pr review --approve', own, [31])).toMatch(/can't be read/)
+    expect(checkGuardedTarget('gh pr review 31 --approve', own, [])).toMatch(/wasn't started for a PR or issue/)
+    expect(checkGuardedTarget('gh pr review 31 --approve', null, [31])).toMatch(/origin remote/)
+  })
+
+  it('runTargets: leading numbers of the run\'s watch lines (<number>@<sha> too) and a #N in its request', () => {
+    const db = openDatabase(join(mkdtempSync(join(tmpdir(), 'qd-target-')), 't.db'))
+    const now = new Date().toISOString()
+    createGoal(db, { id: 'g1', name: 'G', description: null, status: 'active', working_dir: '/tmp', created_at: now, updated_at: now }, { objective: 'o', instructions: '', autonomy: {} })
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    expect(runTargets(db, run.id)).toEqual([])
+    startedFor(db, run.id, '31@abc123', '7 IC_xyz', 'no number here')
+    db.prepare('UPDATE goal_runs SET request = ? WHERE id = ?').run('please look at #44 again', run.id)
+    expect(runTargets(db, run.id)).toEqual([7, 31, 44])
+    const other = insertRun(db, 'g1', 'manual', 'running')
+    expect(runTargets(db, other.id)).toEqual([])
   })
 })

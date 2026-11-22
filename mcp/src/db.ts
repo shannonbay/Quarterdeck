@@ -104,6 +104,7 @@ export const reportRunEnd = (runId: string, input: { answer: string; reason?: st
 export const setRunStep = (runId: string, text: string) => core.setRunStep(db, runId, text)
 export const reportRunProgress = (runId: string, progress: core.RunProgress) => core.reportRunProgress(db, runId, progress)
 export const listWatches = (planId: string) => core.listWatches(db, planId)
+export const watchHealth = (planId: string) => core.watchHealth(db, planId)
 export const checkCommandWatch = (watchId: string) => core.checkCommandWatch(db, watchId)
 export const getWatch = (watchId: string) => core.getWatch(db, watchId)
 export const reportToolWatch = (watchId: string, result: { text: string } | { error: string }) => core.reportToolWatch(db, watchId, result)

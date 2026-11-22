@@ -451,12 +451,15 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
 
 /**
  * A category whose proposals were approved every time lately: switch it to
- * auto here, after a second press, since runs then act without asking.
+ * auto here, after a second press, since runs then act without asking. For a
+ * category already auto whose proposals came from runs that read outside text,
+ * offer to keep it auto after outside text (auto_after_outside, #189).
  */
 function autoSuggestion($: Engine, e: E, view: View, g: GoalCard, s: GoalCard['suggestions'][number]) {
   const { Box, Text, Button, Link } = parts($, e)
   const key = `${g.id}-${s.category}`
   const confirming = view.pending?.kind === 'auto' && view.pending.goalId === g.id && view.pending.category === s.category
+  if (s.kind === 'after_outside') return afterOutsideSuggestion($, e, view, g, s, key, confirming)
   return (
     <Box key={`suggestion-${key}`} flexDirection="column">
       <Text dimColor>Approved every time lately ({s.approvedInARow} in a row): {s.category}</Text>
@@ -479,6 +482,40 @@ function autoSuggestion($: Engine, e: E, view: View, g: GoalCard, s: GoalCard['s
       ) : (
         <Box>
           {action($, e, { key: `auto-${key}`, label: `Switch ${s.category} to auto`, onPress: () => void setConfirm($, { kind: 'auto', goalId: g.id, category: s.category }) })}
+          <Text dimColor> · </Text>
+          <Link key={`autonomy-${key}`} href={`${view.base}/goals/${encodeURIComponent(g.id)}`} label="open the goal page" />
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+/** The auto_after_outside hint (#189): same second press, with the disclosure caveat and any broad-rule warning. */
+function afterOutsideSuggestion($: Engine, e: E, view: View, g: GoalCard, s: GoalCard['suggestions'][number], key: string, confirming: boolean) {
+  const { Box, Text, Button, Link } = parts($, e)
+  return (
+    <Box key={`suggestion-${key}`} flexDirection="column">
+      <Text dimColor>Approved every time lately ({s.approvedInARow} in a row): {s.category}. Keep it auto after outside text?</Text>
+      {confirming ? (
+        <Box flexDirection="column">
+          <Text color="yellow">Runs that read outside text will do {s.category} actions without asking you first. Encoded text can get past the checks, so this fits private repos better than public ones.</Text>
+          {s.warning && <Text color="yellow">{s.warning}</Text>}
+          <Box>
+            <Button
+              key={`after-outside-yes-${key}`}
+              label={view.doing === `after-outside:${key}` ? 'Saving…' : 'Yes, keep it auto'}
+              onPress={() => {
+                void setConfirm($, null)
+                void act($, `after-outside:${key}`, 'keep auto after outside text', async () => void (await updateGoal($, g.id, { auto_after_outside: { [s.category]: true } })))
+              }}
+            />
+            <Text dimColor> · </Text>
+            {action($, e, { key: `after-outside-no-${key}`, label: 'Keep asking', onPress: () => void setConfirm($, null) })}
+          </Box>
+        </Box>
+      ) : (
+        <Box>
+          {action($, e, { key: `after-outside-${key}`, label: `Keep ${s.category} auto after outside text`, onPress: () => void setConfirm($, { kind: 'auto', goalId: g.id, category: s.category }) })}
           <Text dimColor> · </Text>
           <Link key={`autonomy-${key}`} href={`${view.base}/goals/${encodeURIComponent(g.id)}`} label="open the goal page" />
         </Box>
