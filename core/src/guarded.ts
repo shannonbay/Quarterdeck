@@ -185,14 +185,21 @@ export function normaliseRepo(url: string): string | null {
   const p = head.lastIndexOf('/')
   const plain = (s: string) => s.length > 0 && !/\s/.test(s)
   if (!plain(name)) return null
-  // https://github.com/owner/name: github.com then / then the owner
-  if (p >= 0 && head.slice(0, p).toLowerCase().endsWith('github.com') && plain(head.slice(p + 1))) return `${head.slice(p + 1)}/${name}`.toLowerCase()
-  // git@github.com:owner/name: github.com: inside the last segment
-  const seg = head.slice(p + 1)
-  const k = seg.toLowerCase().indexOf('github.com:')
-  const owner = k >= 0 ? seg.slice(k + 'github.com:'.length) : ''
+  // https://github.com/owner/name: the whole host part must be github.com, so
+  // evilgithub.com or evil.com/github.com don't pass (CodeQL incomplete URL sanitization)
+  if (p >= 0) {
+    const owner = head.slice(p + 1)
+    return GITHUB_HOST.test(head.slice(0, p)) && plain(owner) ? `${owner}/${name}`.toLowerCase() : null
+  }
+  // git@github.com:owner/name: only a user@ may come before github.com:
+  const k = head.toLowerCase().indexOf('github.com:')
+  if (k < 0 || !/^(?:[\w.-]+@)?$/.test(head.slice(0, k))) return null
+  const owner = head.slice(k + 'github.com:'.length)
   return plain(owner) ? `${owner}/${name}`.toLowerCase() : null
 }
+
+/** The host part of a GitHub URL, whole: an optional scheme and user, then github.com. */
+const GITHUB_HOST = /^(?:(?:https?|ssh|git):\/\/)?(?:[\w.-]+@)?github\.com$/i
 
 const repoCache = new Map<string, string | null>()
 
@@ -236,7 +243,7 @@ export function guardedTarget(command: string, ownRepo: string): GuardedTarget[]
     let repo = own
     const r = /(?:^|\s)(?:-R|--repo)(?:\s+|=)['"]?([^\s'"]+)['"]?/.exec(args)
     if (r) {
-      repo = (normaliseRepo(`github.com/${r[1]!.replace(/^https?:\/\/github\.com\//, '')}`) ?? r[1]!).toLowerCase()
+      repo = (normaliseRepo(`github.com/${r[1]!.replace(/^(?:https?:\/\/)?github\.com\//i, '')}`) ?? r[1]!).toLowerCase()
       args = args.replace(r[0], ' ')
     }
     if (args.includes('__url__')) {
