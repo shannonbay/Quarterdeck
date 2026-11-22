@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { BAND, engine, fakeQuarterdeck, goal, PANE, START } from './fixtures'
+import { pageContent } from '../hooks/runner'
 
 let settle: () => Promise<void> = async () => {}
 
@@ -509,4 +510,31 @@ test('a steps watch step whose retries run past the time limit stops at it, and 
   expect(reads).toBe(2)
   expect(closed).toHaveLength(1)
   expect(fake.of('watch_report').map((c) => c.input)).toEqual([{ watch_id: 'w-1', error: "step 2 (mcp__chrome__get_page_text, after 2 tries) didn't finish within 30 s", cleanup: 'ok' }])
+})
+
+test('pageContent strips a Claude in Chrome reading answer\'s header, and leaves anything else alone (#180)', () => {
+  const page = 'Title: x\nURL: https://www.facebook.com/marketplace/inbox/\nSource element: <div>\n---\nInbox'
+  expect(pageContent('mcp__claude-in-chrome__get_page_text', page)).toBe('Inbox')
+  expect(pageContent('mcp__claude-in-chrome__read_page', page)).toBe('Inbox')
+  expect(pageContent('mcp__claude-in-chrome__find', page)).toBe('Inbox')
+  expect(pageContent('mcp__claude_ai_Gmail__search_threads', page)).toBe(page)
+  expect(pageContent('mcp__claude-in-chrome__get_page_text', 'Inbox\nTitle: x\n---\nmore')).toBe('Inbox\nTitle: x\n---\nmore')
+  expect(pageContent('mcp__claude-in-chrome__get_page_text', 'Title: x\nURL: y')).toBe('Title: x\nURL: y')
+})
+
+test('a steps watch tests expect and match on the page content, not the reading tool\'s header (#180)', async ($, on) => {
+  const { clock } = engine(on)
+  settle = () => clock.settle()
+  on('tool.call', { tool: 'mcp__claude-in-chrome__get_page_text' as never }, () => ({ result: 'Title: x\nURL: https://www.facebook.com/marketplace/inbox/\nSource element: <div>\n---\nInbox', isError: false }) as never)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Sale' })], {
+    toolWatches: [
+      { watch_id: 'w-1', goal_id: 'g1', name: 'url', tool: 'mcp__claude-in-chrome__get_page_text', input: {}, steps: [{ tool: 'mcp__claude-in-chrome__get_page_text', input: {}, expect: '[Mm]arketplace' }] },
+      { watch_id: 'w-2', goal_id: 'g1', name: 'page', tool: 'mcp__claude-in-chrome__get_page_text', input: {}, steps: [{ tool: 'mcp__claude-in-chrome__get_page_text', input: {}, expect: 'Inbox' }] },
+    ],
+  })
+  await $.session.start(START)
+  await settle()
+  const reports = fake.of('watch_report').map((c) => c.input as { watch_id: string; text?: string; error?: string })
+  expect(reports.find((r) => r.watch_id === 'w-1')!.error).toMatch(/answered something other than expected/)
+  expect(reports.find((r) => r.watch_id === 'w-2')!.text).toBe('Inbox')
 })

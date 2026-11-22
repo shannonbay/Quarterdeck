@@ -1229,7 +1229,7 @@ export const NEWS_LATER = [
 export const FLIPPER_RULES = [
   "Watches: in your first run (and any later run while they aren't approved yet), open Facebook Marketplace's free, furniture and appliances listings and the Marketplace inbox for my area in Claude in Chrome, sorted newest first, and look at how their lines actually read there (the currency, how places are written).",
   'Propose one Claude in Chrome tool watch for each with propose_watch, every 30 minutes, with a pattern you have tested on that page. Never hard-code a currency or a place you have not seen on the page.',
-  'In each watch, pick the tab id from tabs_create_mcp or tabs_context_mcp in an earlier step and pass it as tabId to every later page call (get_page_text and the rest).',
+  'In each watch, pick the tab id from tabs_create_mcp or tabs_context_mcp in an earlier step and pass it as tabId to every later page call (get_page_text and the rest). Give the reading step an expect that names something only the loaded inbox has (a listing title you sell), never a word in the URL, title or navigation such as Marketplace or Inbox, which a blank or signed-out page has too.',
   "Give the inbox watch an ignore pattern that drops my own sent messages (the openings you use, such as \"Hi <first name>, \" and \"Hi, is the \", and Facebook's \"You marked\" and \"reacted to your message\" lines), and start every message you send with one of those openings, so my own replies don't start runs.",
   'You may also propose a Gmail tool watch for emails about a deal.',
   'Triage: sort new lines into skip, maybe and open by title and price alone. Open at most 5 listings a run. Never record skipped listings in memory.',
