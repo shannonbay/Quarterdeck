@@ -14,7 +14,7 @@ import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
 import { describeWatch, listWatches, watchFailing } from './watches.js'
 import type { Event, Goal, GoalRun, Task, Watch } from './types.js'
-import { getRunHold } from './goal-changes.js'
+import { autoAfterOutsideWarning, getRunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { leaseHolder } from './goal-tick.js'
 
@@ -108,11 +108,24 @@ function overviewItem(t: Task, blocked: boolean) {
   return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title)! } } : marked
 }
 
+/** A pane or web hint for a category approved every time lately (#189). */
+export interface AutonomySuggestion {
+  category: string
+  approved_in_a_row: number
+  /** auto: switch a "propose" category to auto. after_outside: keep an "auto" category auto after outside text (auto_after_outside). */
+  kind: 'auto' | 'after_outside'
+  /** after_outside only: autoAfterOutsideWarning's warning when the category's rules look broad. */
+  warning?: string
+}
+
 /**
- * Categories still at "propose" whose last PROMOTE_AFTER human decisions were all
- * approvals: candidates for switching to "auto".
+ * Categories whose last PROMOTE_AFTER human decisions were all approvals: one at
+ * "propose" is a candidate for "auto"; one at "auto" and not yet in
+ * auto_after_outside (its proposals came from runs marked by outside text) is a
+ * candidate for keeping it auto after outside text. The streak counts every
+ * approval, marked run or not; a rejection breaks it.
  */
-export function getAutonomySuggestions(db: Database, planId: string): { category: string; approved_in_a_row: number }[] {
+export function getAutonomySuggestions(db: Database, planId: string): AutonomySuggestion[] {
   const goal = getGoal(db, planId)
   if (!goal) return []
   const rows = db.prepare(`
@@ -127,9 +140,17 @@ export function getAutonomySuggestions(db: Database, planId: string): { category
     if (!s.broken) { if (r.passed) s.n++; else s.broken = true }
     streak.set(r.category, s)
   }
-  return [...streak.entries()]
-    .filter(([c, s]) => s.n >= PROMOTE_AFTER && autonomyFor(goal, c) === 'propose')
-    .map(([category, s]) => ({ category, approved_in_a_row: s.n }))
+  const out: AutonomySuggestion[] = []
+  for (const [category, s] of streak) {
+    if (s.n < PROMOTE_AFTER) continue
+    const mode = autonomyFor(goal, category)
+    if (mode === 'propose') out.push({ category, approved_in_a_row: s.n, kind: 'auto' })
+    else if (mode === 'auto' && !(goal.auto_after_outside ?? []).includes(category)) {
+      const warning = autoAfterOutsideWarning(goal.tool_map ?? {}, category)
+      out.push({ category, approved_in_a_row: s.n, kind: 'after_outside', ...(warning && { warning }) })
+    }
+  }
+  return out
 }
 
 // ── Activity line ─────────────────────────────────────────────────────────────

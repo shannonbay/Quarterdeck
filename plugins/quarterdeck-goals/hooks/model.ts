@@ -38,7 +38,8 @@ export type OverviewGoal = {
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
   /** Missing from a server older than memory recovery (#105). */
   inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
-  suggestions: { category: string; approved_in_a_row: number }[]
+  /** kind and warning are missing from a server older than #189 (every suggestion was then 'auto'). */
+  suggestions: { category: string; approved_in_a_row: number; kind?: 'auto' | 'after_outside'; warning?: string }[]
   /** Missing from a server older than watches. */
   watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
   watch_count?: number
@@ -98,7 +99,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     trend: g.health.map((check) => check.value).filter((v): v is number => v !== null).reverse(),
     memory: g.memory.map((m) => ({ id: m.id, kind: m.kind, text: m.text, pinned: m.pinned, ...(m.untrusted && { untrusted: m.untrusted }) })),
     inactiveMemory: (g.inactive_memory ?? []).map((m) => ({ id: m.id, kind: m.kind, text: m.text, reason: m.reason, inactiveAt: m.inactive_at, replacedBy: m.replaced_by ?? null })),
-    suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row })),
+    suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row, kind: s.kind ?? 'auto', ...(s.warning && { warning: s.warning }) })),
     watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, error: w.error })),
     watchCount: g.watch_count ?? g.watches?.length ?? 0,
     watchGapMinutes: g.watch_gap_minutes ?? 0,
@@ -695,6 +696,8 @@ export type GoalChanges = {
   model?: string | null
   /** Minutes after a watch-started run before watch events start another (0: none). */
   min_watch_gap_minutes?: number
+  /** Category → keep it auto after a run reads outside text (true) or not (false). */
+  auto_after_outside?: Record<string, boolean>
 }
 
 /** A watch as update_goal takes it: a command to run, or a tool to call with its input. */

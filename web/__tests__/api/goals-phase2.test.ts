@@ -106,9 +106,29 @@ describe('promote-to-auto suggestions', () => {
     const r = core.addItem(db, id, null, { goal: 'one more', action: { category: 'email.send', summary: 's' } }).task
     core.rejectTask(db, id, r.id, 'no')
     const data = await (await GETGoal(req('GET'), p(id))).json()
-    expect(data.suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10 }])
+    expect(data.suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10, kind: 'auto' }])
 
+    // Now auto: the same streak suggests keeping it auto after outside text (#189)
     await PATCHGoal(req('PATCH', { autonomy: { 'email.draft_reply': 'auto' } }), p(id))
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10, kind: 'after_outside' }])
+
+    // Once listed in auto_after_outside, or set to off, nothing is suggested
+    core.updateGoal(db, id, { auto_after_outside: ['email.draft_reply'] })
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+    core.updateGoal(db, id, { auto_after_outside: [] })
+    await PATCHGoal(req('PATCH', { autonomy: { 'email.draft_reply': 'off' } }), p(id))
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+  })
+
+  it('a rejection among the last 10 breaks an auto category after-outside streak (#189)', async () => {
+    const id = await goal()
+    const db = getDb()
+    // Proposals made while at propose, as a marked run's would be: a rejection in the middle
+    for (let i = 0; i < 10; i++) {
+      const t = core.addItem(db, id, null, { goal: `review ${i}`, action: { category: 'github.review', summary: 's' } }).task
+      if (i === 4) core.rejectTask(db, id, t.id, 'no'); else core.approveTask(db, id, t.id)
+    }
+    await PATCHGoal(req('PATCH', { autonomy: { 'github.review': 'auto' } }), p(id))
     expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
   })
 })
