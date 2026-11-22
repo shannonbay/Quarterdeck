@@ -114,11 +114,14 @@ export type OverviewDeleted = { id: string; name: string; deleted_at: string; pu
 /** The overview: cards for every goal, full detail for the ids in `detail` (the expanded ones). */
 /** `fullInstructions`: the detailed goals' instructions uncut (an older server ignores it and cuts them). */
 /** `only`: just the goals in `detail`, no other goal's card (#121; an older server ignores it and sends them all). */
-export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = [], fullInstructions = false, only = false): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null; deleted: OverviewDeleted[]; deletedDetail: OverviewGoal[] }> {
-  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; deleted?: OverviewDeleted[]; deleted_detail?: OverviewGoal[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail], ...(fullInstructions && { full_instructions: true }), ...(only && { only: true }) })
+export async function fetchOverview($: Engine, etag: string | null, detail: readonly string[] = [], fullInstructions = false, only = false, watchHealth = false): Promise<{ changed: false } | { changed: true; goals: OverviewGoal[]; etag: string | null; hold: Hold | null; outdated: boolean; standing: boolean; update: Update | null; deleted: OverviewDeleted[]; deletedDetail: OverviewGoal[]; watchHealth: Record<string, WatchHealth[]> }> {
+  const res = await call<{ changed: boolean; etag: string; goals?: OverviewGoal[]; deleted?: OverviewDeleted[]; deleted_detail?: OverviewGoal[]; hold?: Hold | null; outdated?: boolean; standing?: boolean; update?: Update; watch_health?: Record<string, WatchHealth[]> }>($, 'goals_overview', { ...(etag ? { etag } : {}), detail: [...detail], ...(fullInstructions && { full_instructions: true }), ...(only && { only: true }), ...(watchHealth && { watch_health: true }) })
   if (!res.changed) return { changed: false }
-  return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null, deleted: res.deleted ?? [], deletedDetail: res.deleted_detail ?? [] }
+  return { changed: true, goals: res.goals ?? [], etag: res.etag, hold: res.hold ?? null, outdated: res.outdated === true, standing: res.standing === true, update: res.update ?? null, deleted: res.deleted ?? [], deletedDetail: res.deleted_detail ?? [], watchHealth: res.watch_health ?? {} }
 }
+
+/** One watch's health, read fresh for goal_detail (#184); an older server sends none. */
+export interface WatchHealth { name: string; last_checked_at: string | null; last_line_count: number | null; last_fired_at: string | null; fail_count: number }
 
 /** What the server's detect_forge found: the folder's git host and its CLI. */
 export type ForgeDetection = { forge: 'github' | 'gitlab' | null; host: string | null; cli: string | null; cli_installed: boolean; signed_in: boolean }

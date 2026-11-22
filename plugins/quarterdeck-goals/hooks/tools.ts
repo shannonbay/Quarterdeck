@@ -6,8 +6,8 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { DeletedGoal, GoalCard } from '../types'
-import { addTodo, answerItem, approve, createGoal, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
-import { ago, clip, describe, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
+import { type WatchHealth, addTodo, answerItem, approve, createGoal, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
+import { ago, clip, describe, describeWatchHealth, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
 import { pickSchedule, readSchedule, suggestSchedule } from './schedule'
@@ -225,8 +225,9 @@ export function deletedText(d: DeletedGoal): string {
 }
 
 /** A goal's full detail, with its instructions uncut: goal_detail shows them, and update_goal checks instructions_edits against them. */
-async function withDetail($: Engine, goal: GoalCard): Promise<GoalCard> {
-  const res = await fetchOverview($, null, [goal.id], true, true)
+async function withDetail($: Engine, goal: GoalCard, health?: WatchHealth[]): Promise<GoalCard> {
+  const res = await fetchOverview($, null, [goal.id], true, true, health !== undefined)
+  if (res.changed && health) health.push(...(res.watchHealth[goal.id] ?? []))
   const full = res.changed ? res.goals.find((g) => g.id === goal.id) : undefined
   return full ? toCard(full) : goal
 }
@@ -290,12 +291,13 @@ ${describe(card, now)}`, isError: false }
   let { goal } = found
   // goal_detail and update_goal read the goal's full detail, which the overview gives only on request,
   // and always fetch it: an expanded goal's detail has its instructions cut
-  if (name === 'goal_detail' || name === 'update_goal') goal = await withDetail($, goal)
+  const health: WatchHealth[] = []
+  if (name === 'goal_detail' || name === 'update_goal') goal = await withDetail($, goal, name === 'goal_detail' ? health : undefined)
 
   if (name === 'goal_detail') {
     // What waits for the person in full (a memory curation lists every change), not the overview's clip
     const needsYou = await Promise.all(goal.needsYou.map((i) => (i.clipped ? getItem($, goal.id, i.id).then((full) => ({ ...i, ...full }), () => i) : i)))
-    return { text: describe({ ...goal, needsYou }, now), isError: false }
+    return { text: describe({ ...goal, needsYou }, now) + describeWatchHealth(health, now), isError: false }
   }
 
   if (name === 'update_goal') {
