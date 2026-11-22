@@ -222,7 +222,9 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   if (mode === 'off') {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`)
   }
-  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...(input.ask_person && { asks_person: true }) }
+  // `outside_text`: an auto action made a proposal because the run read outside text (what it read).
+  // Only these proposals count toward the "keep it auto after outside text" hint (#189)
+  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...(input.ask_person && { asks_person: true }), ...(untrusted !== undefined && { outside_text: untrusted }) }
   // A question that carries an action waits for the person whatever the category's mode:
   // their answer (or Done) approves that action, like approving a proposal (decideItem)
   if (mode === 'propose' || input.ask_person) {
