@@ -768,6 +768,54 @@ export function failRun(db: Database, runId: string, status: 'failed' | 'timed_o
   tripBreakerIfRunaway(db, run.plan_id)
 }
 
+/** Put on a tripped run's open questions (#174). */
+export const TRIPPED_QUESTION_WARNING = 'Warning: the run that asked this tripped on repeated refusals, so it may have been following planted instructions. Check before you answer.'
+
+/**
+ * Trip a run (#174): it kept getting refused in ways that suggest it was following planted
+ * instructions (or a sure sign such as a canary hit). Abandons its pending proposals, warns on
+ * its open questions, marks the memory it wrote as untrusted, and fails it with
+ * "tripped: <reasons>". The guard then refuses every call it makes but end_run and fail_run.
+ * Two tripped runs in a row pause the goal. Returns false when the run had already tripped
+ * or doesn't exist.
+ */
+export function tripRun(db: Database, runId: string, reasons: string): boolean {
+  const run = getRun(db, runId)
+  if (!run || run.tripped_at) return false
+  const now = new Date().toISOString()
+  const why = `tripped: ${reasons}`
+  updateRun(db, runId, { tripped_at: now, tripped_reason: reasons })
+  const items = db.prepare(`SELECT id, state, notes, approved_at FROM tasks
+    WHERE plan_id = ? AND run_id = ? AND status IN ('pending', 'active') AND archived_at IS NULL`)
+    .all(run.plan_id, runId) as { id: string; state: string | null; notes: string | null; approved_at: string | null }[]
+  for (const item of items) {
+    const state = item.state ? JSON.parse(item.state) as { action?: unknown; asks_person?: boolean } : {}
+    if (state.asks_person) {
+      if (!item.notes?.startsWith(TRIPPED_QUESTION_WARNING)) {
+        db.prepare('UPDATE tasks SET notes = ?, updated_at = ? WHERE plan_id = ? AND id = ?')
+          .run(item.notes ? `${TRIPPED_QUESTION_WARNING}
+
+${item.notes}` : TRIPPED_QUESTION_WARNING, now, run.plan_id, item.id)
+      }
+    } else if (state.action && !item.approved_at) {
+      db.prepare("UPDATE tasks SET status = 'abandoned', abandon_reason = ?, updated_at = ? WHERE plan_id = ? AND id = ?")
+        .run(`the run that proposed this ${why}`, now, run.plan_id, item.id)
+    }
+  }
+  // What the run wrote to memory: an agent's entries made since it started
+  const source = `tripped run ${runId}`
+  db.prepare(`UPDATE goal_memory SET untrusted_source = COALESCE(untrusted_source, ?), untrusted_root = COALESCE(untrusted_root, ?)
+    WHERE plan_id = ? AND source = 'agent' AND created_at >= ?`).run(source, run.untrusted_root ?? source, run.plan_id, run.started_at)
+  if (!run.untrusted_source) markRunUntrusted(db, runId, source)
+  if (run.status === 'running' || run.status === 'queued') failRun(db, runId, 'failed', why)
+  else updateRun(db, runId, { summary: run.summary ?? why })
+  // Two tripped runs in a row pause the goal
+  const previous = db.prepare(`SELECT tripped_at FROM goal_runs WHERE plan_id = ? AND id != ? AND status IN ('completed', 'failed', 'timed_out')
+    AND started_at <= ? ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(run.plan_id, runId, run.started_at) as { tripped_at: string | null } | undefined
+  if (previous?.tripped_at && getGoal(db, run.plan_id)?.status === 'active') updateGoal(db, run.plan_id, { status: 'paused' })
+  return true
+}
+
 /** Hides resolved items older than the goal's retention period. Returns how many were archived. */
 export function archiveResolved(db: Database, planId: string, now: Date = new Date()): number {
   const goal = getGoal(db, planId)
