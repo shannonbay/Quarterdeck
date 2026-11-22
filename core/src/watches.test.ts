@@ -550,7 +550,7 @@ describe('the overview and deleting', () => {
     for (let i = 0; i < 3; i++) recordWatchLines(db, w.id, { error: 'gh: not logged in' })
     const [full] = buildOverview(db, 'all').goals
     expect(full).toMatchObject({ watch_count: 1, watch_failing: true })
-    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', urgent: false, runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, error: 'gh: not logged in' }])
+    expect(full!.watches).toEqual([{ name: 'x', kind: 'command', every_minutes: 15, fires: 'new', urgent: false, runs: 'echo 1', last_fired_at: null, failing: true, cleanup_failures: 0, never_saw: false, error: 'gh: not logged in' }])
     const [card] = buildOverview(db, []).goals
     expect(card).toMatchObject({ watch_count: 1, watch_failing: true, watches: [] })
   })

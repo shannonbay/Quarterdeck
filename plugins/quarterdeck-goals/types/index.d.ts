@@ -100,6 +100,8 @@ export type GoalCard = {
   watchGapMinutes: number
   /** A watch's check has failed several times in a row. */
   watchFailing: boolean
+  /** A watch has seen nothing, or the same one line, since it was set, for a day and 3 checks (#185). */
+  watchNeverSaw: boolean
 }
 
 export type Watch = {
@@ -113,6 +115,8 @@ export type Watch = {
   runs: string
   lastFiredAt: string | null
   failing: boolean
+  /** It has seen nothing, or the same one line, since it was set (#185). */
+  neverSaw: boolean
   error: string | null
 }
 

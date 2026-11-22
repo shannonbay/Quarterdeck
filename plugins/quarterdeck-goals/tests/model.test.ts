@@ -210,7 +210,15 @@ test('a goal whose watch cannot check is not quiet, and an older server without 
   const watch = (failing: boolean) => ({ name: 'new issues', every_minutes: 5, runs: 'gh issue list', last_fired_at: null, failing, error: failing ? 'Exit code 4' : null })
   expect(isQuiet(card({ id: 'g1', name: 'Issues', watches: [watch(false)] }))).toBe(true)
   expect(isQuiet(card({ id: 'g1', name: 'Issues', watches: [watch(true)] }))).toBe(false)
-  expect(card({ id: 'g1', name: 'Issues' })).toMatchObject({ watches: [], watchCount: 0, watchFailing: false })
+  expect(card({ id: 'g1', name: 'Issues' })).toMatchObject({ watches: [], watchCount: 0, watchFailing: false, watchNeverSaw: false })
+})
+
+test('a goal whose watch has never seen anything is not quiet (#185)', () => {
+  const watch = { name: 'inbox', every_minutes: 60, runs: 'read_page', last_fired_at: null, failing: false, never_saw: true, error: null }
+  const g = card({ id: 'g1', name: 'Flips', watches: [watch], watch_never_saw: true })
+  expect(g).toMatchObject({ watchNeverSaw: true, watches: [{ name: 'inbox', neverSaw: true }] })
+  expect(isQuiet(g)).toBe(false)
+  expect(needsAttention(g)).toBe(true)
 })
 
 test('needsAttention: what isQuiet checks, less a run in progress', () => {
