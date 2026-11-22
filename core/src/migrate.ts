@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 25
+export const SCHEMA_VERSION = 26
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -289,7 +289,10 @@ export function runMigrations(db: Database): void {
       waiting_since  TEXT,
       untrusted_at     TEXT,
       untrusted_source TEXT,
-      untrusted_root   TEXT
+      untrusted_root   TEXT,
+      secrets_read_at     TEXT,
+      secrets_read_source TEXT,
+      secrets_read_paths  TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_runs_plan ON goal_runs(plan_id, started_at);
 
@@ -376,6 +379,11 @@ export function runMigrations(db: Database): void {
   // The original source behind a mark, so a mark inherited from memory names it without nesting (#52)
   for (const table of ['goal_runs', 'goal_memory']) {
     try { db.exec(`ALTER TABLE ${table} ADD COLUMN untrusted_root TEXT`) } catch { /* already exists */ }
+  }
+  // When the run first read a secret (touchesSecrets), what matched, and the files read (JSON array):
+  // auto_after_outside then stops applying to it (#169; schema version 26)
+  for (const col of ['secrets_read_at', 'secrets_read_source', 'secrets_read_paths']) {
+    try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
   }
 
   db.exec(`

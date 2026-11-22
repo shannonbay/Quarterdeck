@@ -6,9 +6,9 @@
 
 import { createHash } from 'crypto'
 import type { Database } from './sqlite.js'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { basename, join } from 'path'
-import { newId, getGoal, getRun } from './goals.js'
+import { afterOutsideApplies, newId, getGoal, getRun, runSecretPaths, secretsReadReason } from './goals.js'
 import { autonomyFor } from './goal-engine.js'
 import { matchToolCategory } from './guard.js'
 
@@ -42,6 +42,7 @@ export type GuardedCheck = { ok: true } | { ok: false; reason: string }
  */
 export function checkGuardedPayload(
   command: string, files: GuardedFile[], env: Record<string, string | undefined> = process.env,
+  secretFiles: SecretFileValues[] = [],
 ): GuardedCheck {
   const parts = [command, ...files.map((f) => f.contents)]
   const bytes = parts.reduce((n, p) => n + Buffer.byteLength(p, 'utf8'), 0)
@@ -61,7 +62,34 @@ export function checkGuardedPayload(
       if (text.includes(value)) return { ok: false, reason: `${where(i)} contains the value of the environment variable ${name}` }
     }
   }
+  for (const [i, text] of parts.entries()) {
+    for (const secret of secretFiles) {
+      if (secret.values.some((v) => text.includes(v))) return { ok: false, reason: `${where(i)} contains a value from ${secret.path}, which this run read` }
+    }
+  }
   return { ok: true }
+}
+
+/** The values a secret file the run read holds (#169), which a guarded payload may not contain. */
+export interface SecretFileValues { path: string; values: string[] }
+
+/**
+ * The values guarded_run can recover from a secret file (#169): each `KEY=VALUE`
+ * line's value, and every other non-empty line, of ENV_VALUE_MIN_CHARS or more.
+ * A file that can't be read gives none.
+ */
+export function secretFileValues(path: string): SecretFileValues {
+  let text: string
+  try { text = readFileSync(path, 'utf8') } catch { return { path, values: [] } }
+  const values = new Set<string>()
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const kv = /^(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(.*)$/.exec(line)
+    const value = kv ? kv[1]!.trim().replace(/^["']|["']$/g, '') : line
+    if (value.length >= ENV_VALUE_MIN_CHARS) values.add(value)
+  }
+  return { path, values: [...values] }
 }
 
 /** The sha256 of a staged file's contents, as recorded and compared. */
@@ -163,8 +191,10 @@ export function stageGuardedCall(
   if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== 'auto') {
     return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" }
   }
-  const check = checkGuardedPayload(command, files, opts.env ?? process.env)
+  const check = checkGuardedPayload(command, files, opts.env ?? process.env, runSecretPaths(run).map(secretFileValues))
   if (!check.ok) return check
+  // A run that read secrets loses the setting (#169)
+  if (!afterOutsideApplies(run)) return { ok: false, reason: secretsReadReason(run, category) }
   if (opts.dryRun) return { ok: true, category, command, files: [] }
   const dir = join(opts.dataDir, 'guarded', runId)
   mkdirSync(dir, { recursive: true })
