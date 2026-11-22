@@ -279,7 +279,6 @@ describe('goal guard', () => {
     const decide = (command: string) => guardToolCallForRun(db, run.id, 'Bash', { command })
     expect(decide('gh label list --limit 1000 --json name')).toEqual({ decision: 'allow', run_id: run.id }) // unmapped: allowed, marks nothing
     for (const c of ['gh label edit refined --color 000000', 'gh label clone o/r']) expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.write' })
-    expect(decide('gh issue view 45 --json title,body')).toMatchObject({ decision: 'allow', category: 'untrusted' })
     for (const c of ['gh issue comment 45 --body-file C:/tmp/r.md', 'gh issue edit 45 --add-label refined', 'gh label create refined --color 0e8a16']) {
       expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.issue', reason: expect.stringMatching(/needs approval/) })
     }
@@ -291,6 +290,8 @@ describe('goal guard', () => {
     expect(decide('gh issue comment 45 --body-file C:/tmp/r.md').decision).toBe('allow')
     expect(decide('gh issue edit 45 --add-label refined').decision).toBe('allow') // the same approved action
     expect(decide('gh issue close 45').decision).toBe('deny') // an approval never opens an off category
+    // Read last: once marked, the run would trip on these refusals of an off category (#174)
+    expect(decide('gh issue view 45 --json title,body')).toMatchObject({ decision: 'allow', category: 'untrusted' })
   })
 
   it("holds the triage goal's labels until approved, lets an answered question add needs-refinement only, and refuses every other GitHub write (triageRules in the goals plugin)", () => {
@@ -298,9 +299,6 @@ describe('goal guard', () => {
     const run = insertRun(db, 'g1', 'watch', 'running')
     const decide = (command: string) => guardToolCallForRun(db, run.id, 'Bash', { command })
     expect(decide('gh label list --limit 1000 --json name,description')).toEqual({ decision: 'allow', run_id: run.id }) // unmapped: allowed, marks nothing
-    for (const c of ['gh issue view 49 --json number,title,body,labels,author,url', 'gh issue list --state open --limit 500 --json number,title']) {
-      expect(decide(c)).toMatchObject({ decision: 'allow', category: 'untrusted' })
-    }
     for (const c of ['gh issue edit 49 --add-label "bug,priority: high,triaged"', 'gh label create triaged --color 0e8a16']) {
       expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.label', reason: expect.stringMatching(/needs approval/) })
     }
@@ -326,6 +324,10 @@ describe('goal guard', () => {
       'gh issue edit 49 --remove-label bug --add-label needs-refinement', 'gh issue edit 49 -b x --add-label needs-refinement', 'gh issue edit 49 -R other/repo --add-label needs-refinement',
       'gh issue edit 49 --add-label wontfix --add-label needs-refinement', 'gh issue edit 49 --add-assignee someone --add-label needs-refinement']) {
       expect(decide(c)).toMatchObject({ decision: 'deny', category: 'github.label' })
+    }
+    // Read last: once marked, the run would trip on these refusals of an off category (#174)
+    for (const c of ['gh issue view 49 --json number,title,body,labels,author,url', 'gh issue list --state open --limit 500 --json number,title']) {
+      expect(decide(c)).toMatchObject({ decision: 'allow', category: 'untrusted' })
     }
   })
 

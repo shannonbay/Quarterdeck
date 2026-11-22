@@ -377,6 +377,10 @@ export interface GoalRun {
   secrets_read_source: string | null
   /** The secret files the run read (JSON array of paths), which guarded_run checks a payload against. */
   secrets_read_paths: string | null
+  /** When the run tripped (#174): it kept getting refused in ways that suggest probing, so it was failed and refuses every call but end_run and fail_run. */
+  tripped_at?: string | null
+  /** The refusals it tripped on, e.g. "3 refusals (quarterdeck-data, secrets)". */
+  tripped_reason?: string | null
   /** What the person asked of this one run (Run with a prompt); null for a plain run. */
   request: string | null
   /** 1 when any part of the request came from where the person did not see it (the MCP server's run_goal). */
