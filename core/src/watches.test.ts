@@ -1090,3 +1090,37 @@ describe('schema version 29', () => {
     expect(cols).toContain('attempts')
   })
 })
+
+describe('a tool watch whose match can only give one fixed line (#181)', () => {
+  const SEARCH = 'mcp__claude_ai_Gmail__search_threads'
+  it('fixedMatch tells fixed patterns from ones that vary', async () => {
+    const { fixedMatch } = await import('./watches.js')
+    for (const p of ['Dryer', '[Dd]ryer', 'Dryer\\.', '(?:Dryer)']) expect(fixedMatch(p)).toBe(true)
+    for (const p of ['(\\w+) · Dryer', 'Dryer \\d+', 'Dryer.*', 'a|b', '(?<item>\\w+)']) expect(fixedMatch(p)).toBe(false)
+    // Classes may hold an escaped ] or vary; an unclosed [ is plain text
+    expect(fixedMatch('[\\]x]Dryer')).toBe(true)
+    expect(fixedMatch('[Dd]ryer\\s')).toBe(false)
+    expect(fixedMatch('[Dryer.')).toBe(false)
+  })
+
+  it('fixedMatch stays fast on a long run of [ (CodeQL polynomial regex)', async () => {
+    const { fixedMatch } = await import('./watches.js')
+    const start = Date.now()
+    expect(fixedMatch('['.repeat(200_000))).toBe(true)
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
+
+  it('warns when the watch is set, and not for a command watch', async () => {
+    const { validateWatchSpec } = await import('./watches.js')
+    const [warning] = validateWatchSpec(db, 'g1', 'buyers', { tool: SEARCH, match: '[Dd]ryer' }).warnings
+    expect(warning).toMatch(/can only give one fixed line, so every item looks the same: capture something that differs per item/)
+    expect(validateWatchSpec(db, 'g1', 'buyers', { tool: SEARCH, match: '(\\w+) · Dryer' }).warnings).toEqual([])
+    expect(validateWatchSpec(db, 'g1', 'list', { command: 'echo 1', match: '[Dd]ryer' }).warnings).toEqual([])
+    expect(validateWatchSpec(db, 'g1', 'stock', { tool: SEARCH, match: 'Out of stock', fires: 'change' }).warnings[0]).toMatch(/only tells "present" from "absent"/)
+  })
+
+  it("lists the warning in update_goal's answer", () => {
+    const done = applyGoalChanges(db, 'g1', { watches: { buyers: { tool: SEARCH, match: '[Dd]ryer' } } })
+    expect(done.join('\n')).toMatch(/watch "buyers" added: .*Warning: match "\[Dd\]ryer" can only give one fixed line/)
+  })
+})

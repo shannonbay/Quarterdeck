@@ -216,6 +216,22 @@ export function refusedCalls(db: Database, runId: string): { tool: string; rule:
     .map((c) => ({ tool: c.tool, rule: c.rule ?? null }))
 }
 
+/**
+ * Network commands the goal's recent runs reached that its tool map doesn't name, so the
+ * built-in list marked the run (#173), each with the rule to add: map it to untrusted, or to
+ * trusted-read when it only fetches what the goal trusts. Latest first, one per tool and command.
+ */
+export function unmappedNetworkCommands(db: Database, planId: string, runs = 20): { tool: string; command: string; rule: string }[] {
+  const rows = db.prepare(`SELECT tool_name AS tool, reason FROM goal_tool_calls
+    WHERE plan_id = ? AND reason LIKE 'built-in network command: %'
+      AND run_id IN (SELECT id FROM goal_runs WHERE plan_id = ? ORDER BY started_at DESC LIMIT ?)
+    GROUP BY tool_name, reason ORDER BY MAX(created_at) DESC, MAX(rowid) DESC`).all(planId, planId, runs) as { tool: string; reason: string }[]
+  return rows.map((r) => {
+    const command = r.reason.slice('built-in network command: '.length)
+    return { tool: r.tool, command, rule: `${r.tool}(${command}*)` }
+  })
+}
+
 /** A one-line summary of what a goal is doing now, or what it does next. */
 export function describeActivity({ goal, openRun, lastRun, events, items }: ActivityInput): Activity {
   if (openRun?.status === 'running') {
@@ -359,6 +375,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
             id: m.id, kind: m.kind, text: clip(m.text, CLIP.memory)!, reason: m.inactive_reason ?? null, inactive_at: m.inactive_at ?? null,
             ref: m.inactive_ref ?? null, replaced_by: m.replaced_by ?? null,
           })),
+        // Network commands its runs reached that the tool map doesn't name, with the rule to add (#173)
+        unmapped_network: unmappedNetworkCommands(db, plan.id),
         suggestions: getAutonomySuggestions(db, plan.id),
         // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
         watches: watches.map((w) => ({

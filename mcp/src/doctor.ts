@@ -303,6 +303,27 @@ export async function checkGoals(o: DoctorOptions, plugins: CheckResult): Promis
 }
 
 /**
+ * Network commands active goals' recent runs reached without their tool map naming them, so
+ * the built-in list marked each run as having read outside content (#173). Null when there are none.
+ */
+export async function checkUnmappedNetwork(o: DoctorOptions): Promise<CheckResult | null> {
+  let found: { goal: string; command: string; rule: string }[] = []
+  try {
+    const core = await import('@quarterdeck/core')
+    const db = core.openDatabase(core.defaultDbPath(o.env, o.home))
+    try {
+      found = core.listGoals(db, 'active').flatMap((g) => core.unmappedNetworkCommands(db, g.plan.id).map((c) => ({ goal: g.plan.name, command: c.command, rule: c.rule })))
+    } finally { db.close() }
+  } catch {
+    return null // database problems are reported by checkDatabase
+  }
+  if (found.length === 0) return null
+  return warn('Unmapped network commands',
+    `goal runs reached the network through commands their tool map doesn't name, so each run was marked as having read outside content: ${found.map((f) => `${f.goal}: ${f.command}`).join(', ')}`,
+    `Add a tool rule for each, such as ${found[0].rule} → untrusted, or → trusted-read when it only fetches what the goal trusts (update_goal tool_map).`)
+}
+
+/**
  * The standing session (`quarterdeck runner install`), which runs goals with no
  * Claude Code window open. Null until it has been set up.
  */
@@ -342,7 +363,7 @@ export async function runDoctor(o: DoctorOptions = defaultOptions()): Promise<Ch
     plugins,
     ...[checkUpdates(o), checkPermissionRules(o), checkRenameLeftovers(o)].filter((r): r is CheckResult => r !== null),
     web,
-    ...[await checkGoals(o, plugins), await checkRunner(o)].filter((r): r is CheckResult => r !== null),
+    ...[await checkGoals(o, plugins), await checkUnmappedNetwork(o), await checkRunner(o)].filter((r): r is CheckResult => r !== null),
   ]
 }
 
