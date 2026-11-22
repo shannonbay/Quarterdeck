@@ -57,6 +57,11 @@ A goal's `auto_after_outside` list (`goals.auto_after_outside`, JSON array, sche
 - The tool call is recorded with the reason `AFTER_OUTSIDE_NOTE` and the item with `state.after_outside` (`AFTER_OUTSIDE_ITEM_NOTE`): it went through after outside content because the person allowed it.
 - The checks lower the risk of disclosure but don't remove it: encoded text can get past them. Say so wherever the setting is offered; it fits private repos better than public ones.
 
+## Tripped runs (#174)
+
+- A marked run trips after `TRIP_THRESHOLD` (3) probing refusals (`PROBING_CATEGORIES` in `core/src/guard.ts`: Quarterdeck's data, secrets, an `off` category; a `propose` fallback doesn't count), or at once when `tripRun()` is called directly (the canary and model-check path). `tripRun()` in `core/src/goal-engine.ts` sets `goal_runs.tripped_at`/`tripped_reason`, abandons the run's pending proposals, puts `TRIPPED_QUESTION_WARNING` on its open questions, marks its memory untrusted and fails it with "tripped: <refusals>". The guard then refuses every call from it but `end_run` and `fail_run`. Two tripped runs in a row pause the goal.
+- The overview's runs carry `tripped` (the reason, or null). `goal_detail` shows it on the run's line, and the plugin's failed-run alert (`failureLine()` in `hooks/alerts.ts`) says "run tripped after <refusals>, marked by <source>", adding that the goal paused and `/goal-resume` resumes it when it did.
+
 ## Quarterdeck's own data
 
 A run's `Bash`/`PowerShell` command naming `.quarterdeck`/`.conductor`, `tasks.db` or `QUARTERDECK_DB`/`CONDUCTOR_DB` (or a custom `QUARTERDECK_DB` path), and a file tool's path inside those folders or at the database, are refused first in `guardRun`, whatever the tool map says (`touchesQuarterdeckData`, category `quarterdeck-data`, recorded). The guard plugin sends only `command`, `file_path`, `notebook_path`, `path` and `pattern` as `guard_check`'s `input` (`callInput`); an older server drops the key. It matches names, so a script in another file gets past it: roadmap 1.37 (sandbox) closes that. A goal whose `working_dir` is inside `~/.quarterdeck` can't use file tools on its own folder.
