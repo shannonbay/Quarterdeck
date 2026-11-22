@@ -233,6 +233,7 @@ export function GoalView({ goalId }: { goalId: string }) {
                     {r.status === 'skipped' ? <p className="text-xs text-gray-500 mt-1">{r.skip_reason}</p>
                       : r.summary && <p className="text-gray-700 mt-1 whitespace-pre-wrap">{r.summary}</p>}
                     {r.untrusted_source && <p className="text-xs text-amber-700 mt-1">Read outside content ({r.untrusted_source}): auto actions needed approval</p>}
+                    {r.secrets_read_at && <p className="text-xs text-amber-700 mt-1">Read secrets ({r.secrets_read_source ?? 'a secret'}), so allowed-after-outside was off</p>}
                     {(r.items_created > 0 || r.items_resolved > 0) && (
                       <p className="text-xs text-gray-400 mt-1">{r.items_created} added · {r.items_resolved} resolved</p>
                     )}

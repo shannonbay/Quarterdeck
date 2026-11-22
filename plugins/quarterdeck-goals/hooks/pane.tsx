@@ -20,7 +20,7 @@ import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '..
 import { answerItem, approve, baseUrl, clearRunHold, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
-import { ago, allowRules, allowRulesPrompt, clip, lastRefusals, refusalText, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
+import { ago, allowRules, allowRulesPrompt, clip, lastRefusals, refusalText, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, secretsReadText, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
 import { connectRemote, markActive } from './alerts'
 import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
@@ -427,6 +427,7 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
       <Text dimColor>
         {run ? <Text color={isFailed(run.status) ? 'red' : undefined}>last run {run.status} {ago(run.endedAt ?? run.startedAt, view.now)}</Text> : 'no runs yet'}
         {run && runCost(run) ? ` · ${runCost(run)}` : ''}
+        {run?.secretsRead ? <Text color="yellow">{` · ${secretsReadText(run.secretsRead)}`}</Text> : ''}
         {nextRunText(g, view.now)}
         {g.openItemCount > 0 ? ` · ${g.openItemCount} open` : ''}
       </Text>
