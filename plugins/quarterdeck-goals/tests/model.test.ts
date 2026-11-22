@@ -366,6 +366,17 @@ test('a run that read untrusted content says so, and so does a tool rule marking
   expect(describeGoalChanges(g, { tool_map: { 'mcp__issues__get_issue': 'untrusted' } })[0]).toMatch(/untrusted \(reads outside content/)
 })
 
+test('a run that read secrets before outside content says allowed-after-outside was off (#169)', async () => {
+  const at = new Date(NOW).toISOString()
+  const run = { id: 'run_1', status: 'completed', trigger: 'manual', summary: null, started_at: at, ended_at: at, secrets_read: 'a .env file' }
+  const g = card({ id: 'g1', name: 'Inbox', runs: [run, { ...run, id: 'run_0' }] })
+  expect(g.runs[0]!.secretsRead).toBe('a .env file')
+  expect(describe(g, NOW)).toContain('[read secrets (a .env file), so allowed-after-outside was off]')
+  const plain = card({ id: 'g2', name: 'Inbox', runs: [{ ...run, secrets_read: null }] })
+  expect(plain.runs[0]!.secretsRead).toBeNull()
+  expect(describe(plain, NOW)).not.toContain('read secrets')
+})
+
 test('a goal about something arriving is offered a watch first, its timer next', () => {
   expect(choiceOptions('hourly', true)).toEqual(['When something happens (watch) (suggested)', 'Every hour', 'Daily', 'Weekly'])
   expect(choiceOptions('daily', true)).toEqual(['When something happens (watch) (suggested)', 'Daily', 'Weekly', 'One-off: run once now'])

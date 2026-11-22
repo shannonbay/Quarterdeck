@@ -27,7 +27,7 @@ export type OverviewGoal = {
   open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
   activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string }; detail?: string; untrusted?: string }
-  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
+  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; secrets_read?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
   needs_you_count?: number
@@ -85,7 +85,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     openItemCount: g.open_item_count,
     // step: the part of the job the run says it is on (run_step, #146); then activity.text is that step
     openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status, step: g.open_run.step ?? null } : null,
-    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
+    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, secretsRead: r.secrets_read ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
@@ -265,7 +265,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Open items${g.openItemCount > g.openItems.length ? ` (first ${g.openItems.length} of ${g.openItemCount})` : ''}:\n${g.openItems.map((i) => `- item ${i.id}: ${i.title}`).join('\n')}`
       : null,
     g.runs.length > 0
-      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
+      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.secretsRead ? ` [${secretsReadText(r.secretsRead)}]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
       : null,
     g.instructions.trim() ? `Instructions: ${g.instructions.trim()}` : null,
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
@@ -635,6 +635,11 @@ export function refusalText(c: { tool: string; rule: string | null }): string {
   return c.rule
     ? `Claude Code refused ${c.tool}: add allow rule ${c.rule}`
     : `Claude Code refused ${c.tool}: its tool rule can't be an allow rule, so Claude Code asks each time`
+}
+
+/** A run that read secrets before outside content, as the pane and goal_detail say it (#169): allowed-after-outside was off for it. */
+export function secretsReadText(source: string): string {
+  return `read secrets (${source}), so allowed-after-outside was off`
 }
 
 /** The prompt behind the pane's "Ask Claude to add them": Claude shows the change and waits for a yes. */
