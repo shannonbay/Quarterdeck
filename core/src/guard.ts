@@ -48,7 +48,7 @@ import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
 import { autonomyFor, tripRun } from './goal-engine.js'
 import { afterOutsideApplies, getGoal, getRun, markRunSecretsRead, markRunUntrusted, newId, secretsReadReason } from './goals.js'
-import { consumeGuardedCheck, consumeProposalCall, hasUnusedGuardedCheck, proposalHasCalls, proposalKey } from './guarded.js'
+import { approvedStagedCall, consumeGuardedCheck, consumeProposalCall, hasUnusedGuardedCheck, proposalHasCalls, proposalKey } from './guarded.js'
 import { readFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
@@ -459,6 +459,26 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
       return { decision: 'allow', category: listed, run_id: run.id }
     }
     guardedMiss = match.reason
+  }
+  // An approved proposal's staged call (#167) names its copies under <data dir>/guarded/, so it is
+  // matched before the rule on Quarterdeck's own data. Only those copies are exempt: the command
+  // with their paths taken out must not name the data folder in any other way
+  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) !== 'off') {
+    const staged = approvedStagedCall(db, run.plan_id, listed, command)
+    if (staged !== null) {
+      const rest = staged.files.reduce((c, f) => c.split(f).join(''), command)
+      if (touchesQuarterdeckData(toolName, { ...input, command: rest }, workingDir, paths) === null) {
+        const item = staged.key.slice(staged.key.indexOf('/') + 1)
+        const match = consumeProposalCall(db, staged.key, command, readStaged)
+        if (match.ok) {
+          record(db, run, toolName, listed, 'allow', `staged call of item ${item}`)
+          return { decision: 'allow', category: listed, run_id: run.id }
+        }
+        const reason = `Quarterdeck goal guard: the approved proposal for "${listed}" covers only the exact calls it staged, each once, with their files unchanged (item ${item}: ${match.reason}). Make the call exactly as add_item returned it, or propose this one with add_item.`
+        record(db, run, toolName, listed, 'deny', reason)
+        return { decision: 'deny', category: listed, run_id: run.id, reason }
+      }
+    }
   }
   const touched = touchesQuarterdeckData(toolName, input, workingDir, paths)
   if (touched !== null) {
