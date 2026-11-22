@@ -10,6 +10,11 @@ export type { NewPlan, NewTask, PlanRow, Task, TreeStats } from '@quarterdeck/co
 
 const db = core.openDatabase()
 
+let guardedDirOverride: string | null = null
+/** Points staged files (guarded_stage, a proposal's calls) at another folder; tests use it, since an in-memory database would still stage into the real data folder. */
+export const setGuardedDataDir = (dir: string | null) => { guardedDirOverride = dir }
+const guardedDataDir = () => guardedDirOverride ?? core.quarterdeckDataPaths().dirs[0]!
+
 export const getPlan = (id: string) => core.getPlan(db, id)
 export const listPlans = (status: 'active' | 'archived' | 'all') => core.listPlans(db, status)
 export const insertPlan = (plan: NewPlan) => core.insertPlan(db, plan)
@@ -63,13 +68,13 @@ export function recordItemAttempt(planId: string, taskId: string, runId: string 
 export const addItem = (planId: string, runId: string | null, input: core.AddItemInput) => core.addItem(db, planId, runId, input)
 /** Stages a proposal's exact calls (#167) and stores the staged commands in its action as action.calls. */
 export const stageProposalCalls = (task: { id: string; plan_id: string; run_id: string | null }, category: string, calls: core.ProposalCall[]) => {
-  const staged = core.stageProposalCalls(db, task, category, calls, { dataDir: core.quarterdeckDataPaths().dirs[0]! })
+  const staged = core.stageProposalCalls(db, task, category, calls, { dataDir: guardedDataDir() })
   db.prepare("UPDATE tasks SET state = json_set(COALESCE(state, '{}'), '$.action.calls', json(?)) WHERE plan_id = ? AND id = ?").run(JSON.stringify(staged), task.plan_id, task.id)
   return staged
 }
 export const proposalCallsProblem = core.proposalCallsProblem
 export const proposalHasCalls = (planId: string, taskId: string) => core.proposalHasCalls(db, core.proposalKey(planId, taskId))
-export const clearProposalCalls = (planId: string, taskId: string) => core.clearProposalCalls(db, core.proposalKey(planId, taskId), core.quarterdeckDataPaths().dirs[0]!)
+export const clearProposalCalls = (planId: string, taskId: string) => core.clearProposalCalls(db, core.proposalKey(planId, taskId), guardedDataDir())
 export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core.insertMemory(db, m)
 export const getMemory = (id: string) => core.getMemory(db, id)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(db, id, fields)
@@ -97,7 +102,7 @@ export const failRun = (runId: string, status: 'failed' | 'timed_out', reason: s
 export const attachAgent = (runId: string, agentId: string) => core.attachAgent(db, runId, agentId)
 export const guardToolCallForRun = (runId: string, tool: string, input?: Record<string, unknown>) => core.guardToolCallForRun(db, runId, tool, input)
 export const stageGuardedCall = (runId: string, command: string, files: core.GuardedFile[], dryRun: boolean) =>
-  core.stageGuardedCall(db, runId, command, files, { dataDir: core.quarterdeckDataPaths().dirs[0]!, dryRun })
+  core.stageGuardedCall(db, runId, command, files, { dataDir: guardedDataDir(), dryRun })
 export const recordRefusal = (runId: string, tool: string, input?: Record<string, unknown>) => core.recordRefusal(db, runId, tool, input)
 export const updateGoal = (planId: string, fields: Parameters<typeof core.updateGoal>[2]) => core.updateGoal(db, planId, fields)
 
