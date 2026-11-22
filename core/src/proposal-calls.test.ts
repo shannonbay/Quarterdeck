@@ -1,0 +1,111 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import type { Database } from './sqlite.js'
+import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import {
+  openDatabase, createGoal, updateGoal, insertRun, addItem, guardToolCallForRun, SCHEMA_VERSION,
+  stageProposalCalls, proposalCalls, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES,
+} from './index.js'
+
+// #167: an approved proposal covers only the exact calls it staged, each once
+describe('proposal staged calls (#167)', () => {
+  let db: Database
+  let dataDir: string
+  const now = new Date().toISOString()
+  const paths = { dirs: ['/nowhere/qd-data'], db: null }
+
+  beforeEach(() => {
+    db = openDatabase(':memory:')
+    dataDir = mkdtempSync(join(tmpdir(), 'qd-proposal-'))
+    createGoal(db, { id: 'g1', name: 'G', description: null, status: 'active', working_dir: '/tmp', created_at: now, updated_at: now }, { objective: 'o', instructions: '', autonomy: { 'gh.review': 'propose' } })
+    updateGoal(db, 'g1', { tool_map: { 'Bash(gh pr review*)': 'gh.review' } })
+  })
+
+  const approve = (id: string) => db.prepare("UPDATE tasks SET status = 'active', approved_at = ? WHERE id = ?").run(now, id)
+  const propose = (runId: string, ref: string) => {
+    const r = addItem(db, 'g1', runId, { goal: 'Review', external_ref: ref, action: { category: 'gh.review', summary: 'Post review' } })
+    return r.task.id
+  }
+  const bash = (runId: string, command: string) => guardToolCallForRun(db, runId, 'Bash', { command }, paths)
+
+  it('schema 29 adds guarded_checks.task_id', () => {
+    expect(SCHEMA_VERSION).toBe(29)
+    const cols = (db.prepare('PRAGMA table_info(guarded_checks)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('task_id')
+  })
+
+  it('stages files under guarded/<task id>/ and returns the staged commands', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    const [cmd] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    expect(cmd).toContain(join(dataDir, 'guarded', id))
+    expect(cmd).not.toContain('/work/review.md')
+    expect(proposalHasCalls(db, id)).toBe(true)
+    expect(proposalCalls(db, id)).toHaveLength(1)
+  })
+
+  it('once approved, the exact staged call goes through once, from a later run; anything else is refused with the reason', () => {
+    const first = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(first.id, 'a')
+    const [cmd] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: first.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    db.prepare("UPDATE goal_runs SET status = 'completed' WHERE id = ?").run(first.id)
+    approve(id)
+    const later = insertRun(db, 'g1', 'manual', 'running')
+    const other = bash(later.id, 'gh pr review 13 --approve')
+    expect(other.decision).toBe('deny')
+    expect(other.reason).toContain('no staged call')
+    expect(bash(later.id, cmd).decision).toBe('allow')
+    const again = bash(later.id, cmd)
+    expect(again.decision).toBe('deny')
+    expect(again.reason).toContain('already made')
+  })
+
+  it('refuses a staged call whose file changed or is gone', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    const [a, b] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /w/a.md', files: [{ path: '/w/a.md', contents: 'one' }] },
+      { command: 'gh pr review 14 --body-file /w/b.md', files: [{ path: '/w/b.md', contents: 'two' }] },
+    ], { dataDir })
+    approve(id)
+    const [fa, fb] = proposalCalls(db, id).map((c) => c.files[0])
+    writeFileSync(fa, 'changed')
+    expect(bash(run.id, a).reason).toContain('changed after it was proposed')
+    rmSync(fb)
+    expect(bash(run.id, b).reason).toContain('is gone')
+  })
+
+  it('a proposal without calls still covers its whole category', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    approve(id)
+    expect(proposalHasCalls(db, id)).toBe(false)
+    expect(bash(run.id, 'gh pr review 1 --approve').decision).toBe('allow')
+    expect(bash(run.id, 'gh pr review 2 --approve').decision).toBe('allow')
+  })
+
+  it('restaging drops the old calls and their files', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    const [old] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [{ command: 'gh pr review 12 --approve' }], { dataDir })
+    const [now2] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [{ command: 'gh pr review 12 --comment' }], { dataDir })
+    approve(id)
+    expect(bash(run.id, old).decision).toBe('deny')
+    expect(bash(run.id, now2).decision).toBe('allow')
+    clearProposalCalls(db, id, dataDir)
+    expect(proposalHasCalls(db, id)).toBe(false)
+    expect(existsSync(join(dataDir, 'guarded', id))).toBe(false)
+  })
+
+  it('caps the number of calls and their size', () => {
+    expect(proposalCallsProblem(Array.from({ length: PROPOSAL_MAX_CALLS + 1 }, () => ({ command: 'x' })))).toContain('at most')
+    expect(proposalCallsProblem([{ command: ' ' }])).toContain('no command')
+    expect(proposalCallsProblem([{ command: 'x', files: [{ path: 'p', contents: 'a'.repeat(GUARDED_MAX_BYTES) }] }])).toContain('limit')
+    expect(proposalCallsProblem([{ command: 'gh pr review 1' }])).toBeNull()
+  })
+})

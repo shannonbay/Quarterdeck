@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 28
+export const SCHEMA_VERSION = 29
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -613,10 +613,15 @@ export function runMigrations(db: Database): void {
       file_hashes TEXT NOT NULL DEFAULT '{}',
       used_at     TEXT,
       recorded_at TEXT,
-      created_at  TEXT NOT NULL
+      created_at  TEXT NOT NULL,
+      task_id     TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);
   `)
+  // A proposal's exact staged calls (#167; schema version 29): a check with a task_id belongs to
+  // that item, and its approval covers only those calls, each once, from whichever run carries it out
+  try { db.exec('ALTER TABLE guarded_checks ADD COLUMN task_id TEXT') } catch { /* already exists */ }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_guarded_checks_task ON guarded_checks(task_id)')
 
   // ── Renamed from Conductor: the MCP server's tools moved from mcp__conductor__* ──
   db.exec(`

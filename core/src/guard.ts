@@ -48,7 +48,7 @@ import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
 import { autonomyFor, tripRun } from './goal-engine.js'
 import { afterOutsideApplies, getGoal, getRun, markRunSecretsRead, markRunUntrusted, newId, secretsReadReason } from './goals.js'
-import { consumeGuardedCheck, hasUnusedGuardedCheck } from './guarded.js'
+import { consumeGuardedCheck, consumeProposalCall, hasUnusedGuardedCheck, proposalHasCalls } from './guarded.js'
 import { readFileSync } from 'fs'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
 
@@ -423,15 +423,35 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   }
 
   // propose: allowed while an approved proposal for this category is still being carried out
-  // (active and not done). One action can take many calls; completing the item ends it.
-  const approved = (db.prepare(`
-    SELECT COUNT(*) AS n FROM tasks
+  // (active and not done). A proposal that staged exact calls (#167) covers only those, each once,
+  // made exactly as staged with their files unchanged; one without covers any call in the category
+  // until completing the item ends it.
+  const approvedItems = db.prepare(`
+    SELECT id FROM tasks
     WHERE plan_id = ? AND status = 'active' AND archived_at IS NULL AND approved_at IS NOT NULL
       AND json_extract(state, '$.action.category') = ?
-  `).get(run.plan_id, category) as { n: number }).n
-  if (approved > 0) {
+    ORDER BY created_at, rowid
+  `).all(run.plan_id, category) as { id: string }[]
+  let stagedMiss: string | null = null
+  let categoryWide = false
+  for (const item of approvedItems) {
+    if (!proposalHasCalls(db, item.id)) { categoryWide = true; continue }
+    if (command === null) { stagedMiss ??= `item ${item.id} was approved for its staged commands only`; continue }
+    const match = consumeProposalCall(db, item.id, command, readStaged)
+    if (match.ok) {
+      record(db, run, toolName, category, 'allow', `staged call of item ${item.id}`)
+      return { decision: 'allow', category, run_id: run.id }
+    }
+    stagedMiss = `item ${item.id}: ${match.reason}`
+  }
+  if (categoryWide) {
     record(db, run, toolName, category, 'allow', null)
     return { decision: 'allow', category, run_id: run.id }
+  }
+  if (stagedMiss !== null) {
+    const reason = `Quarterdeck goal guard: the approved proposal for "${category}" covers only the exact calls it staged, each once, with their files unchanged (${stagedMiss}). Make the call exactly as add_item returned it, or propose this one with add_item.`
+    record(db, run, toolName, category, 'deny', reason)
+    return { decision: 'deny', category, run_id: run.id, reason }
   }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`
   const guardedHow = secretsOff ? ` You let "${category}" stay auto after outside content, but ${secretsReadReason(getRun(db, run.id)!, category)}.`
