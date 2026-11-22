@@ -91,6 +91,8 @@ export type GoalCard = {
   inactiveMemory: InactiveMemory[]
   /** Categories approved every time lately: candidates for 'auto'. */
   suggestions: { category: string; approvedInARow: number }[]
+  /** Network commands recent runs reached that the tool map doesn't name, with the rule to add (#173) */
+  unmappedNetwork?: { tool: string; command: string; rule: string }[]
   /** Checks whose new lines start a run (empty on a card: `watchCount` has how many). */
   watches: Watch[]
   watchCount: number

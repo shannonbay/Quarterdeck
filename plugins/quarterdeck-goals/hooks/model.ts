@@ -39,6 +39,7 @@ export type OverviewGoal = {
   /** Missing from a server older than memory recovery (#105). */
   inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
   suggestions: { category: string; approved_in_a_row: number }[]
+  unmapped_network?: { tool: string; command: string; rule: string }[]
   /** Missing from a server older than watches. */
   watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
   watch_count?: number
@@ -99,6 +100,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     memory: g.memory.map((m) => ({ id: m.id, kind: m.kind, text: m.text, pinned: m.pinned, ...(m.untrusted && { untrusted: m.untrusted }) })),
     inactiveMemory: (g.inactive_memory ?? []).map((m) => ({ id: m.id, kind: m.kind, text: m.text, reason: m.reason, inactiveAt: m.inactive_at, replacedBy: m.replaced_by ?? null })),
     suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row })),
+    unmappedNetwork: g.unmapped_network ?? [],
     watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, error: w.error })),
     watchCount: g.watch_count ?? g.watches?.length ?? 0,
     watchGapMinutes: g.watch_gap_minutes ?? 0,
@@ -275,8 +277,19 @@ export function describe(g: GoalCard, now: number): string {
     autoAfterOutsideText(g),
     Object.keys(g.toolMap).length ? `Tool rules: ${Object.entries(g.toolMap).map(([p, c]) => `${p} → ${c}`).join(', ')}` : null,
     allowRulesText(g),
+    unmappedNetworkText(g),
     g.memory.length > 0 ? `Memory:\n${g.memory.map((m) => `- ${m.id} [${m.kind}${m.pinned ? ', pinned' : ''}${m.untrusted ? `, untrusted: written after ${m.untrusted}` : ''}] ${m.text}`).join('\n')}` : null,
   ].filter(Boolean).join('\n\n')
+}
+
+/**
+ * Network commands the goal's recent runs reached that its tool map doesn't name, so the
+ * built-in list marked each run as having read outside content (#173), with the rule to add.
+ */
+export function unmappedNetworkText(g: Pick<GoalCard, 'unmappedNetwork'>): string | null {
+  const list = g.unmappedNetwork ?? []
+  if (list.length === 0) return null
+  return `Unmapped network commands (each marked its run as having read outside content; map it to untrusted, or to trusted-read if it only fetches what this goal trusts):\n${list.map((c) => `- ${c.command}: add tool rule ${c.rule} → untrusted or → trusted-read`).join('\n')}`
 }
 
 /** `text` cut to `columns` characters, ending in … when cut. */
