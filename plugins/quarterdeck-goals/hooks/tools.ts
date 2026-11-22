@@ -114,7 +114,7 @@ export const TOOLS = [
   },
   {
     name: 'update_goal',
-    description: "Changes a Quarterdeck goal: name, objective, standing instructions, autonomy per action category (off / propose / auto; null puts one back to the default, propose), merging one action category into another, tool rules (tool name pattern → category; null removes one), memory to add or forget (ids from goal_detail), watches, the model its runs use, or pause / resume. A watch starts a run when something happens (a new issue, a feed entry, a file, an email): it is a shell command, run every few minutes in the goal's directory, that prints one line per current item, or a read-only connector tool called every few minutes; an item not there before starts a run, which is told the new ones. The answer says whether each new watch's command worked. Try the command or the tool yourself first; the goal-watches skill has recipes. The person sees each change and is asked to confirm first. For the schedule use set_schedule.",
+    description: "Changes a Quarterdeck goal: name, objective, standing instructions, autonomy per action category (off / propose / auto; null puts one back to the default, propose), merging one action category into another, tool rules (tool name pattern → category; null removes one), memory to add or forget (ids from goal_detail), watches, the model its runs use, or pause / resume. A watch starts a run when something happens (a new issue, a feed entry, a file, an email): it is a shell command, run every few minutes in the goal's directory, that prints one line per current item, or a read-only connector tool called every few minutes (or several in order, as steps, for a source that needs more than one call); an item not there before starts a run, which is told the new ones. The answer says whether each new watch's command worked. Try the command or the tool yourself first; the goal-watches skill has recipes. The person sees each change and is asked to confirm first. For the schedule use set_schedule.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -144,11 +144,28 @@ export const TOOLS = [
           description: 'Watch name → the watch; null removes it. Giving an existing name changes that watch',
           additionalProperties: {
             type: ['object', 'null'],
-            description: 'Give a command or a tool, one of them',
+            description: 'Give a command, a tool or steps, one of them',
             properties: {
               command: { type: 'string', description: 'Prints one line per current item and exits 0. Runs under cmd.exe on Windows and sh elsewhere, so quote with double quotes' },
               tool: { type: 'string', description: 'For what only a connector reaches (mail, calendar, files): the full name of a tool that only reads, e.g. a mail search. The session running goals calls it with nobody asked' },
               input: { type: 'object', description: "The tool's arguments. Ask for ids only, and few results" },
+              steps: {
+                type: 'array',
+                maxItems: 4,
+                description: 'Instead of tool + input, for a source that needs several calls (e.g. a browser navigate, then get_page_text with {{tabId}}; see the goal-watches skill): up to 4 read-only calls in order; the last answer is read with match',
+                items: {
+                  type: 'object',
+                  properties: {
+                    tool: { type: 'string' },
+                    input: { type: 'object', description: 'May use {{name}} for a value an earlier step picked' },
+                    pick: { type: 'object', description: 'Name → {regex: "one group"} or {json: "a.b[0]"} over this step answer, for later inputs as {{name}}' },
+                    expect: { type: 'string', description: "A regular expression this step's answer must match, else the check fails" },
+                    retry: { type: 'number', description: 'Tries in all, 1 to 5, for a step that errors or misses expect or a pick (a page still loading)' },
+                  },
+                  required: ['tool'],
+                },
+              },
+              finally: { type: 'object', description: 'With steps: a call that always runs after them, even after a failure (e.g. close the tab)', properties: { tool: { type: 'string' }, input: { type: 'object' } }, required: ['tool'] },
               match: { type: 'string', description: 'For a tool: a regular expression over its answer; each match (its first group) is one item (left out: every "id" in a JSON answer). For a command: only output lines it matches count' },
               ignore: { type: ['string', 'null'], description: 'A regular expression: lines it matches are left out (never start a run, never marked seen). null removes it' },
               urgent: { type: 'boolean', description: "true: this watch's news starts a run at once, even within the goal's min_watch_gap_minutes (for sources where minutes matter)" },

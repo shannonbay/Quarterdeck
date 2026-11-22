@@ -657,6 +657,25 @@ test('a category approved every time lately can be switched to auto, after a sec
   await ui.unmount()
 })
 
+test('an auto category approved every time lately can be kept auto after outside text, after a second press (#189)', async ($, on) => {
+  engine(on)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Reviews', suggestions: [{ category: 'github.review', approved_in_a_row: 12, kind: 'after_outside', warning: 'Its rules look broad.' }] })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Approved every time lately \(12 in a row\): github\.review\. Keep it auto after outside text\?/ })).toBeDefined()
+
+  await ui.press({ key: 'after-outside-g1-github.review' })
+  expect(await ui.find({ type: 'Text', text: /Encoded text can get past the checks/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'Its rules look broad.' })).toBeDefined()
+  await ui.press({ key: 'after-outside-no-g1-github.review' })
+  expect(fake.of('update_goal')).toEqual([])
+
+  await ui.press({ key: 'after-outside-g1-github.review' })
+  await ui.press({ key: 'after-outside-yes-g1-github.review' })
+  expect(fake.of('update_goal').map((c) => c.input)).toEqual([{ goal_id: 'g1', auto_after_outside: { 'github.review': true } }])
+  await ui.unmount()
+})
+
 test('a run\'s question waits under Needs you with Answer and Done', async ($, on) => {
   engine(on)
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Jobs', needs_you: [question('1', 'Which job sites should I search?', 'Seek has most roles; LinkedIn has recruiters. I\'d search both.'), question('2', 'Connect Gmail')] })])

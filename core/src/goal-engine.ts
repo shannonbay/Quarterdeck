@@ -17,6 +17,7 @@ import { claimUsedGuardedCheck } from './guarded.js'
 export const AFTER_OUTSIDE_ITEM_NOTE = 'Went through after outside content because you allowed it (checked by guarded_run)'
 import { listHealth } from './health.js'
 import { releaseWatchEvents, takeWatchEvents, type WatchNews } from './watches.js'
+import { cleanOutsideText, isHidden } from './outside-text.js'
 import type { AutonomyMode, Goal, GoalMemory, GoalRun, MemoryKind, MemorySource, Task, TriggerKind } from './types.js'
 
 export class GoalError extends Error {}
@@ -221,7 +222,9 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   if (mode === 'off') {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`)
   }
-  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...(input.ask_person && { asks_person: true }) }
+  // `outside_text`: an auto action made a proposal because the run read outside text (what it read).
+  // Only these proposals count toward the "keep it auto after outside text" hint (#189)
+  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...(input.ask_person && { asks_person: true }), ...(untrusted !== undefined && { outside_text: untrusted }) }
   // A question that carries an action waits for the person whatever the category's mode:
   // their answer (or Done) approves that action, like approving a proposal (decideItem)
   if (mode === 'propose' || input.ask_person) {
@@ -372,7 +375,8 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
     .sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id))
 
   // Watch lines are outside text (issue titles, email subjects): handing them to the run marks it
-  const watchEvents = takeWatchEvents(db, planId, runId)
+  // Each line is cleaned: hidden comments and invisible characters show as markers
+  const watchEvents = takeWatchEvents(db, planId, runId).map((w) => ({ ...w, new: w.new.map((line) => cleanOutsideText(line).text) }))
   if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE)
   // So is memory a marked run wrote: otherwise injected text could wait one run and act unchecked
   const taintedMemory = memory.find((m) => m.untrusted_source)
@@ -529,19 +533,13 @@ export function startRun(db: Database, runId: string, sessionId: string | null):
 /** The longest goal status a run can set: it sits in the goal's one-line summary. */
 export const STATUS_NOTE_MAX = 40
 
-/** Control characters, zero-width and text-direction marks: they could hide or reorder what the pane shows. */
-function isHidden(code: number): boolean {
-  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || (code >= 0x200b && code <= 0x200f)
-    || (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)
-}
-
 /**
  * A run's goal status as the pane shows it: plain text on one line (control
  * characters and escape sequences dropped, whitespace collapsed), capped at
  * STATUS_NOTE_MAX characters. Empty means clear it.
  */
 export function cleanStatusNote(text: string): string {
-  const plain = [...text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')] // ANSI escape sequences
+  const plain = [...cleanOutsideText(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ''), { markers: false }).text] // ANSI escape sequences, then hidden comments and tag characters
     .map((c) => (isHidden(c.codePointAt(0)!) ? ' ' : c)) // control and direction characters
     .join('')
     .replace(/\s+/g, ' ')
@@ -768,6 +766,54 @@ export function failRun(db: Database, runId: string, status: 'failed' | 'timed_o
   releaseWatchEvents(db, runId)
   // Runs that keep crashing or timing out can loop too
   tripBreakerIfRunaway(db, run.plan_id)
+}
+
+/** Put on a tripped run's open questions (#174). */
+export const TRIPPED_QUESTION_WARNING = 'Warning: the run that asked this tripped on repeated refusals, so it may have been following planted instructions. Check before you answer.'
+
+/**
+ * Trip a run (#174): it kept getting refused in ways that suggest it was following planted
+ * instructions (or a sure sign such as a canary hit). Abandons its pending proposals, warns on
+ * its open questions, marks the memory it wrote as untrusted, and fails it with
+ * "tripped: <reasons>". The guard then refuses every call it makes but end_run and fail_run.
+ * Two tripped runs in a row pause the goal. Returns false when the run had already tripped
+ * or doesn't exist.
+ */
+export function tripRun(db: Database, runId: string, reasons: string): boolean {
+  const run = getRun(db, runId)
+  if (!run || run.tripped_at) return false
+  const now = new Date().toISOString()
+  const why = `tripped: ${reasons}`
+  updateRun(db, runId, { tripped_at: now, tripped_reason: reasons })
+  const items = db.prepare(`SELECT id, state, notes, approved_at FROM tasks
+    WHERE plan_id = ? AND run_id = ? AND status IN ('pending', 'active') AND archived_at IS NULL`)
+    .all(run.plan_id, runId) as { id: string; state: string | null; notes: string | null; approved_at: string | null }[]
+  for (const item of items) {
+    const state = item.state ? JSON.parse(item.state) as { action?: unknown; asks_person?: boolean } : {}
+    if (state.asks_person) {
+      if (!item.notes?.startsWith(TRIPPED_QUESTION_WARNING)) {
+        db.prepare('UPDATE tasks SET notes = ?, updated_at = ? WHERE plan_id = ? AND id = ?')
+          .run(item.notes ? `${TRIPPED_QUESTION_WARNING}
+
+${item.notes}` : TRIPPED_QUESTION_WARNING, now, run.plan_id, item.id)
+      }
+    } else if (state.action && !item.approved_at) {
+      db.prepare("UPDATE tasks SET status = 'abandoned', abandon_reason = ?, updated_at = ? WHERE plan_id = ? AND id = ?")
+        .run(`the run that proposed this ${why}`, now, run.plan_id, item.id)
+    }
+  }
+  // What the run wrote to memory: an agent's entries made since it started
+  const source = `tripped run ${runId}`
+  db.prepare(`UPDATE goal_memory SET untrusted_source = COALESCE(untrusted_source, ?), untrusted_root = COALESCE(untrusted_root, ?)
+    WHERE plan_id = ? AND source = 'agent' AND created_at >= ?`).run(source, run.untrusted_root ?? source, run.plan_id, run.started_at)
+  if (!run.untrusted_source) markRunUntrusted(db, runId, source)
+  if (run.status === 'running' || run.status === 'queued') failRun(db, runId, 'failed', why)
+  else updateRun(db, runId, { summary: run.summary ?? why })
+  // Two tripped runs in a row pause the goal
+  const previous = db.prepare(`SELECT tripped_at FROM goal_runs WHERE plan_id = ? AND id != ? AND status IN ('completed', 'failed', 'timed_out')
+    AND started_at <= ? ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(run.plan_id, runId, run.started_at) as { tripped_at: string | null } | undefined
+  if (previous?.tripped_at && getGoal(db, run.plan_id)?.status === 'active') updateGoal(db, run.plan_id, { status: 'paused' })
+  return true
 }
 
 /** Hides resolved items older than the goal's retention period. Returns how many were archived. */

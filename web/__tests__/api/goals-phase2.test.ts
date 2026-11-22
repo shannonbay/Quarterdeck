@@ -106,12 +106,45 @@ describe('promote-to-auto suggestions', () => {
     const r = core.addItem(db, id, null, { goal: 'one more', action: { category: 'email.send', summary: 's' } }).task
     core.rejectTask(db, id, r.id, 'no')
     const data = await (await GETGoal(req('GET'), p(id))).json()
-    expect(data.suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10 }])
+    expect(data.suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10, kind: 'auto' }])
 
+    // Now auto: approvals from while it was propose don't suggest keeping it auto after outside text (#189)
     await PATCHGoal(req('PATCH', { autonomy: { 'email.draft_reply': 'auto' } }), p(id))
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+
+    // Ten proposals a marked run made of its auto actions, all approved, do
+    for (let i = 0; i < 10; i++) core.approveTask(db, id, markedProposal(id, 'email.draft_reply').id)
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([{ category: 'email.draft_reply', approved_in_a_row: 10, kind: 'after_outside' }])
+
+    // Once listed in auto_after_outside, or set to off, nothing is suggested
+    await PATCHGoal(req('PATCH', { auto_after_outside: ['email.draft_reply'] }), p(id))
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+    core.updateGoal(db, id, { auto_after_outside: [] })
+    await PATCHGoal(req('PATCH', { autonomy: { 'email.draft_reply': 'off' } }), p(id))
+    expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
+  })
+
+  it('a rejection among the last 10 breaks an auto category after-outside streak (#189)', async () => {
+    const id = await goal()
+    const db = getDb()
+    await PATCHGoal(req('PATCH', { autonomy: { 'github.review': 'auto' } }), p(id))
+    for (let i = 0; i < 10; i++) {
+      const t = markedProposal(id, 'github.review')
+      if (i === 4) core.rejectTask(db, id, t.id, 'no'); else core.approveTask(db, id, t.id)
+    }
     expect((await (await GETGoal(req('GET'), p(id))).json()).suggestions).toEqual([])
   })
 })
+
+/** A proposal an auto category's action became because its run read outside text. */
+function markedProposal(id: string, category: string) {
+  const db = getDb()
+  const run = core.claimRun(db, id, { holder: 'test' })!
+  core.markRunUntrusted(db, run.run_id, 'Bash: gh issue view')
+  const { task } = core.addItem(db, id, run.run_id, { goal: `${category} ${Math.random()}`, action: { category, summary: 's' } })
+  core.endRun(db, run.run_id, 'done')
+  return task
+}
 
 describe('usage-limit hold (#104)', () => {
   it('shows the hold on the goal page and Clear hold lifts it, recorded against the goal that set it', async () => {

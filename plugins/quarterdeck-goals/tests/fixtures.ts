@@ -51,7 +51,7 @@ type FakeGoal = {
   health: { passed: boolean; value: number | null }[]
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
   inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
-  suggestions: { category: string; approved_in_a_row: number }[]
+  suggestions: { category: string; approved_in_a_row: number; kind?: 'auto' | 'after_outside'; warning?: string }[]
   status_note?: { text: string; at: string | null; stale: boolean; untrusted: string | null; tone?: 'ok' | 'attention' | 'problem' | null } | null
   watches?: { name: string; every_minutes: number; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
 }

@@ -152,7 +152,7 @@ export async function announce($: Engine, goals: GoalCard[], now: number): Promi
       : proposals.length > 1
         ? [`${proposals.length} new proposals need you`]
         : []),
-    ...failures.map((f) => `${f.goal.name}: run failed${f.run.summary ? ` — ${f.run.summary}` : ''}`),
+    ...failures.map(failureLine),
   ]
   if (lines.length === 0) return
 
@@ -187,8 +187,16 @@ export async function announce($: Engine, goals: GoalCard[], now: number): Promi
   await saveAlert($, record)
 }
 
+/** One failed run's alert line; a tripped run (#174) says what it tripped on and whether the goal paused. */
+export function failureLine(f: { goal: GoalCard; run: { summary: string | null; untrusted?: string | null; tripped?: string | null } }): string {
+  if (!f.run.tripped) return `${f.goal.name}: run failed${f.run.summary ? ` — ${f.run.summary}` : ''}`
+  const marked = f.run.untrusted ? `, marked by ${f.run.untrusted}` : ''
+  const paused = f.goal.status === 'paused' ? '. Goal paused after two tripped runs in a row: resume it with /goal-resume' : ''
+  return `${f.goal.name}: run tripped after ${f.run.tripped}${marked}${paused}`
+}
+
 /** What the phone shows: the alert and how to answer it from there. */
-export function phoneText(proposals: { goal: GoalCard; item: { title: string; asksPerson?: boolean } }[], failures: { goal: GoalCard }[]): string {
+export function phoneText(proposals: { goal: GoalCard; item: { title: string; asksPerson?: boolean } }[], failures: { goal: GoalCard; run?: { tripped?: string | null } }[]): string {
   const parts: string[] = []
   if (proposals.length === 1) {
     const { goal, item } = proposals[0]!
@@ -198,7 +206,9 @@ export function phoneText(proposals: { goal: GoalCard; item: { title: string; as
   } else if (proposals.length > 1) {
     parts.push(`${proposals.length} proposals need you. Reply "what needs me?" in Claude.`)
   }
-  if (failures.length === 1) parts.push(`${failures[0]!.goal.name}: run failed.`)
+  if (failures.length === 1) parts.push(failures[0]!.run?.tripped
+    ? `${failures[0]!.goal.name}: run tripped${failures[0]!.goal.status === 'paused' ? ' and the goal paused' : ''}.`
+    : `${failures[0]!.goal.name}: run failed.`)
   else if (failures.length > 1) parts.push(`${failures.length} goal runs failed.`)
   const text = `Quarterdeck: ${parts.join(' ')}`
   if (text.length <= PUSH_MAX) return text

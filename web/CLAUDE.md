@@ -10,7 +10,7 @@ __tests__/    — Vitest test suites
 server.ts     — Custom HTTP + WebSocket server
 ```
 
-**Database layer** (`lib/db.ts`): shared plan/task queries come from `@quarterdeck/core` via a lazy `getDb()`. Adds web-only queries: approval stats, the event log, and the "Switch to auto" suggestions (`getAutonomySuggestions`: a `propose` category whose last 10 decisions were all approvals). Schema changes go in `core/src/migrate.ts` (re-exported by `lib/migrate.ts`), never here. Human edits write history with `recordEvent()` (`actor: 'human'`).
+**Database layer** (`lib/db.ts`): shared plan/task queries come from `@quarterdeck/core` via a lazy `getDb()`. Adds web-only queries: approval stats, the event log, and the suggestions (`getAutonomySuggestions`, last 10 decisions all approvals: "Switch to auto" for a `propose` category, "Keep auto" after outside text for an `auto` one not yet in `auto_after_outside`, counting only proposals a marked run made of its auto actions, `state.outside_text`, #189). Schema changes go in `core/src/migrate.ts` (re-exported by `lib/migrate.ts`), never here. Human edits write history with `recordEvent()` (`actor: 'human'`).
 
 **Real-time updates**: SQLite triggers bump `plans.revision` on every task insert/update/delete and plan update, from any process. `lib/mcp-poller.ts` checks each watched plan's revision once a second and broadcasts `mcp_update` through `lib/ws-broadcaster.ts` when it changes. The custom server (`server.ts`) routes WebSocket upgrades for `/api/plans/:id/ws` (the goal page's live updates; a goal is a plan).
 

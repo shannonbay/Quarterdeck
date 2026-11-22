@@ -212,7 +212,7 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
         if (timedOut) return { error: 'timeout' }
         if (answer.deny !== undefined) { const out = await failed(`the call couldn't run${where}: ${answer.deny}`); if (out) return out; continue }
         if (answer.isError === true) { const out = await failed(`${resultText(answer).slice(0, 500)}${where}`); if (out) return out; continue }
-        last = resultText(answer)
+        last = pageContent(step.tool, resultText(answer))
         if (step.expect !== undefined && !new RegExp(step.expect).test(last)) {
           const out = await failed(`step ${i + 1} (${step.tool}${after}) answered something other than expected (/${step.expect}/)`)
           if (out) return out
@@ -282,6 +282,18 @@ async function checkToolWatch($: Engine, watch: ToolWatch): Promise<boolean> {
 export const WATCH_FINALLY_MS = 10_000
 
 /** Replaces {{name}} in every string of an input with a picked value; a name never picked is an error. A string that is exactly one reference to a plain number becomes a number (a tab id), text around it stays a string. */
+/**
+ * The page's own content from a Claude in Chrome reading tool's answer (#180): its answer starts
+ * with a `Title:` / `URL:` / `Source element:` header ended by a `---` line, which would let an
+ * `expect` or `match` pass on the URL of a blank page. Any other tool, or an answer that doesn't
+ * start with `Title:` or has no `---` line, is returned unchanged.
+ */
+export function pageContent(tool: string, text: string): string {
+  if (!/^mcp__.*chrome.*__(?:get_page_text|read_page|find)$/.test(tool) || !text.startsWith('Title:')) return text
+  const m = /\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)
+  return m ? text.slice(m.index + m[0].length) : text
+}
+
 export function substitute(input: unknown, values: Record<string, string>): unknown {
   if (typeof input === 'string') {
     const only = /^\{\{\s*([^}]*?)\s*\}\}$/.exec(input)
