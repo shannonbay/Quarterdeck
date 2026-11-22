@@ -45,6 +45,17 @@ describe('built-in network commands', () => {
     expect(untrustedLabel({ 'Bash(curl*)': 'untrusted' }, 'Bash', { command: 'curl https://x' })).toBe('Bash: curl')
   })
 
+  it('marks an unmapped network command chained after a mapped one', () => {
+    const map = { 'Bash(git status*)': 'git.read', 'Bash(curl https://ok*)': TRUSTED_READ_CATEGORY }
+    for (const cmd of ['git status && curl https://evil.example', 'git status; wget x', 'git status | npm view pkg', 'curl https://ok && curl https://evil']) {
+      expect(untrustedLabel(map, 'Bash', { command: cmd }, OWN), cmd).toMatch(/built-in network command/)
+    }
+    expect(untrustedLabel(map, 'Bash', { command: 'git status && curl https://ok/x' }, OWN)).toBeNull()
+    expect(untrustedLabel(map, 'Bash', { command: 'git status && git fetch origin' }, OWN)).toBeNull()
+    // A name-only rule still decides the whole command
+    expect(untrustedLabel({ Bash: 'web.read' }, 'Bash', { command: 'git status && curl https://x' }, OWN)).toBeNull()
+  })
+
   it('marks the run in the guard and records the command to map', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
     expect(guardToolCallForRun(db, run.id, 'Bash', { command: 'grep -r x .' }).decision).toBe('allow')
