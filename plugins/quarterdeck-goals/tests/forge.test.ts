@@ -213,8 +213,9 @@ test("the PR reviewer text names the forge's commands, GitHub's by default (#44)
   const text = prReview(other)
   for (const s of ['X-ISSUE-READ', 'X-CLOSING', 'X-HEAD', 'X-BODY', 'X-CHECKOUT', 'X-POST', 'X-OPEN-PULLS']) expect(text).toContain(s)
   expect(text).not.toMatch(/\bgh (pr|api|issue|repo) |repos\/\{owner\}/)
-  expect(text).toContain('post it with X-POST, then complete the item.')
-  expect(prReview({ ...other, reviewer: { ...other.reviewer, repoNote: 'X-REPO-NOTE' } })).toContain('then complete the item. X-REPO-NOTE')
+  expect(text).toContain("action.calls [{command: X-POST with that file's path")
+  expect(text).toContain('run the staged command exactly as add_item returned it')
+  expect(prReview({ ...other, reviewer: { ...other.reviewer, repoNote: 'X-REPO-NOTE' } })).toContain('}]. X-REPO-NOTE add_item answers')
 })
 
 test("the triage text names the forge's commands, GitHub's by default (#44)", async () => {

@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, addItem, guardToolCallForRun, SCHEMA_VERSION,
-  stageProposalCalls, proposalCalls, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES, proposalKey,
+  stageProposalCalls, proposalCalls, proposalCallsWithFiles, buildOverview, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES, proposalKey,
 } from './index.js'
 
 // #167: an approved proposal covers only the exact calls it staged, each once
@@ -94,6 +94,26 @@ describe('proposal staged calls (#167)', () => {
     expect(decision.category).toBe('quarterdeck-data')
   })
 
+  it("lets the PR Reviewer's staged review post through once approved, with the default data dir (#167 part 2)", () => {
+    // The PR Reviewer template's rules (reviewRules in plugins/quarterdeck-goals/hooks/templates.ts)
+    updateGoal(db, 'g1', { autonomy: { 'github.review': 'propose', 'github.write': 'off' }, tool_map: {
+      'Bash(gh api repos/*/pulls/*/reviews*)': 'github.review',
+      'PowerShell(gh api repos/*/pulls/*/reviews*)': 'github.review',
+      'Bash(git push*)': 'github.write',
+    } })
+    const qdDir = join(dataDir, '.quarterdeck')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const r = addItem(db, 'g1', run.id, { goal: 'Review #12', external_ref: 'github-pr-review:12@abc', action: { category: 'github.review', summary: 'Post review' } })
+    const review = join(dataDir, 'review-12.json')
+    const [cmd] = stageProposalCalls(db, { id: r.task.id, plan_id: 'g1', run_id: run.id }, 'github.review', [
+      { command: `gh api repos/shannonbay/Quarterdeck/pulls/12/reviews --method POST --input ${review}`, files: [{ path: review, contents: '{"commit_id":"abc","event":"COMMENT","body":"LGTM","comments":[]}' }] },
+    ], { dataDir: qdDir })
+    approve(r.task.id)
+    const decision = guardToolCallForRun(db, run.id, 'Bash', { command: cmd })
+    expect(decision.decision).toBe('allow')
+    expect(decision.category).toBe('github.review')
+  })
+
   it('refuses a staged call whose file changed or is gone', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
     const id = propose(run.id, 'a')
@@ -136,5 +156,35 @@ describe('proposal staged calls (#167)', () => {
     expect(proposalCallsProblem([{ command: ' ' }])).toContain('no command')
     expect(proposalCallsProblem([{ command: 'x', files: [{ path: 'p', contents: 'a'.repeat(GUARDED_MAX_BYTES) }] }])).toContain('limit')
     expect(proposalCallsProblem([{ command: 'gh pr review 1' }])).toBeNull()
+  })
+
+  // #167 part 2: the pane and the goal page show what approving lets through
+  it("the overview shows a waiting proposal's staged calls, or that it covers any call in its category", () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const staged = propose(run.id, 'a')
+    stageProposalCalls(db, { id: staged, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    const wide = propose(run.id, 'b')
+    const goal = buildOverview(db).goals.find((g) => g.id === 'g1')!
+    const item = (id: string) => goal.needs_you.find((i) => i.id === id) as { action: { calls?: { command: string; files: string[] }[]; covers_any?: boolean } }
+    expect(item(staged).action.calls).toHaveLength(1)
+    expect(item(staged).action.calls![0]!.command).toContain(join(dataDir, 'guarded'))
+    expect(item(staged).action.calls![0]!.files[0]).toContain('review.md')
+    expect(item(staged).action.covers_any).toBeUndefined()
+    expect(item(wide).action.covers_any).toBe(true)
+    expect(item(wide).action.calls).toBeUndefined()
+  })
+
+  it('the goal page reads each staged file as it is now, null once it is gone', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    const [call] = proposalCallsWithFiles(db, proposalKey('g1', id))
+    expect(call!.files[0]!.contents).toBe('LGTM')
+    rmSync(call!.files[0]!.path)
+    expect(proposalCallsWithFiles(db, proposalKey('g1', id))[0]!.files[0]!.contents).toBeNull()
   })
 })

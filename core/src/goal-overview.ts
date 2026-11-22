@@ -17,11 +17,14 @@ import type { Event, Goal, GoalRun, Task, Watch } from './types.js'
 import { autoAfterOutsideWarning, getRunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { leaseHolder } from './goal-tick.js'
+import { proposalCalls, proposalKey } from './guarded.js'
 
 const RUNS = 5
 const OPEN_ITEMS = 10
 const HEALTH = 20
 const MEMORY = 10
+/** The most staged calls an overview item lists (a proposal stages at most PROPOSAL_MAX_CALLS). */
+const CALLS = 10
 
 /**
  * The longest text each field carries in the overview. The overview reaches the
@@ -95,7 +98,7 @@ export type ItemView = ReturnType<typeof itemView>
  * the goal page shows. The overview reaches the plugin as one tool answer, and
  * Claude Code saves a large answer to a file instead of passing it on.
  */
-function overviewItem(t: Task, blocked: boolean) {
+function overviewItem(t: Task, blocked: boolean, db?: Database) {
   const v = itemView(t)
   const action = v.action as { category: string; summary: string } | null
   // A question's notes are its context (the options, what the run would do): it can't be answered without them
@@ -105,7 +108,13 @@ function overviewItem(t: Task, blocked: boolean) {
   const short = { ...v, goal: clip(v.goal, CLIP.title)!, notes: clip(v.notes, notesMax), result: clip(v.result, CLIP.result), ...(clipped && { clipped: true }) }
   // `blocked`: out of attempts, waiting for the person's answer (as the brief marks it); only when true, so other items stay as they were
   const marked = blocked ? { ...short, blocked: true as const } : short
-  return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title)! } } : marked
+  if (!action) return marked
+  const shortAction = { category: action.category, summary: clip(action.summary, CLIP.title)! }
+  // A proposal waiting for the person shows the exact calls it staged, or that it covers its whole category (#167)
+  if (!db || !v.awaiting_review || v.asks_person) return { ...marked, action: shortAction }
+  const calls = proposalCalls(db, proposalKey(t.plan_id, t.id)).slice(0, CALLS)
+    .map((c) => ({ command: clip(c.command, CLIP.summary)!, files: c.files }))
+  return { ...marked, action: { ...shortAction, ...(calls.length > 0 ? { calls } : { covers_any: true as const }) } }
 }
 
 /** A pane or web hint for a category approved every time lately (#189). */
@@ -362,7 +371,7 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
           refused: refusedCalls(db, r.id),
         })),
-        needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
+        needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t), db)),
         open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
         open_item_count: open.filter((t) => !t.review_requested_at).length,
         health: listHealth(db, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),

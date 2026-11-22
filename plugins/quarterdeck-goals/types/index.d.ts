@@ -1,5 +1,5 @@
 /** A goal work item: a proposal waiting for the person, or an open item. */
-export type Item = { id: string; title: string; category: string | null; summary: string | null; /** A question or request for the person, not a proposal. */ asksPerson?: boolean; /** The run's context for it: a question's options, why a proposal. */ notes?: string; /** The overview cut its title, notes or summary short: get_item has the full text. */ clipped?: boolean; /** Out of attempts: runs leave it alone until the person answers. */ blocked?: boolean }
+export type Item = { id: string; title: string; category: string | null; summary: string | null; /** A question or request for the person, not a proposal. */ asksPerson?: boolean; /** The run's context for it: a question's options, why a proposal. */ notes?: string; /** The overview cut its title, notes or summary short: get_item has the full text. */ clipped?: boolean; /** Out of attempts: runs leave it alone until the person answers. */ blocked?: boolean; /** A proposal waiting for the person: the exact calls approving it lets through, each once, or "any" when it staged none and covers its whole category (#167). */ calls?: { command: string; files: string[] }[] | 'any' }
 
 /** One goal run. */
 export type Run = {

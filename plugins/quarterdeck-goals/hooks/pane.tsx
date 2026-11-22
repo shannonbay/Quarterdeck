@@ -575,6 +575,29 @@ function activityLine($: Engine, e: E, view: View, g: GoalCard) {
   return <Text key={`activity-${g.id}`} dimColor>{state === 'queued' ? '◌ ' : ''}{clip(text, Math.max(view.columns - 2, 10))}</Text>
 }
 
+/**
+ * What approving a proposal lets through (#167): each staged command with the
+ * files it sends (the goal page shows their contents), or that it covers any
+ * call in its category.
+ */
+function callLines($: Engine, e: E, view: View, key: string, item: GoalCard['needsYou'][number]) {
+  const { Box, Text } = parts($, e)
+  if (!item.calls) return null
+  if (item.calls === 'any') return <Text key={`calls-${key}`} color="yellow">  covers any call in {item.category ?? 'its category'}</Text>
+  const width = Math.max(view.columns - 6, 10)
+  return (
+    <Box key={`calls-${key}`} flexDirection="column">
+      <Text dimColor>  {item.calls.length === 1 ? 'approving lets through only this call, once:' : `approving lets through only these ${item.calls.length} calls, each once:`}</Text>
+      {item.calls.map((c, n) => (
+        <Box key={`call-${key}-${n}`} flexDirection="column">
+          <Text>    $ {clip(c.command, width)}</Text>
+          {c.files.map((f) => <Text key={`file-${key}-${n}-${f}`} dimColor>      file {clip(f, width - 2)}</Text>)}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
 function proposalRow($: Engine, e: E, view: View, g: GoalCard, item: GoalCard['needsYou'][number]) {
   const { Box, Text, Button, Input } = parts($, e)
   const key = `${g.id}/${item.id}`
@@ -645,6 +668,7 @@ function proposalRow($: Engine, e: E, view: View, g: GoalCard, item: GoalCard['n
     <Box key={key} flexDirection="column" marginTop={1}>
       {titleLine('●')}
       {(shownItem.category || shownItem.summary) && dimLine('summary', `  ${shownItem.category ? `${shownItem.category}: ` : ''}${shownItem.summary ?? ''}`)}
+      {callLines($, e, view, key, item)}
       {shownItem.notes && dimLine('notes', `  ${shownItem.notes}`)}
       {view.open === key && Input ? (
         <Box flexDirection="column">
