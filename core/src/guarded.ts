@@ -7,7 +7,7 @@
 import { createHash } from 'crypto'
 import { execFileSync } from 'child_process'
 import type { Database } from './sqlite.js'
-import { mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { basename, join } from 'path'
 import { afterOutsideApplies, newId, getGoal, getRun, runSecretPaths, secretsReadReason } from './goals.js'
 import { autonomyFor } from './goal-engine.js'
@@ -168,6 +168,26 @@ export function claimUsedGuardedCheck(db: Database, runId: string, category: str
   return true
 }
 
+/** One exact call a proposal stages (#167): a command and the full contents of the files it sends. */
+export interface ProposalCall {
+  command: string
+  files?: GuardedFile[]
+}
+
+/** The most calls one proposal may stage (#167). */
+export const PROPOSAL_MAX_CALLS = 10
+
+/** Why a proposal's calls can't be staged, or null when they can: too many, an empty command, or one over GUARDED_MAX_BYTES. */
+export function proposalCallsProblem(calls: ProposalCall[]): string | null {
+  if (calls.length > PROPOSAL_MAX_CALLS) return `a proposal can stage at most ${PROPOSAL_MAX_CALLS} calls (got ${calls.length})`
+  for (const [i, c] of calls.entries()) {
+    if (typeof c.command !== 'string' || !c.command.trim()) return `call ${i + 1} has no command`
+    const bytes = Buffer.byteLength(c.command) + (c.files ?? []).reduce((n, f) => n + Buffer.byteLength(f.contents), 0)
+    if (bytes > GUARDED_MAX_BYTES) return `call ${i + 1} carries ${bytes} bytes, over the ${GUARDED_MAX_BYTES}-byte limit`
+  }
+  return null
+}
+
 /** A target a guarded call writes to (#168): a repo as owner/name and a PR or issue number. */
 export interface GuardedTarget { repo: string; number: number }
 
@@ -285,6 +305,102 @@ export function checkGuardedTarget(command: string, ownRepo: string | null, allo
     if (!allowed.includes(t.number)) return `the call names #${t.number}, but this run was started for ${set}: propose it instead`
   }
   return null
+}
+
+/** The key a proposal's staged calls are stored under (#167): item ids are only unique within a goal. */
+export const proposalKey = (planId: string, taskId: string): string => `${planId}/${taskId}`
+
+/** Drops a proposal's staged calls and their files (#167), so an old approval can't be reused. */
+export function clearProposalCalls(db: Database, key: string, dataDir: string): void {
+  const gone = db.prepare('DELETE FROM guarded_checks WHERE task_id = ?').run(key) as { changes: number | bigint }
+  if (Number(gone.changes) > 0) rmSync(join(dataDir, 'guarded', key.replace('/', '-')), { recursive: true, force: true })
+}
+
+/**
+ * Stages a proposal's exact calls (#167): each file is written under
+ * `<dataDir>/guarded/<task id>/`, the command's mentions of its original path
+ * point at the copy, and one check per call is recorded against the item.
+ * Earlier calls for the item are dropped first. Returns the staged commands,
+ * the ones the run must make once the item is approved. No payload rules run:
+ * the person approving is the check.
+ */
+export function stageProposalCalls(
+  db: Database, task: { id: string; plan_id: string; run_id: string | null }, category: string,
+  calls: ProposalCall[], opts: { dataDir: string },
+): string[] {
+  const problem = proposalCallsProblem(calls)
+  if (problem) throw new Error(problem)
+  const key = proposalKey(task.plan_id, task.id)
+  clearProposalCalls(db, key, opts.dataDir)
+  if (calls.length === 0) return []
+  const dir = join(opts.dataDir, 'guarded', key.replace('/', '-'))
+  mkdirSync(dir, { recursive: true })
+  return calls.map((call, n) => {
+    let staged = call.command
+    const copies: GuardedFile[] = (call.files ?? []).map((f, i) => {
+      const path = join(dir, `${n}-${i}-${basename(f.path.replace(/\\/g, '/'))}`)
+      writeFileSync(path, f.contents)
+      staged = staged.split(f.path).join(path)
+      return { path, contents: f.contents }
+    })
+    const rec = recordGuardedCheck(db, { id: task.run_id ?? '', plan_id: task.plan_id }, category, staged, copies)
+    db.prepare('UPDATE guarded_checks SET task_id = ? WHERE id = ?').run(key, rec.id)
+    return staged
+  })
+}
+
+/** A proposal's staged calls, in order, with whether each was used (#167). */
+export function proposalCalls(db: Database, key: string): { command: string; files: string[]; used_at: string | null }[] {
+  const rows = db.prepare('SELECT command, file_hashes, used_at FROM guarded_checks WHERE task_id = ? ORDER BY created_at, rowid').all(key) as { command: string; file_hashes: string; used_at: string | null }[]
+  return rows.map((r) => ({ command: r.command, files: Object.keys(JSON.parse(r.file_hashes) as Record<string, string>), used_at: r.used_at }))
+}
+
+/** Whether a proposal staged exact calls (#167); one that didn't covers its whole category. */
+export function proposalHasCalls(db: Database, key: string): boolean {
+  return db.prepare('SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1').get(key) !== undefined
+}
+
+/**
+ * The approved proposal (active, not done) in this category with an unused
+ * staged call for exactly this command (#167), with that call's staged file
+ * copies, or null. The guard checks it before its rule on Quarterdeck's own
+ * data, since staged copies live in the data folder.
+ */
+export function approvedStagedCall(
+  db: Database, planId: string, category: string, command: string,
+): { key: string; files: string[] } | null {
+  const row = db.prepare(`
+    SELECT g.task_id AS key, g.file_hashes AS file_hashes FROM guarded_checks g
+    JOIN tasks t ON g.task_id = t.plan_id || '/' || t.id
+    WHERE t.plan_id = ? AND t.status = 'active' AND t.archived_at IS NULL AND t.approved_at IS NOT NULL
+      AND json_extract(t.state, '$.action.category') = ? AND g.command = ? AND g.used_at IS NULL
+    ORDER BY t.created_at, t.rowid, g.created_at, g.rowid LIMIT 1
+  `).get(planId, category, command) as { key: string; file_hashes: string } | undefined
+  return row ? { key: row.key, files: Object.keys(JSON.parse(row.file_hashes) as Record<string, string>) } : null
+}
+
+/**
+ * Uses up an approved proposal's unused staged call for exactly this command
+ * when its staged files still hash as recorded (#167). Keyed by the item, not
+ * the run, so a later run can carry out the approval.
+ */
+export function consumeProposalCall(
+  db: Database, key: string, command: string, readFile: (path: string) => string | Buffer | null,
+): GuardedMatch {
+  const rows = db.prepare('SELECT * FROM guarded_checks WHERE task_id = ? AND command = ? ORDER BY created_at, rowid')
+    .all(key, command) as (Omit<GuardedCheckRecord, 'file_hashes'> & { file_hashes: string })[]
+  const unused = rows.filter((r) => r.used_at === null)
+  if (rows.length === 0) return { ok: false, reason: 'no staged call of the approved proposal matches this exact command' }
+  if (unused.length === 0) return { ok: false, reason: 'this staged call was already made; each is good for one call' }
+  const check: GuardedCheckRecord = { ...unused[0], file_hashes: JSON.parse(unused[0].file_hashes) as Record<string, string> }
+  for (const [path, hash] of Object.entries(check.file_hashes)) {
+    const now = readFile(path)
+    if (now === null) return { ok: false, reason: `staged file ${path} is gone` }
+    if (hashContents(now) !== hash) return { ok: false, reason: `staged file ${path} changed after it was proposed` }
+  }
+  const usedAt = new Date().toISOString()
+  db.prepare('UPDATE guarded_checks SET used_at = ? WHERE id = ? AND used_at IS NULL').run(usedAt, check.id)
+  return { ok: true, check: { ...check, used_at: usedAt } }
 }
 
 /** How much of the goal's instructions a dry run returns as its job, for the model check (#170). */

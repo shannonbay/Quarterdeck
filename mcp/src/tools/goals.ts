@@ -1,6 +1,6 @@
 /** MCP tools for persistent goals (specs/persistent-goals.md). */
 import {
-  listGoals, getGoal, buildBrief, addItem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, queueRunWithRequest, countItems, touchPlan,
+  listGoals, getGoal, buildBrief, addItem, stageProposalCalls, proposalCallsProblem, insertMemory, getMemory, forgetMemory, getRun, endRun, queueRun, queueRunWithRequest, countItems, touchPlan,
   reviveIfDone, recallMemory, buildCurationBrief, proposeCuration, proposeWatch, setRunStep,
 } from '../db.js'
 import { purgeDate } from '@quarterdeck/core'
@@ -78,9 +78,16 @@ export async function get_goal_brief(args: unknown) {
 }
 
 export async function add_item(args: unknown) {
-  const input = AddItemSchema.parse(args)
+  const parsed = AddItemSchema.parse(args)
+  const calls = parsed.action?.calls
+  const problem = calls ? proposalCallsProblem(calls) : null
+  if (problem) throw new Error(problem)
+  // The files' contents are staged, not stored in the item's state (#167)
+  const input = parsed.action ? { ...parsed, action: { category: parsed.action.category, summary: parsed.action.summary, ...(parsed.action.params && { params: parsed.action.params }) } } : parsed
   const planId = requireOpenGoal()
   const result = addItem(planId, getOpenRun(), input)
+  const staged = !result.existing && result.mode === 'propose' && calls && calls.length > 0
+    ? stageProposalCalls(result.task, parsed.action!.category, calls) : undefined
   if (!result.existing) {
     touchPlan(planId)
     record(planId, result.task.id, 'task_created', {
@@ -101,6 +108,7 @@ export async function add_item(args: unknown) {
     },
     existing: result.existing,
     ...(result.mode && { mode: result.mode }),
+    ...(staged && { staged_calls: staged }),
     message: result.existing
       ? 'An item for this external_ref already exists; nothing was created. Update it instead if needed.'
       : result.untrusted

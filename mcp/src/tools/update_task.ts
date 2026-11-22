@@ -1,4 +1,5 @@
-import { getTask, updateTask, touchPlan, recordItemAttempt } from '../db.js'
+import { getTask, updateTask, touchPlan, recordItemAttempt, stageProposalCalls, clearProposalCalls, proposalCallsProblem, proposalHasCalls } from '../db.js'
+import type { ProposalCall } from '@quarterdeck/core'
 import { getOpenPlan, getOpenRun } from '../session.js'
 import { buildContext } from '../context.js'
 import { UpdateTaskSchema } from '../schema.js'
@@ -32,7 +33,27 @@ export async function update_task(args: unknown) {
   // notes, result or state isn't an attempt: an item kept open and checked each run isn't being retried.
   recordItemAttempt(planId, input.task_id, getOpenRun(), false)
 
+  // Rewording a proposal's action restages its exact calls (#167): the old ones are dropped, so an old
+  // approval can't be reused. An approved item's staged calls can't be swapped for others.
+  const patchedAction = input.state_patch?.action as { category?: string; calls?: unknown } | undefined
+  let restage: ProposalCall[] | null = null
+  if (patchedAction !== undefined) {
+    if (task.approved_at && proposalHasCalls(planId, task.id)) {
+      throw new Error("This proposal was approved for its staged calls; they can't be changed. Complete or abandon it and propose again.")
+    }
+    const calls = Array.isArray(patchedAction?.calls) ? patchedAction.calls as ProposalCall[] : []
+    if (calls.some((c) => typeof c !== 'object' || c === null || typeof c.command !== 'string')) {
+      throw new Error('action.calls must be a list of {command, files?: [{path, contents}]}')
+    }
+    const problem = proposalCallsProblem(calls)
+    if (problem) throw new Error(problem)
+    restage = calls
+  }
   const newState = { ...task.state, ...(input.state_patch ?? {}) }
+  if (restage) {
+    const { calls: _calls, ...action } = patchedAction as Record<string, unknown>
+    newState.action = action
+  }
 
   const now = new Date().toISOString()
   const fields: Parameters<typeof updateTask>[2] = { state: newState, updated_at: now, ...gates }
@@ -41,6 +62,11 @@ export async function update_task(args: unknown) {
   if (input.goal !== undefined) fields.goal = input.goal
 
   updateTask(planId, input.task_id, fields)
+  if (restage) {
+    const category = typeof patchedAction?.category === 'string' ? patchedAction.category : String((task.state.action as { category?: unknown } | undefined)?.category ?? '')
+    if (restage.length > 0) stageProposalCalls({ id: task.id, plan_id: planId, run_id: getOpenRun() }, category, restage)
+    else clearProposalCalls(planId, task.id)
+  }
   touchPlan(planId)
 
   // Record old and new values of what changed, so the change can be reviewed (or undone later).
