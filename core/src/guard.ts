@@ -168,8 +168,17 @@ export function untrustedLabel(toolMap: Goal['tool_map'], toolName: string, inpu
     return toolName
   }
   if (matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null) return toolName
-  // A rule of any category (trusted-read included) wins over the built-in network list
-  const network = !rule && SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' ? builtinNetworkPart(input.command, ownOrigin) : null
+  // A rule of any category (trusted-read included) wins over the built-in network list, but a
+  // command rule decides only the parts it names: `git status && curl x` still marks for curl.
+  // A name-only rule (`Bash: web.read`) decides the whole command.
+  let network: string | null = null
+  if (SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' && !(rule && !COMMAND_RULE.test(rule.pattern))) {
+    for (const part of rule ? commandParts(input.command) : [input.command]) {
+      if (rule && matchToolRule(toolMap, toolName, { command: part }) !== null) continue
+      network = builtinNetworkPart(part, ownOrigin)
+      if (network !== null) break
+    }
+  }
   return network !== null ? `${toolName}: ${network} (built-in network command)` : null
 }
 
