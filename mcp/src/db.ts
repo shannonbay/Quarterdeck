@@ -61,6 +61,13 @@ export function recordItemAttempt(planId: string, taskId: string, runId: string 
   core.recordAttempt(db, planId, taskId, runId, new Date(), count)
 }
 export const addItem = (planId: string, runId: string | null, input: core.AddItemInput) => core.addItem(db, planId, runId, input)
+/** Stages a proposal's exact calls (#167) and stores the staged commands in its action as action.calls. */
+export const stageProposalCalls = (task: { id: string; plan_id: string; run_id: string | null }, category: string, calls: core.ProposalCall[]) => {
+  const staged = core.stageProposalCalls(db, task, category, calls, { dataDir: core.quarterdeckDataPaths().dirs[0]! })
+  db.prepare("UPDATE tasks SET state = json_set(COALESCE(state, '{}'), '$.action.calls', json(?)) WHERE id = ?").run(JSON.stringify(staged), task.id)
+  return staged
+}
+export const proposalCallsProblem = core.proposalCallsProblem
 export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core.insertMemory(db, m)
 export const getMemory = (id: string) => core.getMemory(db, id)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(db, id, fields)

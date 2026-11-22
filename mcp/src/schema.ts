@@ -79,6 +79,11 @@ export const AddItemSchema = z.object({
     category: z.string().min(1).describe('Action category, e.g. "email.send". Reuse one from known_categories in the brief when it fits the action; invent a new one only for a different kind of action. Its autonomy mode is in the brief.'),
     summary: z.string().min(1).describe('One line the human will read when approving, e.g. "Send reply confirming Thursday 2pm"'),
     params: z.record(z.string(), z.unknown()).optional().describe('Exact details needed to carry the action out later (ids, draft id, labels)'),
+    calls: z.array(z.object({
+      command: z.string().min(1).describe('The exact shell command, naming each file by the path given in files'),
+      files: z.array(z.object({ path: z.string().min(1), contents: z.string() })).optional().describe('Every file the command sends, in full'),
+    })).max(10).optional().describe(
+      'For a "propose" action: the exact calls it will make (at most 10). The server stages each file and returns the staged commands; once approved, only those commands, made exactly as returned and each once, go through. Without calls the approval covers any call in the category.'),
   }).optional().describe(
     'An action this item is about. "propose" categories create an item that waits for human approval; "auto" categories record an action you already took; "off" categories are refused.'),
   status: z.enum(['pending', 'active']).optional().describe('For items without an action (default pending)'),
