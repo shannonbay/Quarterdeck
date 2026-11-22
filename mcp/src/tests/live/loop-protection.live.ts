@@ -33,11 +33,17 @@ async function claim(goalId: string, passes = 4): Promise<Claimed | null> {
   return null
 }
 
-/** Plays a claimed run's agent: reads the brief, does `work`, ends the run. */
+/** The watch_events lines a brief carried, as end_run's `handled` takes them; undefined when it had none. */
+const handledLines = (brief: Any): string[] | undefined => {
+  const lines = (brief.watch_events ?? []).flatMap((n: Any) => n.new as string[])
+  return lines.length ? lines : undefined
+}
+
+/** Plays a claimed run's agent: reads the brief, does `work`, ends the run having handled every watch line. */
 async function play(run: Claimed, work?: (scope: string, brief: Any) => Promise<void> | void): Promise<void> {
   const brief = await server.call('get_goal_brief', { goal_id: run.goal_id, run_id: run.run_id, run_scope: run.run_id })
   await work?.(run.run_id, brief)
-  await server.call('end_run', { summary: 'Live test run.', run_scope: run.run_id })
+  await server.call('end_run', { summary: 'Live test run.', run_scope: run.run_id, handled: handledLines(brief) })
 }
 
 /** The goal as the Goals pane gets it. */
