@@ -772,6 +772,9 @@ test('the Marketplace Flipper template: one setup question, rules for any countr
     'Fridges travel upright', 'Never share my street address', 'browser.act', 'Buy Now', 'never let capital go below zero']) {
     expect(FLIPPER_RULES).toContain(rule)
   }
+  // #182: the inbox is read with read_page, and offers in the docked chat come through Marketplace message emails
+  for (const rule of ['read_page, never get_page_text', 'one capture group per buyer row on the listing title', 'docked Messenger chat', "turn on Facebook's email notifications for Marketplace messages", 'Gmail tool watch for those emails']) expect(FLIPPER_RULES).toContain(rule)
+  expect(FLIPPER_RULES).not.toContain('(get_page_text and the rest)')
   // no hard-coded currency, country or city in what the goal is given, and no promise of profit
   const given = [t.objective, t.needs, FLIPPER_RULES, FLIPPER_LATER, t.ask!.fill('x')].join(' ')
   expect(given).not.toMatch(/[$£€¥]|NZ|New Zealand|Wellington|Trade Me/)
