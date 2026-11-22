@@ -47,7 +47,7 @@ import {
   WatchReportSchema,
   RunProgressSchema,
   DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema,
-  UnsubscribeOneClickSchema, ResolveReviewThreadSchema, PrInlineCommentsSchema, DetectForgeSchema,
+  UnsubscribeOneClickSchema, ResolveReviewThreadSchema, PrInlineCommentsSchema, IssueReadSchema, DetectForgeSchema,
   TodoListSchema,
   TodoAddSchema,
   TodoSetSchema,
@@ -75,6 +75,7 @@ import { todo_list, todo_add, todo_set } from './tools/todos.js'
 import { unsubscribe_one_click } from './tools/unsubscribe.js'
 import { resolve_review_thread } from './tools/resolve_review_thread.js'
 import { pr_inline_comments } from './tools/pr_inline_comments.js'
+import { issue_read } from './tools/issue_read.js'
 import { detect_forge } from './tools/detect_forge.js'
 import { handleListResources, handleReadResource } from './resources.js'
 import { getRun } from './db.js'
@@ -243,6 +244,12 @@ const TOOLS = [
     description: "A pull request's inline review comments (id, path, line, author, body), only those from the repo's owner, members and collaborators. Read-only: it posts nothing. In a goal run, only as the goal's rules allow; it reads outside text.",
     inputSchema: toolInputSchema(PrInlineCommentsSchema),
     handler: (args: unknown) => pr_inline_comments(args),
+  },
+  {
+    name: 'issue_read',
+    description: "An issue's title, body and comments, only the comments from the repo's owner, members and collaborators (or the one comment asked for), with hidden comments and invisible characters replaced by markers. Read-only: it posts nothing. In a goal run, only as the goal's rules allow; it reads outside text.",
+    inputSchema: toolInputSchema(IssueReadSchema),
+    handler: (args: unknown) => issue_read(args),
   },
   {
     name: 'detect_forge',

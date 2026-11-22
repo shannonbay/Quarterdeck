@@ -235,6 +235,12 @@ export const PrInlineCommentsSchema = z.object({
   pr: z.number().int().positive().describe('The pull request number'),
 })
 
+export const IssueReadSchema = z.object({
+  repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/).describe('The repo as owner/name (from git remote get-url origin)'),
+  number: z.number().int().positive().describe('The issue number'),
+  comment_id: z.string().min(1).optional().describe('Only this comment (its id, such as IC_...), when a watch line names one'),
+})
+
 export const DetectForgeSchema = z.object({
   working_dir: z.string().min(1).describe("The repo's folder (absolute path)"),
 })
