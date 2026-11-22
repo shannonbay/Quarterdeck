@@ -102,6 +102,31 @@ test('a failed run raises an alert', async ($, on) => {
   expect(toasts).toEqual(['Quarterdeck · Inbox: run failed — Gmail was unreachable'])
 })
 
+test('a tripped run says what it tripped on and what marked it (#174)', async ($, on) => {
+  const { toasts, clock } = engine(on)
+  const goals = [goal({ id: 'g1', name: 'Inbox' })]
+  const fake = fakeQuarterdeck(on, goals)
+  await $.session.start(START)
+
+  goals[0]!.runs.unshift({ id: 'r9', status: 'failed', trigger: 'watch', summary: 'tripped: 3 refusals (secrets)', started_at: '2026-11-07T08:00:00Z', ended_at: '2026-11-07T08:00:10Z', untrusted: 'gmail:abc', tripped: '3 refusals (secrets)' })
+  fake.bump()
+  await poll(clock)
+  expect(toasts).toEqual(['Quarterdeck · Inbox: run tripped after 3 refusals (secrets), marked by gmail:abc'])
+})
+
+test('a tripped run that paused its goal offers Resume (#174)', async ($, on) => {
+  const { toasts, clock } = engine(on)
+  const goals = [goal({ id: 'g1', name: 'Inbox' })]
+  const fake = fakeQuarterdeck(on, goals)
+  await $.session.start(START)
+
+  goals[0]!.status = 'paused'
+  goals[0]!.runs.unshift({ id: 'r9', status: 'failed', trigger: 'watch', summary: 'tripped: 3 refusals (secrets)', started_at: '2026-11-07T08:00:00Z', ended_at: '2026-11-07T08:00:10Z', tripped: '3 refusals (secrets)' })
+  fake.bump()
+  await poll(clock)
+  expect(toasts).toEqual(['Quarterdeck · Inbox: run tripped after 3 refusals (secrets). Goal paused after two tripped runs in a row: resume it with /goal-resume'])
+})
+
 test('alerts: failures leaves proposals quiet', { options: { alerts: 'failures' } }, async ($, on) => {
   const { toasts, notifications, clock } = engine(on)
   const goals = [goal({ id: 'g1', name: 'Inbox' })]

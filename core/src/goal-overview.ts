@@ -339,6 +339,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           untrusted: r.untrusted_source,
           // The secret it read before outside content, which turned allowed-after-outside off for the rest of the run (#169)
           secrets_read: r.secrets_read_at ? r.secrets_read_source ?? 'a secret' : null,
+          // The refusals it tripped on (#174): it was failed and its pending proposals abandoned
+          tripped: r.tripped_at ? r.tripped_reason ?? 'repeated refusals' : null,
           // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
           request: r.request ? { text: clip(r.request, CLIP.summary)!, untrusted: r.request_untrusted === 1 } : null,
           // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)

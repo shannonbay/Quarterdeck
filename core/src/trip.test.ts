@@ -4,6 +4,7 @@ import {
   openDatabase, createGoal, updateGoal, getGoal, insertRun, getRun, markRunUntrusted, guardToolCallForRun, addItem, insertMemory, getMemory,
   tripRun, TRIP_THRESHOLD, TRIPPED_CATEGORY, TRIPPED_QUESTION_WARNING, getTask,
 } from './index.js'
+import { buildOverview } from './goal-overview.js'
 
 describe('tripping a marked run that keeps getting refused (#174)', () => {
   let db: Database
@@ -66,6 +67,15 @@ describe('tripping a marked run that keeps getting refused (#174)', () => {
     expect(getMemory(db, human.id)!.untrusted_source).toBeNull()
     expect(getRun(db, run.id)!.status).toBe('failed')
     expect(getGoal(db, 'g1')!.status).toBe('active')
+  })
+
+  it('the overview shows the reason a run tripped, and null for other runs', () => {
+    const plain = insertRun(db, 'g1', 'manual', 'completed')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    tripRun(db, run.id, '3 refusals (secrets)')
+    const runs = (buildOverview(db) as { goals: { id: string; runs: { id: string; tripped: string | null }[] }[] }).goals.find((g) => g.id === 'g1')!.runs
+    expect(runs.find((r) => r.id === run.id)!.tripped).toBe('3 refusals (secrets)')
+    expect(runs.find((r) => r.id === plain.id)!.tripped).toBeNull()
   })
 
   it('two tripped runs in a row pause the goal; one does not', () => {
