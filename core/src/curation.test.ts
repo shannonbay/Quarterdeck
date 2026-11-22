@@ -30,7 +30,7 @@ function curationRun(): string {
 
 describe('schema', () => {
   it('is version 24, with goals.curated_at, goals.deleted_at and goals.auto_after_outside', () => {
-    expect(SCHEMA_VERSION).toBe(27)
+    expect(SCHEMA_VERSION).toBe(28)
     expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     expect(getGoal(db, 'g1')!.curated_at).toBeNull()
     expect(getGoal(db, 'g1')!.deleted_at).toBeNull()
@@ -71,11 +71,11 @@ describe('schema', () => {
     expect(getMemory(db, m.id)).toMatchObject({ untrusted_source: 'memory mem_a (written after Bash)', untrusted_root: null })
   })
 
-  it('adds goal_watches.last_line_count from version 26 (#184)', () => {
+  it('adds goal_watches.last_line_count from version 27 (#184)', () => {
     db.exec('ALTER TABLE goal_watches DROP COLUMN last_line_count')
-    db.exec('PRAGMA user_version = 26')
+    db.exec('PRAGMA user_version = 27')
     runMigrations(db)
-    expect(dbSchemaVersion(db)).toBe(27)
+    expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     const names = (db.prepare('PRAGMA table_info(goal_watches)').all() as { name: string }[]).map((c) => c.name)
     expect(names).toContain('last_line_count')
   })
@@ -85,7 +85,7 @@ describe('schema', () => {
     for (const col of cols) db.exec(`ALTER TABLE goal_runs DROP COLUMN ${col}`)
     db.exec('PRAGMA user_version = 25')
     runMigrations(db)
-    expect(dbSchemaVersion(db)).toBe(27)
+    expect(dbSchemaVersion(db)).toBe(SCHEMA_VERSION)
     const names = (db.prepare('PRAGMA table_info(goal_runs)').all() as { name: string }[]).map((c) => c.name)
     for (const col of cols) expect(names).toContain(col)
   })
