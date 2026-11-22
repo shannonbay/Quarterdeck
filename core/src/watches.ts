@@ -155,6 +155,53 @@ export function getWatch(db: Database, id: string): Watch | undefined {
 }
 
 /**
+ * True when a tool watch's match has no capturing group and can only match fixed text (#181):
+ * once escaped characters and bracket classes are taken out, nothing in it can vary.
+ */
+export function fixedMatch(pattern: string): boolean {
+  // A capturing group: ( not escaped and not followed by ?
+  if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false
+  const rest = withoutClassesAndEscapes(pattern).replace(/\(\?<?[:=!]/g, '(')
+  return !/[.+*?{|]|\\[wWdDsS]/.test(rest)
+}
+
+/**
+ * A pattern with its bracket classes and escaped characters taken out, keeping the
+ * escapes that vary (\w \W \d \D \s \S). One pass, so a long run of `[` can't make it slow.
+ */
+function withoutClassesAndEscapes(pattern: string): string {
+  let out = ''
+  // Once a [ finds no closing ], no later one can: they would scan the same rest.
+  let unclosed = false
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]
+    if (c === '\\') {
+      const next = pattern[i + 1]
+      if (next !== undefined && 'wWdDsS'.includes(next)) out += c + next
+      i++
+      continue
+    }
+    if (c === '[' && !unclosed) {
+      let j = i + 1
+      while (j < pattern.length && pattern[j] !== ']') j += pattern[j] === '\\' ? 2 : 1
+      if (j < pattern.length) { i = j; continue }
+      unclosed = true
+    }
+    out += c
+  }
+  return out
+}
+
+/** The warning for a tool watch whose match can only give one fixed line, or null. */
+export function matchWarning(w: { kind: Watch['kind']; match: string | null; fires: string }): string | null {
+  if (w.kind !== 'tool' || !w.match || !fixedMatch(w.match)) return null
+  const fix = 'capture something that differs per item, e.g. (\\w[^·\\n]*) · <listing title>'
+  return w.fires === 'change'
+    ? `match "${w.match}" can only give one fixed line, so it only tells "present" from "absent", not one item from another: to tell items apart, ${fix}`
+    : `match "${w.match}" can only give one fixed line, so every item looks the same: ${fix}`
+}
+
+/**
  * Adds a goal's watch, or changes the one with that name. A new command
  * starts over: what the old one saw says nothing about the new one's lines.
  */
@@ -266,7 +313,9 @@ export function validateWatchSpec(db: Database, planId: string, name: string, sp
     what.match = given.match?.trim() || null
   }
 
-  return { label, every, fires, statusRules, rulesText, what, ignore, urgent }
+  const warning = matchWarning({ kind: what.kind, match: what.match, fires })
+  const warnings = warning ? [warning] : []
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent, warnings }
 }
 
 export function setWatch(db: Database, planId: string, name: string, spec: WatchSpec): Watch {
