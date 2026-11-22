@@ -313,6 +313,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           tokens: r.input_tokens + r.output_tokens + r.cache_write_tokens, model: r.model,
           // What untrusted content it read first: from then on its auto actions needed approval
           untrusted: r.untrusted_source,
+          // The secret it read before outside content, which turned allowed-after-outside off for the rest of the run (#169)
+          secrets_read: r.secrets_read_at ? r.secrets_read_source ?? 'a secret' : null,
           // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
           request: r.request ? { text: clip(r.request, CLIP.summary)!, untrusted: r.request_untrusted === 1 } : null,
           // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)

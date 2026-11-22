@@ -193,6 +193,7 @@ export function insertRun(db: Database, planId: string, trigger: TriggerKind, st
     ended_at: status === 'skipped' ? now : null,
     input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: null,
     now_tool: null, now_tool_at: null, waiting_tool: null, waiting_since: null, untrusted_at: null, untrusted_source: null, untrusted_root: null,
+    secrets_read_at: null, secrets_read_source: null, secrets_read_paths: null,
     request: null, request_untrusted: 0, step: null, step_at: null, step_untrusted: null,
   }
   db.prepare(`
@@ -240,6 +241,34 @@ export function markRunUntrusted(db: Database, runId: string, source: string, ro
       OR (untrusted_source LIKE ? AND ? NOT LIKE ?)
       OR (untrusted_source = ? AND ? <> ? AND ? NOT LIKE ?))`)
     .run(new Date().toISOString(), source, root, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary)
+}
+
+/**
+ * Record that a run read a secret (#169): keeps the first time and source, and
+ * appends `path` (a file read) to the run's list once.
+ */
+export function markRunSecretsRead(db: Database, runId: string, source: string, path?: string | null): void {
+  const run = db.prepare('SELECT secrets_read_paths FROM goal_runs WHERE id = ?').get(runId) as { secrets_read_paths: string | null } | undefined
+  if (!run) return
+  const paths = runSecretPaths(run)
+  if (path && !paths.includes(path)) paths.push(path)
+  db.prepare(`UPDATE goal_runs SET secrets_read_at = COALESCE(secrets_read_at, ?), secrets_read_source = COALESCE(secrets_read_source, ?),
+    secrets_read_paths = ? WHERE id = ?`).run(new Date().toISOString(), source, JSON.stringify(paths), runId)
+}
+
+/** The secret files a run read (markRunSecretsRead). */
+export function runSecretPaths(run: Pick<GoalRun, 'secrets_read_paths'>): string[] {
+  try { return run.secrets_read_paths ? JSON.parse(run.secrets_read_paths) as string[] : [] } catch { return [] }
+}
+
+/** Whether auto_after_outside still applies to a run: not once it has read a secret (#169). */
+export function afterOutsideApplies(run: Pick<GoalRun, 'secrets_read_at'> | undefined | null): boolean {
+  return !run?.secrets_read_at
+}
+
+/** Why a listed category isn't auto after outside content in a run that read secrets (#169). */
+export function secretsReadReason(run: Pick<GoalRun, 'secrets_read_source'>, category: string): string {
+  return `this run read secrets (${run.secrets_read_source ?? 'a secret'}) before it read outside content, so "${category}" isn't auto after outside content in this run`
 }
 
 /** Runs newest first. */

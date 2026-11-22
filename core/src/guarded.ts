@@ -7,11 +7,12 @@
 import { createHash } from 'crypto'
 import { execFileSync } from 'child_process'
 import type { Database } from './sqlite.js'
-import { mkdirSync, writeFileSync } from 'fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { basename, join } from 'path'
-import { newId, getGoal, getRun } from './goals.js'
+import { afterOutsideApplies, newId, getGoal, getRun, runSecretPaths, secretsReadReason } from './goals.js'
 import { autonomyFor } from './goal-engine.js'
 import { matchToolCategory } from './guard.js'
+import { getPlan } from './queries.js'
 
 /** One file a guarded call needs, sent in full so the check sees what the call will send. */
 export interface GuardedFile {
@@ -43,6 +44,7 @@ export type GuardedCheck = { ok: true } | { ok: false; reason: string }
  */
 export function checkGuardedPayload(
   command: string, files: GuardedFile[], env: Record<string, string | undefined> = process.env,
+  secretFiles: SecretFileValues[] = [],
 ): GuardedCheck {
   const parts = [command, ...files.map((f) => f.contents)]
   const bytes = parts.reduce((n, p) => n + Buffer.byteLength(p, 'utf8'), 0)
@@ -62,7 +64,34 @@ export function checkGuardedPayload(
       if (text.includes(value)) return { ok: false, reason: `${where(i)} contains the value of the environment variable ${name}` }
     }
   }
+  for (const [i, text] of parts.entries()) {
+    for (const secret of secretFiles) {
+      if (secret.values.some((v) => text.includes(v))) return { ok: false, reason: `${where(i)} contains a value from ${secret.path}, which this run read` }
+    }
+  }
   return { ok: true }
+}
+
+/** The values a secret file the run read holds (#169), which a guarded payload may not contain. */
+export interface SecretFileValues { path: string; values: string[] }
+
+/**
+ * The values guarded_run can recover from a secret file (#169): each `KEY=VALUE`
+ * line's value, and every other non-empty line, of ENV_VALUE_MIN_CHARS or more.
+ * A file that can't be read gives none.
+ */
+export function secretFileValues(path: string): SecretFileValues {
+  let text: string
+  try { text = readFileSync(path, 'utf8') } catch { return { path, values: [] } }
+  const values = new Set<string>()
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith('#')) continue
+    const kv = /^(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(.*)$/.exec(line)
+    const value = kv ? kv[1]!.trim().replace(/^["']|["']$/g, '') : line
+    if (value.length >= ENV_VALUE_MIN_CHARS) values.add(value)
+  }
+  return { path, values: [...values] }
 }
 
 /** The sha256 of a staged file's contents, as recorded and compared. */
@@ -233,8 +262,11 @@ export function checkGuardedTarget(command: string, ownRepo: string | null, allo
   return null
 }
 
+/** How much of the goal's instructions a dry run returns as its job, for the model check (#170). */
+export const GUARDED_JOB_CHARS = 1000
+
 export type GuardedStage =
-  | { ok: true; category: string; command: string; files: string[] }
+  | { ok: true; category: string; command: string; files: string[]; goal_name?: string; job?: string }
   | { ok: false; reason: string }
 
 /**
@@ -245,7 +277,10 @@ export type GuardedStage =
  * each file is written under `<dataDir>/guarded/<run id>/`, every mention of its
  * original path in the command is pointed at the copy, and the check is recorded
  * (one use). It never runs the command: the run makes the returned call itself.
- * The plugin calls it twice, `dryRun` first, with its Haiku check in between.
+ * The plugin calls it twice, `dryRun` first, with its Haiku check in between:
+ * the dry run also returns the goal's name and its job (the objective, then
+ * the instructions clipped to GUARDED_JOB_CHARS), the person's own text, so the
+ * check can judge whether the call does this goal's job (#170).
  */
 export function stageGuardedCall(
   db: Database, runId: string, command: string, files: GuardedFile[],
@@ -262,9 +297,15 @@ export function stageGuardedCall(
   const ownRepo = opts.repo !== undefined ? opts.repo : goalRepo((db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string | null } | undefined)?.working_dir ?? null)
   const targetRefusal = checkGuardedTarget(command, ownRepo, runTargets(db, runId))
   if (targetRefusal) return { ok: false, reason: targetRefusal }
-  const check = checkGuardedPayload(command, files, opts.env ?? process.env)
+  const check = checkGuardedPayload(command, files, opts.env ?? process.env, runSecretPaths(run).map(secretFileValues))
   if (!check.ok) return check
-  if (opts.dryRun) return { ok: true, category, command, files: [] }
+  // A run that read secrets loses the setting (#169)
+  if (!afterOutsideApplies(run)) return { ok: false, reason: secretsReadReason(run, category) }
+  if (opts.dryRun) {
+    const instructions = goal.instructions.length > GUARDED_JOB_CHARS ? `${goal.instructions.slice(0, GUARDED_JOB_CHARS - 1)}…` : goal.instructions
+    const job = [goal.objective, instructions].filter((t) => t.trim()).join('\n\n')
+    return { ok: true, category, command, files: [], goal_name: getPlan(db, run.plan_id)?.name ?? run.plan_id, job }
+  }
   const dir = join(opts.dataDir, 'guarded', runId)
   mkdirSync(dir, { recursive: true })
   const stamp = newId('gf')
