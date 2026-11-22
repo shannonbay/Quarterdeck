@@ -6,7 +6,7 @@ import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
   checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
-  getRun, runSecretPaths, secretFilePaths, secretFileValues,
+  getRun, runSecretPaths, secretFilePaths, secretFileValues, buildOverview,
 } from './index.js'
 import { readFileSync } from 'fs'
 
@@ -164,6 +164,16 @@ describe('guardRun with auto_after_outside (#159)', () => {
       expect(runSecretPaths(after)).toEqual([envFile.replace(/\\/g, '/')])
       guardToolCallForRun(db, run.id, 'Bash', { command: 'gh auth token' }, paths)
       expect(getRun(db, run.id)!.secrets_read_source).toBe(envFile)
+    })
+
+    it('shows the read on the run in the overview, and nothing for a run that read none', () => {
+      const plain = insertRun(db, 'g1', 'manual', 'running')
+      const run = insertRun(db, 'g1', 'manual', 'running')
+      const envFile = join(dir, '.env')
+      guardToolCallForRun(db, run.id, 'Read', { file_path: envFile }, paths)
+      const runs = buildOverview(db, ['g1']).goals[0]!.runs
+      expect(runs.find((r) => r.id === run.id)!.secrets_read).toBe(envFile)
+      expect(runs.find((r) => r.id === plain.id)!.secrets_read).toBeNull()
     })
 
     it('records the .env files a shell command names, against the working folder', () => {
