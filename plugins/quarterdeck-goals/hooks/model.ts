@@ -27,7 +27,7 @@ export type OverviewGoal = {
   open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
   activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string }; detail?: string; untrusted?: string }
-  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
+  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; secrets_read?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
   needs_you_count?: number
@@ -84,7 +84,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     openItemCount: g.open_item_count,
     // step: the part of the job the run says it is on (run_step, #146); then activity.text is that step
     openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status, step: g.open_run.step ?? null } : null,
-    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
+    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, secretsRead: r.secrets_read ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
@@ -263,7 +263,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Open items${g.openItemCount > g.openItems.length ? ` (first ${g.openItems.length} of ${g.openItemCount})` : ''}:\n${g.openItems.map((i) => `- item ${i.id}: ${i.title}`).join('\n')}`
       : null,
     g.runs.length > 0
-      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
+      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.secretsRead ? ` [${secretsReadText(r.secretsRead)}]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
       : null,
     g.instructions.trim() ? `Instructions: ${g.instructions.trim()}` : null,
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
@@ -624,6 +624,11 @@ export function refusalText(c: { tool: string; rule: string | null }): string {
     : `Claude Code refused ${c.tool}: its tool rule can't be an allow rule, so Claude Code asks each time`
 }
 
+/** A run that read secrets before outside content, as the pane and goal_detail say it (#169): allowed-after-outside was off for it. */
+export function secretsReadText(source: string): string {
+  return `read secrets (${source}), so allowed-after-outside was off`
+}
+
 /** The prompt behind the pane's "Ask Claude to add them": Claude shows the change and waits for a yes. */
 export function allowRulesPrompt(g: Pick<GoalCard, 'id' | 'name'>, rules: string[]): string {
   return [
@@ -692,8 +697,18 @@ export type GoalChanges = {
   min_watch_gap_minutes?: number
 }
 
-/** A watch as update_goal takes it: a command to run, or a tool to call with its input. */
-export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** A watch as update_goal takes it: a command to run, a tool to call with its input, or steps (several calls in order). */
+export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; steps?: WatchStepChange[]; finally?: WatchCallChange; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** One call of a steps watch, and the clean-up call after them. */
+export type WatchCallChange = { tool: string; input?: Record<string, unknown> }
+export type WatchStepChange = WatchCallChange & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string; retry?: number }
+
+/** A steps watch's calls in order and its clean-up, as the person reads them before saying yes (core's describeWatch wording). */
+export function describeWatchSteps(steps: WatchStepChange[], last?: WatchCallChange): string {
+  const call = (c: WatchCallChange & Partial<WatchStepChange>) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
+  return `${steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${last ? `; finally ${call(last)}` : ''}`
+}
+
 /** Rules by which a watch sets the goal's status (and tone) from its lines, with no run. */
 export type WatchStatusOutcome = { status: string; tone?: 'ok' | 'attention' | 'problem'; run?: boolean }
 export type WatchStatusChange = { rules?: (WatchStatusOutcome & { match: string })[]; default?: WatchStatusOutcome }
@@ -762,6 +777,7 @@ export function describeGoalChanges(g: GoalCard, c: GoalChanges): string[] {
   for (const [name, w] of Object.entries(c.watches ?? {})) {
     const had = g.watches.some((x) => x.name === name.trim())
     if (w === null) lines.push(`Watch removed: ${name}`)
+    else if (w.steps?.length) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min these tools are called in order without asking you, and a run starts when ${w.fires === 'change' ? 'the last answer changes' : "the last answer has something it hasn't before"}: ${describeWatchSteps(w.steps, w.finally)}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else if (w.tool) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this tool is called without asking you, and a run starts when ${w.fires === 'change' ? 'its answer changes' : "its answer has something it hasn't before"}: ${w.tool} ${JSON.stringify(w.input ?? {})}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this command runs on your computer, and a run starts when ${w.fires === 'change' ? 'its output changes' : "it prints a line it hasn't before"}: ${w.command ?? ''}${w.match ? ` (only lines matching ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
   }

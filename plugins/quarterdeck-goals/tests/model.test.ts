@@ -346,6 +346,19 @@ test('the gap between watch runs, a watch filter and urgent show in the detail a
     .toBe(`New watch "feed": every 5 min this command runs on your computer, and a run starts when it prints a line it hasn't before: node feed.js (only lines matching ^item ), leaving out lines matching sponsored, urgent (starts a run even within the gap between watch runs)`)
 })
 
+test('a steps watch change lists every step and its clean-up call (#183)', async () => {
+  const g = card({ id: 'g1', name: 'Listings' })
+  const steps = [
+    { tool: 'mcp__claude-in-chrome__navigate', input: { url: 'https://example.com/list' }, pick: { tabId: { json: 'tabId' } } },
+    { tool: 'mcp__claude-in-chrome__get_page_text', input: { tabId: '{{tabId}}' }, expect: 'Listings', retry: 3 },
+  ]
+  const [line] = describeGoalChanges(g, { watches: { list: { steps, finally: { tool: 'mcp__claude-in-chrome__tabs_close_mcp', input: { tabId: '{{tabId}}' } }, match: 'item (\d+)' } } })
+  expect(line).toBe(`New watch "list": every 5 min these tools are called in order without asking you, and a run starts when the last answer has something it hasn't before: `
+    + '1. mcp__claude-in-chrome__navigate {"url":"https://example.com/list"} picking {"tabId":{"json":"tabId"}} then 2. mcp__claude-in-chrome__get_page_text {"tabId":"{{tabId}}"} expecting /Listings/ (up to 3 tries); '
+    + 'finally mcp__claude-in-chrome__tabs_close_mcp {"tabId":"{{tabId}}"} (read with item (\d+))')
+  expect(describeGoalChanges(g, { watches: { list: { steps: [steps[1]!], fires: 'change' } } })[0]).toContain('a run starts when the last answer changes: 1. mcp__claude-in-chrome__get_page_text')
+})
+
 test('a category merge shows where it goes and the mode it ends with', async () => {
   const g = card({ id: 'g1', name: 'Fixer', autonomy: { 'git.push': 'auto' } })
   expect(describeGoalChanges(g, { merge_categories: { 'git.push': 'github.pr' } }))
@@ -364,6 +377,17 @@ test('a run that read untrusted content says so, and so does a tool rule marking
   expect(g.runs[0]!.untrusted).toBe('WebFetch')
   expect(describe(g, NOW)).toContain('[read outside content (WebFetch): auto actions needed approval]')
   expect(describeGoalChanges(g, { tool_map: { 'mcp__issues__get_issue': 'untrusted' } })[0]).toMatch(/untrusted \(reads outside content/)
+})
+
+test('a run that read secrets before outside content says allowed-after-outside was off (#169)', async () => {
+  const at = new Date(NOW).toISOString()
+  const run = { id: 'run_1', status: 'completed', trigger: 'manual', summary: null, started_at: at, ended_at: at, secrets_read: 'a .env file' }
+  const g = card({ id: 'g1', name: 'Inbox', runs: [run, { ...run, id: 'run_0' }] })
+  expect(g.runs[0]!.secretsRead).toBe('a .env file')
+  expect(describe(g, NOW)).toContain('[read secrets (a .env file), so allowed-after-outside was off]')
+  const plain = card({ id: 'g2', name: 'Inbox', runs: [{ ...run, secrets_read: null }] })
+  expect(plain.runs[0]!.secretsRead).toBeNull()
+  expect(describe(plain, NOW)).not.toContain('read secrets')
 })
 
 test('a goal about something arriving is offered a watch first, its timer next', () => {
