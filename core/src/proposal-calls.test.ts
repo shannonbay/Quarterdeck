@@ -94,6 +94,26 @@ describe('proposal staged calls (#167)', () => {
     expect(decision.category).toBe('quarterdeck-data')
   })
 
+  it("lets the PR Reviewer's staged review post through once approved, with the default data dir (#167 part 2)", () => {
+    // The PR Reviewer template's rules (reviewRules in plugins/quarterdeck-goals/hooks/templates.ts)
+    updateGoal(db, 'g1', { autonomy: { 'github.review': 'propose', 'github.write': 'off' }, tool_map: {
+      'Bash(gh api repos/*/pulls/*/reviews*)': 'github.review',
+      'PowerShell(gh api repos/*/pulls/*/reviews*)': 'github.review',
+      'Bash(git push*)': 'github.write',
+    } })
+    const qdDir = join(dataDir, '.quarterdeck')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const r = addItem(db, 'g1', run.id, { goal: 'Review #12', external_ref: 'github-pr-review:12@abc', action: { category: 'github.review', summary: 'Post review' } })
+    const review = join(dataDir, 'review-12.json')
+    const [cmd] = stageProposalCalls(db, { id: r.task.id, plan_id: 'g1', run_id: run.id }, 'github.review', [
+      { command: `gh api repos/shannonbay/Quarterdeck/pulls/12/reviews --method POST --input ${review}`, files: [{ path: review, contents: '{"commit_id":"abc","event":"COMMENT","body":"LGTM","comments":[]}' }] },
+    ], { dataDir: qdDir })
+    approve(r.task.id)
+    const decision = guardToolCallForRun(db, run.id, 'Bash', { command: cmd })
+    expect(decision.decision).toBe('allow')
+    expect(decision.category).toBe('github.review')
+  })
+
   it('refuses a staged call whose file changed or is gone', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
     const id = propose(run.id, 'a')
