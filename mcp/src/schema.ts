@@ -151,6 +151,7 @@ const StatusToneSchema = z.enum(['ok', 'attention', 'problem'])
 export const EndRunSchema = z.object({
   summary: z.string().min(1).describe('What you did this run, what is waiting for the human, and anything you learned'),
   run_id: z.string().optional().describe('Defaults to the run from get_goal_brief'),
+  handled: z.array(z.string()).optional().describe('The watch_events lines you dealt with this run, skipped ones included (copy them as the brief shows them). Required when your brief had watch_events; the rest come back in your next run.'),
   status: z.string().max(200).optional().describe('A few words on how the goal stands now, shown in its one-line summary in the Goals pane until a later run changes it, e.g. "clean" or "2 PRs awaiting review" (plain text, cut to 40 characters). Set it when the goal\'s instructions say what it means; leave it out to keep the current one, or pass "" to clear it.'),
   status_check: z.object({
     kind: z.enum(['github_pr', 'github_issue']).describe('What to look at: a GitHub pull request or issue'),

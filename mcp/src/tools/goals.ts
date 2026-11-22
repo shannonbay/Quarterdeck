@@ -66,6 +66,7 @@ export async function get_goal_brief(args: unknown) {
       'First carry out items with approved_to_execute (their action was approved), then complete them with set_status.',
       'Revise items rejected in decisions_since_last_run using the feedback: update the proposal with update_task state_patch {"action": {category, summary, params}} so the human sees the new version, then set_status completed to send it for review again — or abandon it with a reason.',
       'Look for new work; add each piece with add_item (use external_ref so it is never duplicated).',
+      "List every watch_events line you dealt with, skipped ones included, in end_run's handled. The rest come back in your next run; carried_over shows ones an earlier run didn't get to.",
       'For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.',
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
       'When the goal needs a watch it does not have (or a changed one), propose it with propose_watch for the person to approve, rather than asking them how to watch for it.',
@@ -196,7 +197,7 @@ export async function end_run(args: unknown) {
   if (!runId) throw new Error('No run to end: you were not started for a run (get_goal_brief had no run_id).')
   const run = getRun(runId)
   if (!run || run.plan_id !== planId) throw new Error(`Run ${runId} not found in this goal.`)
-  const ended = endRun(runId, input.summary, input.status, input.status_check, input.status_tone)
+  const ended = endRun(runId, input.summary, input.status, input.status_check, input.status_tone, input.handled)
   setOpenRun(null)
   record(planId, planId, 'run_completed', { run_id: runId, summary: ended.summary, items_created: ended.items_created, items_resolved: ended.items_resolved })
   return {

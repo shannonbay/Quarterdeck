@@ -16,7 +16,7 @@ import { claimUsedGuardedCheck } from './guarded.js'
 /** Kept on an item recorded auto after outside content because the person allowed it (#159). */
 export const AFTER_OUTSIDE_ITEM_NOTE = 'Went through after outside content because you allowed it (checked by guarded_run)'
 import { listHealth } from './health.js'
-import { listWatches, neverSawHint, releaseWatchEvents, takeWatchEvents, watchNeverSaw, type WatchNews } from './watches.js'
+import { listWatches, neverSawHint, releaseUnhandledWatchEvents, releaseWatchEvents, runWatchEvents, takeWatchEvents, watchNeverSaw, type RunWatchEvent, type WatchNews } from './watches.js'
 import { cleanOutsideText, isHidden } from './outside-text.js'
 import type { AutonomyMode, Goal, GoalMemory, GoalRun, MemoryKind, MemorySource, Task, TriggerKind } from './types.js'
 
@@ -563,8 +563,11 @@ export function cleanStatusNote(text: string): string {
  * `statusCheck`, given with a non-empty status, attaches a check the scheduler evaluates between runs.
  * `statusTone` (ok / attention / problem), given with a non-empty status, says how the goal stands; it is ignored without one.
  * Setting or clearing the status replaces or clears any earlier check and tone.
+ * `handled` lists the watch_events lines (or event ids) the run dealt with, skipped ones included: required when
+ * the run had watch events. Every other event of the run is released to queue the next watch run, unless it has
+ * been shown to max_item_attempts runs already, when it stays put and the person is asked about it.
  */
-export function endRun(db: Database, runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown): GoalRun {
+export function endRun(db: Database, runId: string, summary: string, status?: string, statusCheck?: unknown, statusTone?: unknown, handled?: string[]): GoalRun {
   const run = getRun(db, runId)
   if (!run) throw new GoalError(`Run ${runId} not found.`)
   if (run.status !== 'running' && run.status !== 'queued') throw new GoalError(`Run ${runId} already ended (${run.status}).`)
@@ -574,6 +577,8 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   }
   const check = statusCheck === undefined || statusCheck === null ? null : validateStatusCheck(statusCheck)
   const tone = validateStatusTone(statusTone) ?? null
+  const events = runWatchEvents(db, run.plan_id, runId)
+  const handledIds = events.length ? matchHandled(events, handled) : []
   const now = new Date().toISOString()
   const created = (db.prepare('SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND run_id = ?').get(run.plan_id, runId) as { n: number }).n
   const resolved = (db.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND status IN ('completed', 'abandoned') AND updated_at >= ?")
@@ -591,10 +596,53 @@ export function endRun(db: Database, runId: string, summary: string, status?: st
   if (run.trigger === 'curate' && !db.prepare('SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?').get(run.plan_id, CURATION_REF + runId)) {
     updateGoal(db, run.plan_id, { curated_at: run.started_at })
   }
+  if (events.length) settleWatchEvents(db, run.plan_id, runId, events, handledIds, new Date(now))
   archiveResolved(db, run.plan_id)
   finishIfDone(db, run.plan_id)
   tripBreakerIfRunaway(db, run.plan_id)
   return getRun(db, runId)!
+}
+
+/** Ref of the question asked about a watch event no run dealt with: WATCH_EVENT_REF + event id. */
+export const WATCH_EVENT_REF = 'watch-event:'
+
+function listRunEvents(events: RunWatchEvent[]): string {
+  const byWatch = new Map<string, string[]>()
+  for (const e of events) if (e.shown) byWatch.set(e.watch, [...(byWatch.get(e.watch) ?? []), cleanOutsideText(e.line).text])
+  return [...byWatch.entries()].map(([watch, lines]) => `"${watch}": ${lines.join(', ')}`).join('; ')
+}
+
+/** The ids of the run's events that `handled` names (by the line the brief showed, or by id); refuses a missing list or an unknown line. */
+function matchHandled(events: RunWatchEvent[], handled: string[] | undefined): string[] {
+  const yours = `Your events: ${listRunEvents(events)}.`
+  if (!handled) throw new GoalError(`This run had watch_events, so end_run needs handled: the lines you dealt with, skipped ones included. ${yours}`)
+  const ids = new Set<string>()
+  for (const raw of handled) {
+    const h = raw.trim()
+    const matched = events.filter((e) => e.id === h || cleanOutsideText(e.line).text.trim() === h)
+    if (!matched.length) throw new GoalError(`handled names "${h}", which isn't one of this run's watch_events lines. ${yours}`)
+    for (const e of matched) ids.add(e.id)
+  }
+  return [...ids]
+}
+
+/**
+ * After a run ends normally: its unhandled events go back to queue the next watch run, except those already
+ * shown to max_item_attempts runs (0: no cap), which stay with this run and raise one question each.
+ */
+function settleWatchEvents(db: Database, planId: string, runId: string, events: RunWatchEvent[], handledIds: string[], now: Date): void {
+  const limit = getGoal(db, planId)?.limits.max_item_attempts ?? 0
+  const handledSet = new Set(handledIds)
+  const capped = events.filter((e) => !handledSet.has(e.id) && limit > 0 && e.attempts >= limit)
+  releaseUnhandledWatchEvents(db, runId, [...handledIds, ...capped.map((e) => e.id)])
+  for (const e of capped) {
+    const ref = WATCH_EVENT_REF + e.id
+    if (db.prepare('SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?').get(planId, ref)) continue
+    const line = cleanOutsideText(e.line).text
+    askPersonUnder(db, planId, ref,
+      `${e.attempts} runs got "${line}" from the watch "${e.watch}" and none dealt with it. It won't come back by itself: press Run now with a request if it still needs doing.`,
+      `Each of those runs ended without listing it in end_run's handled, so it was handed to the next run; after ${limit} it stops coming back, so a run that keeps forgetting it can't loop.`, now)
+  }
 }
 
 /**

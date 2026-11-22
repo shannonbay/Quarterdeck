@@ -272,3 +272,10 @@ test('forgeDecision: an older server means GitHub, an unknown host asks, GitLab 
   expect(forgeAnswer('github')).toEqual({ kind: 'use', forge: 'github' })
   expect(FORGE_TEMPLATES).toEqual(['Issue Triage', 'Issue Refiner', 'Issue Fixer', 'PR Reviewer', 'CI Watch And Fix'])
 })
+
+test('templates that work through watch_events lists say to list them in end_run\'s handled (#201)', () => {
+  for (const t of [CI_FIX, ISSUE_FIX_REFINED_INTAKE, REFINE_INTAKE, ISSUE_TRIAGE, PR_REVIEW]) {
+    expect(JSON.stringify(t)).toContain("in end_run's handled. The rest come back in your next run")
+  }
+  expect(JSON.stringify(ISSUE_FIX_REFINED_INTAKE)).not.toContain("don't stop partway to leave the rest for a later run")
+})
