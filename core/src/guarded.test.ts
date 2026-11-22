@@ -260,6 +260,10 @@ describe('guardedTarget and the target pin (#168)', () => {
     expect(guardedTarget('gh pr review https://github.com/evil/repo/pull/9 --approve', own)).toEqual([{ repo: 'evil/repo', number: 9 }])
     expect(guardedTarget('gh pr review --approve', own)).toBeNull()
     expect(guardedTarget('gh api graphql -f query=x', own)).toBeNull()
+    // Every gh api part needs its own path: a pinned one can't carry an unpinned one
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews --input f.json && gh api repos/evil/x/gists --input g.json', own)).toBeNull()
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews --input f.json; gh api graphql -f query=x', own)).toBeNull()
+    expect(guardedTarget('gh api repos/{owner}/{repo}/pulls/12/reviews | gh api repos/{owner}/{repo}/issues/12/comments', own)).toEqual([{ repo: own, number: 12 }, { repo: own, number: 12 }])
     expect(guardedTarget('curl https://example.com', own)).toBeNull()
   })
 

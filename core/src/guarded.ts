@@ -179,7 +179,11 @@ export function guardedTarget(command: string, ownRepo: string): GuardedTarget[]
     targets.push({ repo: repoOf(o, n), number: Number(num) })
     return '__path__'
   })
-  if (/\bgh\s+api\b/.test(rest) && !rest.includes('__path__')) return null
+  // Every gh api part of a chained command needs its own repos path, or one pinned call
+  // would carry an unpinned one (`gh api repos/o/r/pulls/12/reviews && gh api repos/evil/x/gists`)
+  for (const part of rest.split(/;|&&|\|\||\||\n/)) {
+    if (/\bgh\s+api\b/.test(part) && !part.includes('__path__')) return null
+  }
   for (const m of rest.matchAll(/\bgh\s+(?:pr|issue)\s+[a-z-]+((?:[^;&|\n])*)/g)) {
     let args = m[1]!
     let repo = own
