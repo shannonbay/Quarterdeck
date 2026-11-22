@@ -250,7 +250,7 @@ export const GITHUB: Forge = {
     'api', 'auth', 'repo', 'release', 'secret', 'variable', 'workflow', 'gist', 'ssh-key', 'gpg-key', 'label'],
   write: 'github.write',
   prCheck: 'github_pr',
-  issueRead: `gh issue view <number> --json title,body,comments --jq '{title, body, comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {author: .author.login, body}]}'`,
+  issueRead: 'the issue_read tool (repo as owner/name, from git remote get-url origin, and the issue number; it shows hidden text as markers such as [hidden comment removed])',
   prRead: `gh pr view <number> --json comments,reviews --jq '{comments: [.comments[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, body}], reviews: [.reviews[] | select(.authorAssociation | IN(${TRUSTED_JQ})) | {id, author: .author.login, state, body}]}'`,
   prInlineRead: 'the pr_inline_comments tool (repo as owner/name, from git remote get-url origin, and the pull request number), which returns only those from the people it trusts as {id, path, line, author, body}',
   watches: {
@@ -379,6 +379,14 @@ export const RESOLVE_THREAD_TOOL = 'mcp__quarterdeck__resolve_review_thread'
  * falls to `gh api*`, the write category. `untrusted`: it reads outside text.
  */
 export const PR_INLINE_TOOL = 'mcp__quarterdeck__pr_inline_comments'
+
+/**
+ * The server tool that reads an issue for the GitHub templates (#172): its title, body and trusted authors' comments,
+ * each cleaned by cleanOutsideText, which a `gh issue view` command's output can't be. `untrusted`: it reads outside
+ * text. The `gh issue view` rules stay `untrusted` too, for goals made before this and the refiner's reply read
+ * (a reporter's comment, which issue_read leaves out).
+ */
+export const ISSUE_READ_TOOL = 'mcp__quarterdeck__issue_read'
 
 /**
  * The PR reviewer's command rules: posting a review through the reviews
@@ -674,7 +682,7 @@ export const TEMPLATES: Template[] = [
     model: 'opus',
     modelReason: 'it writes a spec for whoever builds the issue',
     autonomy: { 'github.issue': 'propose', 'github.write': 'off' },
-    tool_map: refineRules(),
+    tool_map: { ...refineRules(), [ISSUE_READ_TOOL]: 'untrusted' },
     needs: `the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub, and the labels ${REFINED_LABEL} and ${CLARIFY_LABEL} (its first run proposes creating any that are missing). Waiting for ${NEEDS_REFINEMENT_LABEL}, it starts on an issue once someone with triage rights (you, or the Issue Triage goal once you pick the issue) labels it; otherwise it refines issues opened by the repo's owner, members and collaborators, and asks you first about anyone else's`,
     ask: {
       question: `Which issues should it refine? Waiting for ${NEEDS_REFINEMENT_LABEL} lets you pick: add the label on GitHub, or answer the Issue Triage goal's "Which of these should be refined?".`,
@@ -706,7 +714,7 @@ export const TEMPLATES: Template[] = [
     model: 'opus',
     modelReason: 'it writes fixes and features for you to review',
     autonomy: { 'code.pull_request': 'propose', 'code.merge': 'off', 'github.write': 'off' },
-    tool_map: { ...githubRules('code.merge'), [RESOLVE_THREAD_TOOL]: 'code.pull_request', [PR_INLINE_TOOL]: 'untrusted' },
+    tool_map: { ...githubRules('code.merge'), [RESOLVE_THREAD_TOOL]: 'code.pull_request', [PR_INLINE_TOOL]: 'untrusted', [ISSUE_READ_TOOL]: 'untrusted' },
     needs: `the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. Waiting for ${REFINED_LABEL}, it starts on an issue once someone with triage rights (you, or the Issue Refiner once you approve) labels it; otherwise it works on issues opened by the repo's owner, members and collaborators, and asks you first about anyone else's`,
     ask: {
       question: `Should it wait until an issue is labelled ${REFINED_LABEL}? The Issue Refiner goal adds that label once you approve its spec for the issue, so the fixer builds from a spec rather than guessing.`,
@@ -733,7 +741,7 @@ export const TEMPLATES: Template[] = [
     model: 'opus',
     modelReason: "it judges code, and you see each review before it's posted",
     autonomy: { 'github.review': 'propose', 'github.write': 'off' },
-    tool_map: reviewRules(),
+    tool_map: { ...reviewRules(), [ISSUE_READ_TOOL]: 'untrusted' },
     needs: "the GitHub CLI, gh, signed in (gh auth login), with this folder a clone of the repo on GitHub. It reviews pull requests from the repo's owner, members and collaborators; testing one runs its code, so for anyone else's it asks you first",
   },
   {
