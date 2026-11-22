@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
-  checkGuardedPayload, GUARDED_MAX_BYTES, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
+  checkGuardedPayload, GUARDED_MAX_BYTES, GUARDED_JOB_CHARS, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
   getRun, runSecretPaths, secretFilePaths, secretFileValues,
 } from './index.js'
 import { readFileSync } from 'fs'
@@ -113,6 +113,21 @@ describe('guardRun with auto_after_outside (#159)', () => {
     expect(stageGuardedCall(db, run.id, 'rm -rf /', [], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/tool rules/) })
     expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'x'.repeat(GUARDED_MAX_BYTES) }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/limit/) })
     expect(stageGuardedCall(db, run.id, 'gh pr review 1 --body-file a', [{ path: 'a', contents: 'key hunter2hunter2' }], opts)).toMatchObject({ ok: false, reason: expect.stringMatching(/API_SECRET/) })
+  })
+
+  it("stageGuardedCall: a dry run returns the goal's name and its job, the instructions clipped (#170)", () => {
+    updateGoal(db, 'g1', { objective: 'Review pull requests', instructions: `Leave a review. ${'x'.repeat(GUARDED_JOB_CHARS * 2)}` })
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, run.id, 'mail')
+    const opts = { dataDir: join(dir, 'data'), env: {}, dryRun: true }
+    const r = stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body-file a', [{ path: 'a', contents: 'Looks good.' }], opts)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.goal_name).toBe('G')
+    expect(r.job!.startsWith('Review pull requests\n\nLeave a review. x')).toBe(true)
+    expect(r.job!.endsWith('…')).toBe(true)
+    expect(r.job!.length).toBe('Review pull requests\n\n'.length + GUARDED_JOB_CHARS)
+    const real = stageGuardedCall(db, run.id, 'gh pr review 1 --comment --body-file a', [{ path: 'a', contents: 'Looks good.' }], { ...opts, dryRun: false })
+    expect(real).not.toHaveProperty('job')
   })
 
   it('a staged file changed after the check: falls back to approval, naming why', () => {

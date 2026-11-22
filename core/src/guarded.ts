@@ -11,6 +11,7 @@ import { basename, join } from 'path'
 import { afterOutsideApplies, newId, getGoal, getRun, runSecretPaths, secretsReadReason } from './goals.js'
 import { autonomyFor } from './goal-engine.js'
 import { matchToolCategory } from './guard.js'
+import { getPlan } from './queries.js'
 
 /** One file a guarded call needs, sent in full so the check sees what the call will send. */
 export interface GuardedFile {
@@ -166,8 +167,11 @@ export function claimUsedGuardedCheck(db: Database, runId: string, category: str
   return true
 }
 
+/** How much of the goal's instructions a dry run returns as its job, for the model check (#170). */
+export const GUARDED_JOB_CHARS = 1000
+
 export type GuardedStage =
-  | { ok: true; category: string; command: string; files: string[] }
+  | { ok: true; category: string; command: string; files: string[]; goal_name?: string; job?: string }
   | { ok: false; reason: string }
 
 /**
@@ -177,7 +181,10 @@ export type GuardedStage =
  * each file is written under `<dataDir>/guarded/<run id>/`, every mention of its
  * original path in the command is pointed at the copy, and the check is recorded
  * (one use). It never runs the command: the run makes the returned call itself.
- * The plugin calls it twice, `dryRun` first, with its Haiku check in between.
+ * The plugin calls it twice, `dryRun` first, with its Haiku check in between:
+ * the dry run also returns the goal's name and its job (the objective, then
+ * the instructions clipped to GUARDED_JOB_CHARS), the person's own text, so the
+ * check can judge whether the call does this goal's job (#170).
  */
 export function stageGuardedCall(
   db: Database, runId: string, command: string, files: GuardedFile[],
@@ -195,7 +202,11 @@ export function stageGuardedCall(
   if (!check.ok) return check
   // A run that read secrets loses the setting (#169)
   if (!afterOutsideApplies(run)) return { ok: false, reason: secretsReadReason(run, category) }
-  if (opts.dryRun) return { ok: true, category, command, files: [] }
+  if (opts.dryRun) {
+    const instructions = goal.instructions.length > GUARDED_JOB_CHARS ? `${goal.instructions.slice(0, GUARDED_JOB_CHARS - 1)}…` : goal.instructions
+    const job = [goal.objective, instructions].filter((t) => t.trim()).join('\n\n')
+    return { ok: true, category, command, files: [], goal_name: getPlan(db, run.plan_id)?.name ?? run.plan_id, job }
+  }
   const dir = join(opts.dataDir, 'guarded', runId)
   mkdirSync(dir, { recursive: true })
   const stamp = newId('gf')
