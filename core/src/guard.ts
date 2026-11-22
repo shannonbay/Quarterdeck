@@ -47,7 +47,7 @@ import { join, posix } from 'path'
 import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
 import { autonomyFor } from './goal-engine.js'
-import { getGoal, getRun, markRunUntrusted, newId } from './goals.js'
+import { afterOutsideApplies, getGoal, getRun, markRunSecretsRead, markRunUntrusted, newId, secretsReadReason } from './goals.js'
 import { consumeGuardedCheck, hasUnusedGuardedCheck } from './guarded.js'
 import { readFileSync } from 'fs'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
@@ -278,6 +278,27 @@ export function touchesSecrets(toolName: string, input: Record<string, unknown> 
   return null
 }
 
+/** A `.env` file name: the secret files whose values guarded_run can recover and check for (#169). */
+const ENV_FILE = /(?:^|[\s"'`=])((?:[^\s"'`=]*[\\/])?\.env(?:\.[\w.-]*)?)(?![\w-])/gi
+
+/**
+ * The secret files a call reads that guarded_run can check a payload against
+ * (#169): a file tool's path, or the `.env` files a shell command names,
+ * resolved against the working folder.
+ */
+export function secretFilePaths(toolName: string, input: Record<string, unknown> | undefined, workingDir: string): string[] {
+  if (!input) return []
+  const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : '')
+  const found: string[] = []
+  if (FILE_TOOLS.has(toolName)) {
+    const p = str('file_path') || str('notebook_path')
+    if (p && SECRET_PATH.test(p)) found.push(p)
+  } else if (SHELL_TOOLS.has(toolName)) {
+    for (const m of str('command').matchAll(ENV_FILE)) found.push(m[1]!)
+  }
+  return [...new Set(found.map((p) => resolvePath(workingDir, p)))]
+}
+
 function record(db: Database, run: GoalRun, toolName: string, category: string, decision: 'allow' | 'deny' | 'refused', reason: string | null): void {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -312,7 +333,9 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   const command = SHELL_TOOLS.has(toolName) && typeof input?.command === 'string' ? input.command : null
   const listed = matchToolCategory(goal.tool_map, toolName, input)
   let guardedMiss: string | null = null
-  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === 'auto'
+  // A run that read secrets loses the setting (#169): nothing it stages goes through
+  const afterOutside = afterOutsideApplies(run)
+  if (afterOutside && command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === 'auto'
     && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command)) {
     const match = consumeGuardedCheck(db, run.id, listed, command, readStaged)
     if (match.ok) {
@@ -327,13 +350,18 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, 'deny', reason)
     return { decision: 'deny', category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason }
   }
-  // A marked run holding the setting may not read known secret locations: a guarded call could carry them out (#159)
-  if (goal.auto_after_outside.length > 0 && getRun(db, run.id)?.untrusted_source) {
+  // A marked run holding the setting may not read known secret locations: a guarded call could carry them out (#159).
+  // Before the mark, a secret read is allowed but recorded, and the setting stops applying to the run (#169)
+  if (goal.auto_after_outside.length > 0) {
     const secret = touchesSecrets(toolName, input)
     if (secret !== null) {
-      const reason = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`
-      record(db, run, toolName, SECRETS_CATEGORY, 'deny', reason)
-      return { decision: 'deny', category: SECRETS_CATEGORY, run_id: run.id, reason }
+      if (getRun(db, run.id)?.untrusted_source) {
+        const reason = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`
+        record(db, run, toolName, SECRETS_CATEGORY, 'deny', reason)
+        return { decision: 'deny', category: SECRETS_CATEGORY, run_id: run.id, reason }
+      }
+      for (const path of secretFilePaths(toolName, input, workingDir)) markRunSecretsRead(db, run.id, secret, path)
+      markRunSecretsRead(db, run.id, secret)
     }
   }
   const untrustedRead = untrustedLabel(goal.tool_map, toolName, input)
@@ -352,7 +380,8 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     record(db, run, toolName, category, 'allow', null)
     return { decision: 'allow', category, run_id: run.id }
   }
-  if (guardedMiss === null && mode === 'auto' && goal.auto_after_outside.includes(category)) {
+  const secretsOff = mode === 'auto' && goal.auto_after_outside.includes(category) && !afterOutsideApplies(getRun(db, run.id))
+  if (guardedMiss === null && !secretsOff && mode === 'auto' && goal.auto_after_outside.includes(category)) {
     guardedMiss = 'this call was not staged by guarded_run'
   }
   if (mode === 'off') {
@@ -373,7 +402,8 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
     return { decision: 'allow', category, run_id: run.id }
   }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`
-  const guardedHow = guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : ''
+  const guardedHow = secretsOff ? ` You let "${category}" stay auto after outside content, but ${secretsReadReason(getRun(db, run.id)!, category)}.`
+    : guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : ''
   const reason = untrusted !== null
     ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it.${guardedHow} ${how}`
     : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`

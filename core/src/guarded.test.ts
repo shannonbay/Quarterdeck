@@ -6,6 +6,7 @@ import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, markRunUntrusted, guardToolCallForRun, listToolCalls, AFTER_OUTSIDE_NOTE, addItem, AFTER_OUTSIDE_ITEM_NOTE,
   checkGuardedPayload, GUARDED_MAX_BYTES, GUARDED_JOB_CHARS, recordGuardedCheck, consumeGuardedCheck, touchesSecrets, SECRETS_CATEGORY, stageGuardedCall,
+  getRun, runSecretPaths, secretFilePaths, secretFileValues,
 } from './index.js'
 import { readFileSync } from 'fs'
 
@@ -165,6 +166,60 @@ describe('guardRun with auto_after_outside (#159)', () => {
     expect(done.mode).toBe('auto')
     expect(done.task).toMatchObject({ status: 'completed', state: { after_outside: AFTER_OUTSIDE_ITEM_NOTE } })
     expect(addItem(db, 'g1', run.id, { goal: 'Review 1', external_ref: 'c', action }).mode).toBe('propose')
+  })
+
+  describe('a run that read secrets before it was marked (#169)', () => {
+    it('allows the read and records it on the run', () => {
+      const run = insertRun(db, 'g1', 'manual', 'running')
+      const envFile = join(dir, '.env')
+      expect(guardToolCallForRun(db, run.id, 'Read', { file_path: envFile }, paths)).toMatchObject({ decision: 'allow' })
+      const after = getRun(db, run.id)!
+      expect(after.secrets_read_at).not.toBeNull()
+      expect(after.secrets_read_source).toBe(envFile)
+      expect(runSecretPaths(after)).toEqual([envFile.replace(/\\/g, '/')])
+      guardToolCallForRun(db, run.id, 'Bash', { command: 'gh auth token' }, paths)
+      expect(getRun(db, run.id)!.secrets_read_source).toBe(envFile)
+    })
+
+    it('records the .env files a shell command names, against the working folder', () => {
+      expect(secretFilePaths('Bash', { command: 'cat .env.local && grep X "sub/.env"' }, '/repo')).toEqual(['/repo/.env.local', '/repo/sub/.env'])
+      expect(secretFilePaths('Bash', { command: 'gh auth token' }, '/repo')).toEqual([])
+    })
+
+    it('then turns auto_after_outside off: staging, the direct call and add_item all fall back to approval', () => {
+      const run = insertRun(db, 'g1', 'manual', 'running')
+      guardToolCallForRun(db, run.id, 'Read', { file_path: '/repo/.env' }, paths)
+      markRunUntrusted(db, run.id, 'mail')
+      const dataDir = join(dir, 'data')
+      const cmd = 'gh pr review 1 --comment --body-file review.md'
+      const files = [{ path: 'review.md', contents: 'Looks good.' }]
+      expect(stageGuardedCall(db, run.id, cmd, files, { dataDir, env: {}, dryRun: true }))
+        .toMatchObject({ ok: false, reason: expect.stringMatching(/read secrets \(\/repo\/\.env\) before it read outside content, so "gh\.review" isn't auto/) })
+      const path = join(dir, 'body.md')
+      const staged = `gh pr review 1 --comment --body-file ${path}`
+      stage(run.id, 'gh.review', staged, 'Looks good.')
+      expect(guardToolCallForRun(db, run.id, 'Bash', { command: staged }, paths))
+        .toMatchObject({ decision: 'deny', reason: expect.stringMatching(/read secrets \(\/repo\/\.env\)/) })
+      expect(addItem(db, 'g1', run.id, { goal: 'Review 1', external_ref: 'a', action: { category: 'gh.review', summary: 'Reviewed PR 1' } }).mode).toBe('propose')
+    })
+
+    it('records nothing for a goal without auto_after_outside', () => {
+      updateGoal(db, 'g1', { auto_after_outside: [] })
+      const run = insertRun(db, 'g1', 'manual', 'running')
+      guardToolCallForRun(db, run.id, 'Read', { file_path: '/repo/.env' }, paths)
+      expect(getRun(db, run.id)!.secrets_read_at).toBeNull()
+    })
+
+    it('checkGuardedPayload refuses a value from a .env file the run read, naming the file', () => {
+      const envFile = join(dir, '.env')
+      writeFileSync(envFile, '# comment\nAPI_KEY="s3cr3t-value-123"\nexport OTHER=short\nplain-secret-line\n')
+      const secret = secretFileValues(envFile)
+      expect(secret.values).toEqual(['s3cr3t-value-123', 'plain-secret-line'])
+      expect(checkGuardedPayload('gh pr review 1 --body-file a', [{ path: 'a', contents: 'key s3cr3t-value-123' }], {}, [secret]))
+        .toEqual({ ok: false, reason: `file a contains a value from ${envFile}, which this run read` })
+      expect(checkGuardedPayload('gh pr review 1 --body-file a', [{ path: 'a', contents: 'short' }], {}, [secret])).toEqual({ ok: true })
+      expect(secretFileValues(join(dir, 'missing.env')).values).toEqual([])
+    })
   })
 })
 

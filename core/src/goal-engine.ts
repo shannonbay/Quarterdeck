@@ -7,7 +7,7 @@ import type { Database } from './sqlite.js'
 import { getPlan, getTask, insertTask, nextChildId, compareTaskIds, deserializeTask } from './queries.js'
 import { ATTEMPT_REF, isProposal } from './gates.js'
 import {
-  CURATION_REF, DELETED_GOAL_MESSAGE, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, RUN_SUMMARY_SOURCE, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
+  afterOutsideApplies, CURATION_REF, DELETED_GOAL_MESSAGE, countRunsSince, getGoal, getMemory, getOpenRun, getRun, insertRun, listMemory, listRuns, markRunUntrusted, RUN_SUMMARY_SOURCE, WATCH_EVENTS_SOURCE, updateMemory, updateRun, updateGoal, RUNAWAY_REF,
 } from './goals.js'
 import { getSchedule, nextScheduledRun } from './schedule.js'
 import { getRunHold } from './goal-changes.js'
@@ -210,10 +210,12 @@ export function addItem(db: Database, planId: string, runId: string | null, inpu
   }
   const goalMode = autonomyFor(goal, input.action.category)
   const similar = similarCategories(knownCategories(db, planId), input.action.category)
-  const marked = goalMode === 'auto' && runId ? getRun(db, runId)?.untrusted_source ?? undefined : undefined
-  // A listed category (#159) stays auto after outside content when guarded_run's check for it went through in this run
+  const markedRun = goalMode === 'auto' && runId ? getRun(db, runId) : undefined
+  const marked = markedRun?.untrusted_source ?? undefined
+  // A listed category (#159) stays auto after outside content when guarded_run's check for it went through in this run,
+  // unless the run read secrets (#169)
   const guarded = marked !== undefined && goal.auto_after_outside.includes(input.action.category)
-    && claimUsedGuardedCheck(db, runId!, input.action.category)
+    && afterOutsideApplies(markedRun) && claimUsedGuardedCheck(db, runId!, input.action.category)
   const untrusted = guarded ? undefined : marked
   const mode: AutonomyMode = untrusted !== undefined ? 'propose' : goalMode
   if (mode === 'off') {

@@ -371,6 +371,12 @@ export interface GoalRun {
   untrusted_source: string | null
   /** The original outside read behind `untrusted_source` (itself for a direct read; what the memory first came from for a mark inherited from memory). */
   untrusted_root: string | null
+  /** When the run first read a secret (touchesSecrets, #169): auto_after_outside then stops applying to it. */
+  secrets_read_at: string | null
+  /** What the first secret read matched, e.g. "a .env file". */
+  secrets_read_source: string | null
+  /** The secret files the run read (JSON array of paths), which guarded_run checks a payload against. */
+  secrets_read_paths: string | null
   /** What the person asked of this one run (Run with a prompt); null for a plain run. */
   request: string | null
   /** 1 when any part of the request came from where the person did not see it (the MCP server's run_goal). */
