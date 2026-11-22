@@ -36,7 +36,8 @@ interface GoalData {
   webhook_enabled: boolean
   health: HealthResult[]
   tool_calls: ToolCallRecord[]
-  suggestions: { category: string; approved_in_a_row: number }[]
+  /** kind after_outside (#189): an auto category to keep auto after outside text; warning when its rules look broad. */
+  suggestions: { category: string; approved_in_a_row: number; kind: 'auto' | 'after_outside'; warning?: string }[]
   /** The usage-limit hold on all goal runs, if one is in force. */
   hold: { until: string; reason: string } | null
 }
@@ -604,7 +605,20 @@ function Suggestions({ data, busy, patch }: { data: GoalData; busy: string | nul
   if (data.suggestions.length === 0) return null
   return (
     <div className="space-y-2">
-      {data.suggestions.map((sug) => (
+      {data.suggestions.map((sug) => sug.kind === 'after_outside' ? (
+        <div key={sug.category} className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm">
+          <span className="flex-1 text-blue-900">
+            You approved the last <b>{sug.approved_in_a_row}</b> <code className="text-xs">{sug.category}</code> proposals in a row. Keep it auto after a run reads outside text?
+          </span>
+          <button disabled={busy !== null} onClick={() => {
+            const note = 'Encoded text can get past the checks, so this fits private repos better than public ones.'
+            const warning = sug.warning ? `\n\nWarning: ${sug.warning}` : ''
+            if (!confirm(`Runs that read outside text will do ${sug.category} actions without asking you first. ${note}${warning}\n\nKeep ${sug.category} auto after outside text?`)) return
+            void patch({ auto_after_outside: [...new Set([...(data.goal.auto_after_outside ?? []), sug.category])] }, 'after-outside')
+          }}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">Keep auto after outside text</button>
+        </div>
+      ) : (
         <div key={sug.category} className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm">
           <span className="flex-1 text-blue-900">
             You approved the last <b>{sug.approved_in_a_row}</b> <code className="text-xs">{sug.category}</code> proposals in a row. Let the agent do these on its own?

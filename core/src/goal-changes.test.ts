@@ -4,6 +4,7 @@ import {
   openDatabase, createGoal, getGoal, getPlan, listMemory, insertMemory, queueRun, getRun, claimRun, schedulerPass, buildOverview,
   applyGoalChanges, normalizeModel, reportRunEnd, reportRunProgress, insertEvent, getRunHold, setRunHold, clearRunHold, parseLimitReset, isUsageLimit, addItem, getTask, updateGoal, applyInstructionEdits,
   setRunStep, STEP_MAX, endRun, failRun, markRunUntrusted, updateRun, isRiskyToolRule, autoAfterOutsideWarning,
+  getAutonomySuggestions, approveTask, rejectTask, PROMOTE_AFTER,
 } from './index.js'
 
 let db: Database
@@ -358,5 +359,44 @@ describe('auto after outside content', () => {
     expect(() => applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': 'yes' as unknown as boolean } })).toThrow(/true or false/)
     expect(() => applyGoalChanges(db, 'g1', { auto_after_outside: { ' ': true } })).toThrow(/category name/)
     expect(getGoal(db, 'g1')!.auto_after_outside).toEqual([])
+  })
+})
+
+describe('autonomy suggestions (#189)', () => {
+  // Proposals as a marked run makes them; the category's mode is put back afterwards
+  const decide = (category: string, approvals: number, rejectFirst = false) => {
+    const mode = getGoal(db, 'g1')!.autonomy[category]
+    at(category, 'propose')
+    if (rejectFirst) rejectTask(db, 'g1', addItem(db, 'g1', null, { goal: `${category} no`, action: { category, summary: 's' } }).task.id, 'no')
+    for (let i = 0; i < approvals; i++) approveTask(db, 'g1', addItem(db, 'g1', null, { goal: `${category} ${i}`, action: { category, summary: 's' } }).task.id)
+    if (mode) at(category, mode)
+  }
+  const at = (category: string, mode: 'off' | 'propose' | 'auto') => updateGoal(db, 'g1', { autonomy: { ...getGoal(db, 'g1')!.autonomy, [category]: mode } })
+
+  it('suggests auto for a propose category, as before', () => {
+    decide('email.reply', PROMOTE_AFTER)
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([{ category: 'email.reply', approved_in_a_row: 10, kind: 'auto' }])
+  })
+
+  it('suggests keeping an auto category auto after outside text, with the risky-rule warning', () => {
+    decide('email.archive', PROMOTE_AFTER) // proposals made by marked runs, approved every time
+    decide('github.write', PROMOTE_AFTER)
+    at('github.write', 'auto')
+    updateGoal(db, 'g1', { tool_map: { 'Bash(gh pr create*)': 'github.write' } })
+    const got = getAutonomySuggestions(db, 'g1')
+    expect(got).toContainEqual({ category: 'email.archive', approved_in_a_row: 10, kind: 'after_outside' })
+    expect(got.find((s) => s.category === 'github.write')).toMatchObject({ kind: 'after_outside', warning: expect.stringContaining('Bash(gh pr create*)') })
+  })
+
+  it('suggests nothing after a recent rejection, once listed, or at off', () => {
+    decide('email.archive', PROMOTE_AFTER - 1, true)
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([])
+    decide('email.archive', 1)
+    expect(getAutonomySuggestions(db, 'g1')).toHaveLength(1)
+    applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': true } })
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([])
+    applyGoalChanges(db, 'g1', { auto_after_outside: { 'email.archive': false } })
+    at('email.archive', 'off')
+    expect(getAutonomySuggestions(db, 'g1')).toEqual([])
   })
 })

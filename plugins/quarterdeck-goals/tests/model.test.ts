@@ -821,3 +821,9 @@ test('autoAfterOutsideText lists the categories kept auto after outside text, an
   expect(text).toContain('- email.send: propose (kept auto after outside text only once it is auto)')
   expect(text).toContain("lower the risk of disclosure but don't remove it")
 })
+
+test('toCard carries a suggestion\'s kind and warning, and treats one from an older server as auto (#189)', () => {
+  expect(card({ id: 'g1', suggestions: [{ category: 'a', approved_in_a_row: 10 }] }).suggestions).toEqual([{ category: 'a', approvedInARow: 10, kind: 'auto' }])
+  expect(card({ id: 'g1', suggestions: [{ category: 'b', approved_in_a_row: 11, kind: 'after_outside', warning: 'risky' }] }).suggestions)
+    .toEqual([{ category: 'b', approvedInARow: 11, kind: 'after_outside', warning: 'risky' }])
+})
