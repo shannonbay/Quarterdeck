@@ -840,3 +840,13 @@ test('toCard carries a suggestion\'s kind and warning, and treats one from an ol
   expect(card({ id: 'g1', suggestions: [{ category: 'b', approved_in_a_row: 11, kind: 'after_outside', warning: 'risky' }] }).suggestions)
     .toEqual([{ category: 'b', approvedInARow: 11, kind: 'after_outside', warning: 'risky' }])
 })
+
+// #167: the pane shows what approving a proposal lets through
+test('a proposal card carries its staged calls, or "any" when it covers its whole category', async () => {
+  const staged = { ...proposal('1', 'A'), action: { category: 'gh.review', summary: 'Post', calls: [{ command: 'gh api x --input /q/f.json', files: ['/q/f.json'] }] } }
+  const wide = { ...proposal('2', 'B'), action: { category: 'gh.review', summary: 'Post', covers_any: true } }
+  const c = card({ id: 'g1', name: 'Reviewer', needs_you: [staged, wide, proposal('3', 'C')] as never })
+  expect(c.needsYou[0]!.calls).toEqual([{ command: 'gh api x --input /q/f.json', files: ['/q/f.json'] }])
+  expect(c.needsYou[1]!.calls).toBe('any')
+  expect(c.needsYou[2]!.calls).toBeUndefined()
+})

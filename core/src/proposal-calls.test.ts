@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, addItem, guardToolCallForRun, SCHEMA_VERSION,
-  stageProposalCalls, proposalCalls, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES, proposalKey,
+  stageProposalCalls, proposalCalls, proposalCallsWithFiles, buildOverview, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES, proposalKey,
 } from './index.js'
 
 // #167: an approved proposal covers only the exact calls it staged, each once
@@ -107,5 +107,35 @@ describe('proposal staged calls (#167)', () => {
     expect(proposalCallsProblem([{ command: ' ' }])).toContain('no command')
     expect(proposalCallsProblem([{ command: 'x', files: [{ path: 'p', contents: 'a'.repeat(GUARDED_MAX_BYTES) }] }])).toContain('limit')
     expect(proposalCallsProblem([{ command: 'gh pr review 1' }])).toBeNull()
+  })
+
+  // #167 part 2: the pane and the goal page show what approving lets through
+  it("the overview shows a waiting proposal's staged calls, or that it covers any call in its category", () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const staged = propose(run.id, 'a')
+    stageProposalCalls(db, { id: staged, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    const wide = propose(run.id, 'b')
+    const goal = buildOverview(db).goals.find((g) => g.id === 'g1')!
+    const item = (id: string) => goal.needs_you.find((i) => i.id === id) as { action: { calls?: { command: string; files: string[] }[]; covers_any?: boolean } }
+    expect(item(staged).action.calls).toHaveLength(1)
+    expect(item(staged).action.calls![0]!.command).toContain(join(dataDir, 'guarded'))
+    expect(item(staged).action.calls![0]!.files[0]).toContain('review.md')
+    expect(item(staged).action.covers_any).toBeUndefined()
+    expect(item(wide).action.covers_any).toBe(true)
+    expect(item(wide).action.calls).toBeUndefined()
+  })
+
+  it('the goal page reads each staged file as it is now, null once it is gone', () => {
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const id = propose(run.id, 'a')
+    stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
+      { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
+    ], { dataDir })
+    const [call] = proposalCallsWithFiles(db, proposalKey('g1', id))
+    expect(call!.files[0]!.contents).toBe('LGTM')
+    rmSync(call!.files[0]!.path)
+    expect(proposalCallsWithFiles(db, proposalKey('g1', id))[0]!.files[0]!.contents).toBeNull()
   })
 })

@@ -235,6 +235,19 @@ export function proposalCalls(db: Database, key: string): { command: string; fil
   return rows.map((r) => ({ command: r.command, files: Object.keys(JSON.parse(r.file_hashes) as Record<string, string>), used_at: r.used_at }))
 }
 
+/**
+ * A proposal's staged calls with each file's contents as staged now (null when
+ * the file is gone), for the goal page, where the person reads what they approve (#167).
+ */
+export function proposalCallsWithFiles(db: Database, key: string): { command: string; files: { path: string; contents: string | null }[]; used_at: string | null }[] {
+  return proposalCalls(db, key).map((c) => ({
+    ...c,
+    files: c.files.map((path) => {
+      try { return { path, contents: readFileSync(path, 'utf8') } } catch { return { path, contents: null } }
+    }),
+  }))
+}
+
 /** Whether a proposal staged exact calls (#167); one that didn't covers its whole category. */
 export function proposalHasCalls(db: Database, key: string): boolean {
   return db.prepare('SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1').get(key) !== undefined

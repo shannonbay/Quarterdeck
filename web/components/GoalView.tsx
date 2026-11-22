@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Goal, GoalMemory, GoalRun, IntervalConfig, HealthResult, ToolCallRecord, Schedule } from '@/lib/db'
 
 type Action = { category: string; summary: string; params?: Record<string, unknown> }
+/** An exact call a proposal staged (#167), with its files as staged now (contents null: gone). */
+type StagedCall = { command: string; files: { path: string; contents: string | null }[]; used_at: string | null }
 interface Item {
   id: string
   goal: string
@@ -16,6 +18,8 @@ interface Item {
   awaiting_review: boolean
   approved_to_execute: boolean
   updated_at: string
+  /** needs_you proposals only: empty when the approval covers any call in the category */
+  staged_calls?: StagedCall[]
 }
 interface GoalData {
   plan: { id: string; name: string; working_dir: string }
@@ -294,6 +298,7 @@ function NeedsYou({ items, goalId, busy, call }: { items: Item[]; goalId: string
                 )}
               </div>
             </div>
+            {i.action && i.staged_calls && <StagedCalls category={i.action.category} calls={i.staged_calls} />}
             {i.action?.params && Object.keys(i.action.params).length > 0 && (
               <details className="text-xs"><summary className="cursor-pointer text-amber-800">Details</summary>
                 <pre className="mt-1 bg-white rounded p-2 overflow-auto text-gray-700">{JSON.stringify(i.action.params, null, 2)}</pre>
@@ -698,5 +703,32 @@ function GuardSection({ calls, hasRules }: { calls: ToolCallRecord[]; hasRules: 
         </ul>
       )}
     </Section>
+  )
+}
+
+/**
+ * What approving a proposal lets through (#167): each exact call it staged, with
+ * the files it sends, or, when it staged none, any call in its category.
+ */
+function StagedCalls({ category, calls }: { category: string; calls: StagedCall[] }) {
+  if (calls.length === 0) {
+    return <p className="text-xs text-amber-800">Covers any call in {category}</p>
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-amber-800">Approving lets through only {calls.length === 1 ? 'this call' : `these ${calls.length} calls`}, each once:</p>
+      {calls.map((c, n) => (
+        <div key={n} className="text-xs space-y-1">
+          <pre className="bg-white rounded p-2 overflow-auto text-gray-800 whitespace-pre-wrap break-all">{c.command}</pre>
+          {c.files.map((f) => (
+            <details key={f.path} className="ml-2"><summary className="cursor-pointer text-amber-800 font-mono">{f.path}</summary>
+              {f.contents === null
+                ? <p className="mt-1 text-red-700">This staged file is gone, so the call will be refused.</p>
+                : <pre className="mt-1 bg-white rounded p-2 overflow-auto text-gray-700">{f.contents}</pre>}
+            </details>
+          ))}
+        </div>
+      ))}
+    </div>
   )
 }

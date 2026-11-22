@@ -94,6 +94,8 @@ export const listToolCalls = (planId: string, limit?: number) => core.listToolCa
 export const PROMOTE_AFTER = core.PROMOTE_AFTER
 
 /** Categories whose last PROMOTE_AFTER decisions were all approvals: propose to auto, or auto kept auto after outside text, counting only marked proposals (#189). */
+/** A proposal's staged calls with their files' contents (#167). */
+export const getProposalCalls = (planId: string, taskId: string) => core.proposalCallsWithFiles(getDb(), core.proposalKey(planId, taskId))
 export const getAutonomySuggestions = (planId: string) => core.getAutonomySuggestions(getDb(), planId)
 /** A human approves or rejects an item; approving a goal proposal queues a run. */
 export const decideItem = (planId: string, taskId: string, input: Parameters<typeof core.decideItem>[3]) => core.decideItem(getDb(), planId, taskId, input)

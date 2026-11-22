@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { z } from 'zod'
 import {
   getPlan, updatePlan, getGoal, updateGoal, getIntervalTrigger, listRuns, getOpenRun,
-  listMemory, getGoalItems, getApprovalStats, MEMORY_BRIEF_CHARS,
+  listMemory, getGoalItems, getApprovalStats, MEMORY_BRIEF_CHARS, getProposalCalls, isProposal,
   getSchedule, setSchedule, getRunHold, nextScheduledRun, getEventTrigger, listHealth, listToolCalls, getAutonomySuggestions, autoAfterOutsideWarning,
 } from '@/lib/db'
 import { recordEvent } from '@/lib/event-log'
@@ -27,7 +27,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
       interval: getIntervalTrigger(id)?.config ?? null,
       open_run: getOpenRun(id) ?? null,
       runs: listRuns(id, 30),
-      needs_you: open.filter((t) => t.review_requested_at).map(itemView),
+      // A proposal shows the exact calls it staged; with none it covers its whole category (#167)
+      needs_you: open.filter((t) => t.review_requested_at).map((t) => ({
+        ...itemView(t),
+        ...(isProposal(t) && { staged_calls: getProposalCalls(id, t.id) }),
+      })),
       open_items: open.filter((t) => !t.review_requested_at).map(itemView),
       recently_resolved: items
         .filter((t) => t.status === 'completed' || t.status === 'abandoned')

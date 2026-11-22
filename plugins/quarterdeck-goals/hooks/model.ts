@@ -48,12 +48,18 @@ export type OverviewGoal = {
   watch_failing?: boolean
 }
 
-type OverviewItem = { id: string; goal: string; action?: { category?: string; summary?: string } | null; asks_person?: boolean; notes?: string | null; clipped?: boolean; blocked?: boolean }
+type OverviewItem = { id: string; goal: string; action?: { category?: string; summary?: string; calls?: { command: string; files: string[] }[]; covers_any?: boolean } | null; asks_person?: boolean; notes?: string | null; clipped?: boolean; blocked?: boolean }
 
 export const EMPTY: Snapshot = { reachable: false, error: null, goals: [], fetchedAt: 0, etag: null, hold: null }
 
 function toItem(t: OverviewItem): Item {
-  return { id: t.id, title: t.goal, category: t.action?.category ?? null, summary: t.action?.summary ?? null, ...(t.asks_person && { asksPerson: true }), ...(t.notes && { notes: t.notes }), ...(t.clipped && { clipped: true }), ...(t.blocked && { blocked: true }) }
+  return { id: t.id, title: t.goal, category: t.action?.category ?? null, summary: t.action?.summary ?? null, ...(t.asks_person && { asksPerson: true }), ...(t.notes && { notes: t.notes }), ...(t.clipped && { clipped: true }), ...(t.blocked && { blocked: true }), ...itemCalls(t) }
+}
+
+/** What approving a proposal lets through (#167): its staged calls, or any call in its category. */
+function itemCalls(t: OverviewItem): Pick<Item, 'calls'> {
+  if (t.action?.calls && t.action.calls.length > 0) return { calls: t.action.calls.map((c) => ({ command: c.command, files: c.files ?? [] })) }
+  return t.action?.covers_any ? { calls: 'any' } : {}
 }
 
 /** The source core gives a run that read only watch lines (WATCH_EVENTS_SOURCE in core/src/goals.ts). */
