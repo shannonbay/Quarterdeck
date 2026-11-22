@@ -5,6 +5,7 @@
  */
 
 import { createHash } from 'crypto'
+import { execFileSync } from 'child_process'
 import type { Database } from './sqlite.js'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { basename, join } from 'path'
@@ -187,6 +188,125 @@ export function proposalCallsProblem(calls: ProposalCall[]): string | null {
   return null
 }
 
+/** A target a guarded call writes to (#168): a repo as owner/name and a PR or issue number. */
+export interface GuardedTarget { repo: string; number: number }
+
+/** owner/name from a GitHub remote URL (https or ssh), lower-cased; null if it isn't one. */
+export function normaliseRepo(url: string): string | null {
+  // Read from the end with string steps, not one unanchored regex: that one is slow on
+  // a long run of `github.com:` (CodeQL polynomial regex).
+  let t = url.trim()
+  if (t.endsWith('/')) t = t.slice(0, -1)
+  const q = t.lastIndexOf('/')
+  if (q < 0) return null
+  let name = t.slice(q + 1)
+  if (name.length > 4 && name.toLowerCase().endsWith('.git')) name = name.slice(0, -4)
+  const head = t.slice(0, q)
+  const p = head.lastIndexOf('/')
+  const plain = (s: string) => s.length > 0 && !/\s/.test(s)
+  if (!plain(name)) return null
+  // https://github.com/owner/name: the whole host part must be github.com, so
+  // evilgithub.com or evil.com/github.com don't pass (CodeQL incomplete URL sanitization)
+  if (p >= 0) {
+    const owner = head.slice(p + 1)
+    return GITHUB_HOST.test(head.slice(0, p)) && plain(owner) ? `${owner}/${name}`.toLowerCase() : null
+  }
+  // git@github.com:owner/name: only a user@ may come before github.com:
+  const k = head.toLowerCase().indexOf('github.com:')
+  if (k < 0 || !/^(?:[\w.-]+@)?$/.test(head.slice(0, k))) return null
+  const owner = head.slice(k + 'github.com:'.length)
+  return plain(owner) ? `${owner}/${name}`.toLowerCase() : null
+}
+
+/** The host part of a GitHub URL, whole: an optional scheme and user, then github.com. */
+const GITHUB_HOST = /^(?:(?:https?|ssh|git):\/\/)?(?:[\w.-]+@)?github\.com$/i
+
+const repoCache = new Map<string, string | null>()
+
+/** The goal's own repo, from `git remote get-url origin` in its working folder (cached per folder). */
+export function goalRepo(workingDir: string | null): string | null {
+  if (!workingDir) return null
+  if (repoCache.has(workingDir)) return repoCache.get(workingDir)!
+  let repo: string | null = null
+  try {
+    repo = normaliseRepo(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: workingDir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }))
+  } catch { repo = null }
+  repoCache.set(workingDir, repo)
+  return repo
+}
+
+/**
+ * Every target a command names (#168), or null when one can't be read.
+ * Matched on the whole command, since `commandParts` would split `{owner}/{repo}`.
+ * `{owner}/{repo}` placeholders, and a gh pr/issue command without -R, are the goal's repo.
+ */
+export function guardedTarget(command: string, ownRepo: string): GuardedTarget[] | null {
+  const targets: GuardedTarget[] = []
+  const own = ownRepo.toLowerCase()
+  const repoOf = (owner: string, name: string) => (owner === '{owner}' && name === '{repo}' ? own : `${owner}/${name}`.toLowerCase())
+  let rest = command.replace(/https?:\/\/github\.com\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pull|issues)\/(\d+)[^\s'"]*/g, (_all, o: string, n: string, num: string) => {
+    targets.push({ repo: `${o}/${n}`.toLowerCase(), number: Number(num) })
+    return ' __url__ '
+  })
+  rest = rest.replace(/\brepos\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pulls|issues)\/(\d+)/g, (_all, o: string, n: string, num: string) => {
+    targets.push({ repo: repoOf(o, n), number: Number(num) })
+    return '__path__'
+  })
+  // Every gh api part of a chained command needs its own repos path, or one pinned call
+  // would carry an unpinned one (`gh api repos/o/r/pulls/12/reviews && gh api repos/evil/x/gists`)
+  // A lone `&` (background) separates parts too, so split on each of ; & | and newline
+  for (const part of rest.split(/[;&|\n]/)) {
+    if (/\bgh\s+api\b/.test(part) && !part.includes('__path__')) return null
+  }
+  for (const m of rest.matchAll(/\bgh\s+(?:pr|issue)\s+[a-z-]+((?:[^;&|\n])*)/g)) {
+    let args = m[1]!
+    let repo = own
+    const r = /(?:^|\s)(?:-R|--repo)(?:\s+|=)['"]?([^\s'"]+)['"]?/.exec(args)
+    if (r) {
+      repo = (normaliseRepo(`github.com/${r[1]!.replace(/^(?:https?:\/\/)?github\.com\//i, '')}`) ?? r[1]!).toLowerCase()
+      args = args.replace(r[0], ' ')
+    }
+    if (args.includes('__url__')) {
+      if (r) for (const t of targets) if (t.repo !== repo) targets.push({ repo, number: t.number })
+      continue
+    }
+    const n = /(?:^|\s)['"]?#?(\d+)['"]?(?=\s|$)/.exec(args)
+    if (!n) return null
+    targets.push({ repo, number: Number(n[1]) })
+  }
+  return targets.length > 0 ? targets : null
+}
+
+/** The PR and issue numbers a run was started for (#168): its watch lines' leading numbers and a number in its Run now request. */
+export function runTargets(db: Database, runId: string): number[] {
+  const out = new Set<number>()
+  const rows = db.prepare('SELECT line FROM goal_watch_events WHERE run_id = ?').all(runId) as { line: string }[]
+  for (const { line } of rows) {
+    const m = /^\s*#?(\d+)/.exec(line)
+    if (m) out.add(Number(m[1]))
+  }
+  const request = (getRun(db, runId) as { request?: string | null } | undefined)?.request
+  if (request) {
+    const m = /#(\d+)\b/.exec(request) ?? /(?:^|\s)(\d+)(?=\s|$|[.,;:!?])/.exec(request)
+    if (m) out.add(Number(m[1]))
+  }
+  return [...out].sort((a, b) => a - b)
+}
+
+/** Why a command's target fails #168's pin (the goal's own repo, a number the run was started for), or null when it passes. */
+export function checkGuardedTarget(command: string, ownRepo: string | null, allowed: number[]): string | null {
+  if (allowed.length === 0) return "this run wasn't started for a PR or issue, so it can't make guarded calls: propose it instead"
+  if (!ownRepo) return "the goal's repo can't be read from its working folder's origin remote, so it can't make guarded calls: propose it instead"
+  const targets = guardedTarget(command, ownRepo)
+  if (!targets) return "the call's target (a repo and a PR or issue number) can't be read from the command, so it can't be a guarded call: propose it instead"
+  const set = allowed.map((n) => `#${n}`).join(', ')
+  for (const t of targets) {
+    if (t.repo !== ownRepo.toLowerCase()) return `the call names ${t.repo} #${t.number}, but this goal's repo is ${ownRepo}: propose it instead`
+    if (!allowed.includes(t.number)) return `the call names #${t.number}, but this run was started for ${set}: propose it instead`
+  }
+  return null
+}
+
 /** The key a proposal's staged calls are stored under (#167): item ids are only unique within a goal. */
 export const proposalKey = (planId: string, taskId: string): string => `${planId}/${taskId}`
 
@@ -274,7 +394,8 @@ export type GuardedStage =
 /**
  * guarded_run's server half (#159): checks a call for a marked run and, unless
  * `dryRun`, stages it. The command must map (as a Bash call) to a category the
- * goal keeps auto after outside content; then the payload rules run. On a pass,
+ * goal keeps auto after outside content, and name the goal's own repo and a PR
+ * or issue the run was started for (#168); then the payload rules run. On a pass,
  * each file is written under `<dataDir>/guarded/<run id>/`, every mention of its
  * original path in the command is pointed at the copy, and the check is recorded
  * (one use). It never runs the command: the run makes the returned call itself.
@@ -285,7 +406,7 @@ export type GuardedStage =
  */
 export function stageGuardedCall(
   db: Database, runId: string, command: string, files: GuardedFile[],
-  opts: { dataDir: string; env?: Record<string, string | undefined>; dryRun?: boolean },
+  opts: { dataDir: string; env?: Record<string, string | undefined>; dryRun?: boolean; repo?: string | null },
 ): GuardedStage {
   const run = getRun(db, runId)
   if (!run || !['queued', 'running'].includes(run.status)) return { ok: false, reason: 'this run is not running' }
@@ -295,6 +416,9 @@ export function stageGuardedCall(
   if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== 'auto') {
     return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" }
   }
+  const ownRepo = opts.repo !== undefined ? opts.repo : goalRepo((db.prepare('SELECT working_dir FROM plans WHERE id = ?').get(run.plan_id) as { working_dir: string | null } | undefined)?.working_dir ?? null)
+  const targetRefusal = checkGuardedTarget(command, ownRepo, runTargets(db, runId))
+  if (targetRefusal) return { ok: false, reason: targetRefusal }
   const check = checkGuardedPayload(command, files, opts.env ?? process.env, runSecretPaths(run).map(secretFileValues))
   if (!check.ok) return check
   // A run that read secrets loses the setting (#169)

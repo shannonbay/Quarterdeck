@@ -117,7 +117,7 @@ Mail, calendars and cloud files have no command to run: only a Claude Code sessi
 
 - `tool`: the tool's full name, as your tool list has it (`mcp__claude_ai_Gmail__search_threads`). It must be a connector or MCP tool that only reads. Quarterdeck's own tools are refused, and so is a tool the goal's rules put in a category that is `propose` or `off`.
 - `input`: the tool's arguments. Ask for ids only and for few results: the answer is read, not kept.
-- `match` (optional): a regular expression over the answer's text; each match's first group is one item. Left out, every `"id": "…"` in a JSON answer is an item, which suits most searches.
+- `match` (optional): a regular expression over the answer's text; each match's first group is one item. Left out, every `"id": "…"` in a JSON answer is an item, which suits most searches. Each match must differ per item: a fixed pattern with no group, such as `[Dd]ryer`, turns every item into the same line, so capture what differs, e.g. `(\w[^·\n]*) · <listing title>`. Setting such a watch answers with a warning.
 - Call the tool yourself first with the same input and look at the answer: check the ids are there and are stable.
 - The first call is made within a minute by the session running goals. `goal_detail` shows the watch as failing, with the reason, if the connector isn't signed in there or the call is refused.
 - A call that takes over 30 seconds, is refused by a permission rule, or answers an error is a failed check: nothing starts.
