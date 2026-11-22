@@ -134,6 +134,21 @@ export function listWatches(db: Database, planId: string): Watch[] {
   return (db.prepare('SELECT * FROM goal_watches WHERE plan_id = ? ORDER BY name').all(planId) as Row[]).map(deserializeWatch)
 }
 
+/** One watch's health for goal_detail (#184): read fresh, never part of the overview, whose etag would change on every check. */
+export interface WatchHealth {
+  name: string
+  last_checked_at: string | null
+  last_line_count: number | null
+  last_fired_at: string | null
+  fail_count: number
+}
+
+/** A goal's watches' health, by name. */
+export function watchHealth(db: Database, planId: string): WatchHealth[] {
+  return db.prepare('SELECT name, last_checked_at, last_line_count, last_fired_at, fail_count FROM goal_watches WHERE plan_id = ? ORDER BY name')
+    .all(planId) as unknown as WatchHealth[]
+}
+
 export function getWatch(db: Database, id: string): Watch | undefined {
   const r = db.prepare('SELECT * FROM goal_watches WHERE id = ?').get(id) as Row | undefined
   return r ? deserializeWatch(r) : undefined
@@ -280,7 +295,7 @@ export function setWatch(db: Database, planId: string, name: string, spec: Watch
   } else {
     db.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+        last_checked_at = NULL, last_line_count = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
     `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(existing.id)
   }
@@ -420,8 +435,8 @@ export function recordWatchLines(db: Database, watchId: string, result: { lines:
     const insert = db.prepare('INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)')
     for (const line of fresh) insert.run(newId('wev'), watchId, watch.plan_id, line, at, duringRun)
     // last_error and last_fired_at are written only when they change: the pane re-reads on those
-    db.prepare('UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?')
-      .run(JSON.stringify(seen), at, at, watchId)
+    db.prepare('UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, last_line_count = ?, fail_count = 0 WHERE id = ?')
+      .run(JSON.stringify(seen), at, at, result.lines.length, watchId)
     if (watch.last_error !== null) db.prepare('UPDATE goal_watches SET last_error = NULL WHERE id = ?').run(watchId)
     if (fresh.length) db.prepare('UPDATE goal_watches SET last_fired_at = ? WHERE id = ?').run(at, watchId)
     db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NOT NULL AND created_at < ?')

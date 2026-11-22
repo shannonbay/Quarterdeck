@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 26
+export const SCHEMA_VERSION = 28
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -292,7 +292,9 @@ export function runMigrations(db: Database): void {
       untrusted_root   TEXT,
       secrets_read_at     TEXT,
       secrets_read_source TEXT,
-      secrets_read_paths  TEXT
+      secrets_read_paths  TEXT,
+      tripped_at     TEXT,
+      tripped_reason TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_runs_plan ON goal_runs(plan_id, started_at);
 
@@ -368,6 +370,10 @@ export function runMigrations(db: Database): void {
   try { db.exec('ALTER TABLE goal_runs ADD COLUMN model TEXT') } catch { /* already exists */ }
   // What a running run is doing now, and the call waiting on a permission answer (reported by the guard plugin)
   for (const col of ['now_tool', 'now_tool_at', 'waiting_tool', 'waiting_since']) {
+    try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
+  }
+  // When a marked run tripped on probing refusals, and on which (#174; schema version 27)
+  for (const col of ['tripped_at', 'tripped_reason']) {
     try { db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`) } catch { /* already exists */ }
   }
   // When the run first read untrusted content (mail, a web page, watch events), and what: auto actions then need approval
@@ -508,6 +514,8 @@ export function runMigrations(db: Database): void {
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN finally_call TEXT') } catch { /* already exists */ }
   // Schema version 16: clean-up calls of a steps watch that failed in a row (a tab may have been left open)
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0') } catch { /* already exists */ }
+  // Schema version 28 (#184): how many lines the last check that worked saw (after match and ignore), for goal_detail
+  try { db.exec('ALTER TABLE goal_watches ADD COLUMN last_line_count INTEGER') } catch { /* already exists */ }
   // Schema version 12: a watch can set the goal's status
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN status_rules TEXT') } catch { /* already exists */ }
   // Schema version 17: lines a watch ignores, and a watch that starts a run despite the goal's gap between watch runs

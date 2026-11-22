@@ -9,7 +9,7 @@
  * `untrusted`, so calling it marks the run as having read outside text). It changes nothing, so no record().
  */
 import { PrInlineCommentsSchema } from '../schema.js'
-import { defaultRunFile, type RunFile } from '@quarterdeck/core'
+import { cleanOutsideText, defaultRunFile, type RunFile } from '@quarterdeck/core'
 import { TRUSTED } from './trusted.js'
 
 interface InlineComment {
@@ -50,6 +50,6 @@ export async function pr_inline_comments(args: unknown, run: RunFile = defaultRu
   const answer = await run('gh', ['api', `repos/${repo}/pulls/${pr}/comments`, '--paginate'])
   const comments = (parsePages(answer) as InlineComment[])
     .filter((c) => TRUSTED.includes(c.author_association))
-    .map((c) => ({ id: c.id, path: c.path, line: c.line ?? c.original_line ?? null, author: c.user?.login ?? null, body: c.body }))
+    .map((c) => ({ id: c.id, path: c.path, line: c.line ?? c.original_line ?? null, author: c.user?.login ?? null, body: cleanOutsideText(c.body ?? '').text }))
   return { repo, pr, comments }
 }

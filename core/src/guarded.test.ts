@@ -81,9 +81,14 @@ describe('guardRun with auto_after_outside (#159)', () => {
     expect(call('Bash', { command: 'gh auth token' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
     expect(call('Read', { file_path: '/repo/.env' })).toMatchObject({ decision: 'deny', category: SECRETS_CATEGORY })
     expect(listToolCalls(db, 'g1')[0]).toMatchObject({ category: SECRETS_CATEGORY, decision: 'deny' })
-    expect(call('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
+    // Three such refusals trip the run (#174): carry on in another marked run
+    expect(getRun(db, run.id)!.tripped_at).not.toBeNull()
+    const next = insertRun(db, 'g1', 'manual', 'running')
+    markRunUntrusted(db, next.id, 'mail')
+    const call2 = (tool: string, input: Record<string, unknown>) => guardToolCallForRun(db, next.id, tool, input, paths)
+    expect(call2('Bash', { command: 'npm test' })).toMatchObject({ decision: 'allow' })
     updateGoal(db, 'g1', { auto_after_outside: [] })
-    expect(call('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
+    expect(call2('Bash', { command: 'cat ~/.ssh/id_rsa' })).toMatchObject({ decision: 'allow' })
   })
 
   it('stageGuardedCall: stages a listed call under the data folder, and the staged call goes through once', () => {

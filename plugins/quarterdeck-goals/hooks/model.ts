@@ -27,7 +27,7 @@ export type OverviewGoal = {
   open_run: { id: string; status: string; step?: string | null } | null
   /** `waiting`: a run's tool call waits for the person's permission answer (from the guard plugin's reports). */
   activity?: { state: 'running' | 'queued' | 'paused' | 'idle'; text: string; at: string | null; waiting?: { tool: string; since: string }; detail?: string; untrusted?: string }
-  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; secrets_read?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
+  runs: { id: string; status: string; trigger: string; summary: string | null; started_at: string; ended_at: string | null; agent_id?: string | null; tokens?: number; model?: string | null; untrusted?: string | null; secrets_read?: string | null; tripped?: string | null; request?: { text: string; untrusted: boolean } | null; refused?: { tool: string; rule: string | null }[] }[]
   /** False for a card: runs, memory, open items, instructions and tool rules left out. */
   detail?: boolean
   needs_you_count?: number
@@ -38,7 +38,8 @@ export type OverviewGoal = {
   memory: { id: string; kind: string; text: string; pinned: boolean; untrusted?: string | null }[]
   /** Missing from a server older than memory recovery (#105). */
   inactive_memory?: { id: string; kind: string; text: string; reason: string | null; inactive_at: string | null; replaced_by?: string | null }[]
-  suggestions: { category: string; approved_in_a_row: number }[]
+  /** kind and warning are missing from a server older than #189 (every suggestion was then 'auto'). */
+  suggestions: { category: string; approved_in_a_row: number; kind?: 'auto' | 'after_outside'; warning?: string }[]
   /** Missing from a server older than watches. */
   watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
   watch_count?: number
@@ -84,7 +85,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     openItemCount: g.open_item_count,
     // step: the part of the job the run says it is on (run_step, #146); then activity.text is that step
     openRun: g.open_run ? { id: g.open_run.id, status: g.open_run.status, step: g.open_run.step ?? null } : null,
-    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, secretsRead: r.secrets_read ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
+    runs: g.runs.map((r) => ({ id: r.id, status: r.status, trigger: r.trigger, summary: r.summary, startedAt: r.started_at, endedAt: r.ended_at, agentId: r.agent_id ?? null, tokens: r.tokens ?? 0, model: r.model ?? null, untrusted: r.untrusted ?? null, secretsRead: r.secrets_read ?? null, tripped: r.tripped ?? null, request: r.request ?? null, refused: r.refused ?? [] })),
     nextRunAt: g.next_run_at,
     schedule: g.schedule ?? null,
     oneOff: g.one_off ?? false,
@@ -98,7 +99,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     trend: g.health.map((check) => check.value).filter((v): v is number => v !== null).reverse(),
     memory: g.memory.map((m) => ({ id: m.id, kind: m.kind, text: m.text, pinned: m.pinned, ...(m.untrusted && { untrusted: m.untrusted }) })),
     inactiveMemory: (g.inactive_memory ?? []).map((m) => ({ id: m.id, kind: m.kind, text: m.text, reason: m.reason, inactiveAt: m.inactive_at, replacedBy: m.replaced_by ?? null })),
-    suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row })),
+    suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row, kind: s.kind ?? 'auto', ...(s.warning && { warning: s.warning }) })),
     watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, error: w.error })),
     watchCount: g.watch_count ?? g.watches?.length ?? 0,
     watchGapMinutes: g.watch_gap_minutes ?? 0,
@@ -197,7 +198,7 @@ export type Seen = { items: string[]; failures: string[] }
 
 export type Alerts = {
   proposals: { goal: GoalCard; item: Item }[]
-  failures: { goal: GoalCard; run: { id: string; summary: string | null } }[]
+  failures: { goal: GoalCard; run: { id: string; summary: string | null; untrusted?: string | null; tripped?: string | null } }[]
   seen: Seen
 }
 
@@ -263,7 +264,7 @@ export function describe(g: GoalCard, now: number): string {
       ? `Open items${g.openItemCount > g.openItems.length ? ` (first ${g.openItems.length} of ${g.openItemCount})` : ''}:\n${g.openItems.map((i) => `- item ${i.id}: ${i.title}`).join('\n')}`
       : null,
     g.runs.length > 0
-      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.secretsRead ? ` [${secretsReadText(r.secretsRead)}]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
+      ? `Recent runs:\n${g.runs.map((r) => `- ${r.status} (${r.trigger}) ${ago(r.endedAt ?? r.startedAt, now)}${r.untrusted ? ` [read outside content (${r.untrusted}): auto actions needed approval]` : ''}${r.secretsRead ? ` [${secretsReadText(r.secretsRead)}]` : ''}${r.tripped ? ` [tripped on ${r.tripped}: its pending proposals were abandoned]` : ''}${r.request ? ` [asked${r.request.untrusted ? ' (untrusted)' : ''}: "${r.request.text}"]` : ''}${r.refused?.length ? ` [${r.refused.map(refusalText).join('; ')}]` : ''}${r.summary ? ` — ${r.summary}` : ''}`).join('\n')}`
       : null,
     g.instructions.trim() ? `Instructions: ${g.instructions.trim()}` : null,
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
@@ -293,6 +294,15 @@ export function spark(values: number[]): string {
   const min = Math.min(...shown)
   const span = Math.max(...shown) - min || 1
   return shown.map((v) => BARS[Math.round(((v - min) / span) * (BARS.length - 1))]).join('')
+}
+
+/** goal_detail's watch health (#184), one line per watch; nothing when the goal has no watches or the server sent none. */
+export function describeWatchHealth(health: readonly { name: string; last_checked_at: string | null; last_line_count: number | null; last_fired_at: string | null; fail_count: number }[], now: number): string {
+  if (!health.length) return ''
+  const line = (w: (typeof health)[number]) => w.last_checked_at
+    ? `- ${w.name}: checked ${ago(w.last_checked_at, now)}, ${w.last_line_count === null ? 'lines seen not recorded' : `saw ${w.last_line_count} line${w.last_line_count === 1 ? '' : 's'}`}, ${w.last_fired_at ? `last fired ${ago(w.last_fired_at, now)}` : 'never fired'}, ${w.fail_count} failure${w.fail_count === 1 ? '' : 's'} in a row`
+    : `- ${w.name}: not checked yet`
+  return `\n\nWatch health:\n${health.map(line).join('\n')}`
 }
 
 export function ago(iso: string | null, now: number): string {
@@ -695,10 +705,22 @@ export type GoalChanges = {
   model?: string | null
   /** Minutes after a watch-started run before watch events start another (0: none). */
   min_watch_gap_minutes?: number
+  /** Category → keep it auto after a run reads outside text (true) or not (false). */
+  auto_after_outside?: Record<string, boolean>
 }
 
-/** A watch as update_goal takes it: a command to run, or a tool to call with its input. */
-export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** A watch as update_goal takes it: a command to run, a tool to call with its input, or steps (several calls in order). */
+export type WatchChange = { command?: string; tool?: string; input?: Record<string, unknown>; steps?: WatchStepChange[]; finally?: WatchCallChange; match?: string; ignore?: string | null; urgent?: boolean; every_minutes?: number; fires?: 'new' | 'change'; status?: WatchStatusChange | null }
+/** One call of a steps watch, and the clean-up call after them. */
+export type WatchCallChange = { tool: string; input?: Record<string, unknown> }
+export type WatchStepChange = WatchCallChange & { pick?: Record<string, { regex: string } | { json: string }>; expect?: string; retry?: number }
+
+/** A steps watch's calls in order and its clean-up, as the person reads them before saying yes (core's describeWatch wording). */
+export function describeWatchSteps(steps: WatchStepChange[], last?: WatchCallChange): string {
+  const call = (c: WatchCallChange & Partial<WatchStepChange>) => `${c.tool}${c.input && Object.keys(c.input).length ? ` ${JSON.stringify(c.input)}` : ''}${c.pick ? ` picking ${JSON.stringify(c.pick)}` : ''}${c.expect ? ` expecting /${c.expect}/` : ''}${c.retry && c.retry > 1 ? ` (up to ${c.retry} tries)` : ''}`
+  return `${steps.map((s, i) => `${i + 1}. ${call(s)}`).join(' then ')}${last ? `; finally ${call(last)}` : ''}`
+}
+
 /** Rules by which a watch sets the goal's status (and tone) from its lines, with no run. */
 export type WatchStatusOutcome = { status: string; tone?: 'ok' | 'attention' | 'problem'; run?: boolean }
 export type WatchStatusChange = { rules?: (WatchStatusOutcome & { match: string })[]; default?: WatchStatusOutcome }
@@ -767,6 +789,7 @@ export function describeGoalChanges(g: GoalCard, c: GoalChanges): string[] {
   for (const [name, w] of Object.entries(c.watches ?? {})) {
     const had = g.watches.some((x) => x.name === name.trim())
     if (w === null) lines.push(`Watch removed: ${name}`)
+    else if (w.steps?.length) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min these tools are called in order without asking you, and a run starts when ${w.fires === 'change' ? 'the last answer changes' : "the last answer has something it hasn't before"}: ${describeWatchSteps(w.steps, w.finally)}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else if (w.tool) lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this tool is called without asking you, and a run starts when ${w.fires === 'change' ? 'its answer changes' : "its answer has something it hasn't before"}: ${w.tool} ${JSON.stringify(w.input ?? {})}${w.match ? ` (read with ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
     else lines.push(`${had ? 'Watch changed' : 'New watch'} "${name.trim()}": every ${w.every_minutes ?? WATCH_DEFAULT_MINUTES} min this command runs on your computer, and a run starts when ${w.fires === 'change' ? 'its output changes' : "it prints a line it hasn't before"}: ${w.command ?? ''}${w.match ? ` (only lines matching ${w.match})` : ''}${watchFilterText(w)}${w.status ? `. It sets the goal's status: ${describeWatchStatus(w.status)}` : ''}`)
   }

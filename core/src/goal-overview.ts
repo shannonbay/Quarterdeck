@@ -14,7 +14,7 @@ import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
 import { describeWatch, listWatches, watchFailing } from './watches.js'
 import type { Event, Goal, GoalRun, Task, Watch } from './types.js'
-import { getRunHold } from './goal-changes.js'
+import { autoAfterOutsideWarning, getRunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
 import { leaseHolder } from './goal-tick.js'
 
@@ -108,28 +108,52 @@ function overviewItem(t: Task, blocked: boolean) {
   return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title)! } } : marked
 }
 
+/** A pane or web hint for a category approved every time lately (#189). */
+export interface AutonomySuggestion {
+  category: string
+  approved_in_a_row: number
+  /** auto: switch a "propose" category to auto. after_outside: keep an "auto" category auto after outside text (auto_after_outside). */
+  kind: 'auto' | 'after_outside'
+  /** after_outside only: autoAfterOutsideWarning's warning when the category's rules look broad. */
+  warning?: string
+}
+
 /**
- * Categories still at "propose" whose last PROMOTE_AFTER human decisions were all
- * approvals: candidates for switching to "auto".
+ * Categories whose last PROMOTE_AFTER human decisions were all approvals. One at "propose"
+ * is a candidate for "auto", counting every approval. One at "auto" and not yet in
+ * auto_after_outside is a candidate for keeping it auto after outside text, counting only
+ * proposals a marked run made of its auto actions (`state.outside_text`), so approvals from
+ * while it was "propose" don't count. Any rejection in the category breaks both streaks.
  */
-export function getAutonomySuggestions(db: Database, planId: string): { category: string; approved_in_a_row: number }[] {
+export function getAutonomySuggestions(db: Database, planId: string): AutonomySuggestion[] {
   const goal = getGoal(db, planId)
   if (!goal) return []
   const rows = db.prepare(`
-    SELECT json_extract(t.state, '$.action.category') AS category, v.passed
+    SELECT json_extract(t.state, '$.action.category') AS category, v.passed,
+      json_extract(t.state, '$.outside_text') IS NOT NULL AS marked
     FROM verifications v JOIN tasks t ON t.plan_id = v.plan_id AND t.id = v.task_id
     WHERE v.plan_id = ? AND v.gate = 'approval' AND json_extract(t.state, '$.action.category') IS NOT NULL
     ORDER BY v.created_at DESC, v.rowid DESC
-  `).all(planId) as { category: string; passed: number }[]
-  const streak = new Map<string, { n: number; broken: boolean }>()
+  `).all(planId) as { category: string; passed: number; marked: number }[]
+  const streak = new Map<string, { all: number; marked: number; broken: boolean }>()
   for (const r of rows) {
-    const s = streak.get(r.category) ?? { n: 0, broken: false }
-    if (!s.broken) { if (r.passed) s.n++; else s.broken = true }
+    const s = streak.get(r.category) ?? { all: 0, marked: 0, broken: false }
+    if (!s.broken) {
+      if (!r.passed) s.broken = true
+      else { s.all++; if (r.marked) s.marked++ }
+    }
     streak.set(r.category, s)
   }
-  return [...streak.entries()]
-    .filter(([c, s]) => s.n >= PROMOTE_AFTER && autonomyFor(goal, c) === 'propose')
-    .map(([category, s]) => ({ category, approved_in_a_row: s.n }))
+  const out: AutonomySuggestion[] = []
+  for (const [category, s] of streak) {
+    const mode = autonomyFor(goal, category)
+    if (mode === 'propose' && s.all >= PROMOTE_AFTER) out.push({ category, approved_in_a_row: s.all, kind: 'auto' })
+    else if (mode === 'auto' && s.marked >= PROMOTE_AFTER && !(goal.auto_after_outside ?? []).includes(category)) {
+      const warning = autoAfterOutsideWarning(goal.tool_map ?? {}, category)
+      out.push({ category, approved_in_a_row: s.marked, kind: 'after_outside', ...(warning && { warning }) })
+    }
+  }
+  return out
 }
 
 // ── Activity line ─────────────────────────────────────────────────────────────
@@ -315,6 +339,8 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
           untrusted: r.untrusted_source,
           // The secret it read before outside content, which turned allowed-after-outside off for the rest of the run (#169)
           secrets_read: r.secrets_read_at ? r.secrets_read_source ?? 'a secret' : null,
+          // The refusals it tripped on (#174): it was failed and its pending proposals abandoned
+          tripped: r.tripped_at ? r.tripped_reason ?? 'repeated refusals' : null,
           // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
           request: r.request ? { text: clip(r.request, CLIP.summary)!, untrusted: r.request_untrusted === 1 } : null,
           // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
