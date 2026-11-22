@@ -566,33 +566,73 @@ export interface WatchNews {
   new: string[]
   /** New lines left out of `new`. */
   omitted: number
+  /** Lines of `new` an earlier run was shown and didn't mark as handled, with how many runs that was. */
+  carried_over?: { line: string; attempts: number }[]
+}
+
+/** One of a run's events as its brief shows it (or leaves it out, `shown` false). */
+export interface RunWatchEvent {
+  id: string
+  watch: string
+  line: string
+  attempts: number
+  shown: boolean
+}
+
+/** A run's events (or, without `runId`, the goal's waiting ones), oldest first, each marked shown when it is among its watch's first WATCH_BRIEF_LINES. */
+export function runWatchEvents(db: Database, planId: string, runId?: string): RunWatchEvent[] {
+  const rows = db.prepare(`
+    SELECT e.id, e.line, e.attempts, COALESCE(w.name, 'a removed watch') AS watch
+    FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id
+    WHERE e.plan_id = ? AND ${runId ? 'e.run_id = ?' : 'e.run_id IS NULL'}
+    ORDER BY e.created_at, e.rowid
+  `).all(...(runId ? [planId, runId] : [planId])) as { id: string; line: string; attempts: number; watch: string }[]
+  const counts = new Map<string, number>()
+  return rows.map((r) => {
+    const n = (counts.get(r.watch) ?? 0) + 1
+    counts.set(r.watch, n)
+    return { id: r.id, watch: r.watch, line: r.line, attempts: Number(r.attempts), shown: n <= WATCH_BRIEF_LINES }
+  })
 }
 
 /**
  * What a goal's watches saw that no earlier run was told: with `runId`, the
  * waiting events become that run's (asking again gives the same ones);
- * without, they are only listed.
+ * without, they are only listed. Each shown event taken counts one attempt
+ * (omitted ones don't: the run never saw them).
  */
 export function takeWatchEvents(db: Database, planId: string, runId?: string): WatchNews[] {
   if (runId) {
+    const waiting = new Set((db.prepare('SELECT id FROM goal_watch_events WHERE plan_id = ? AND run_id IS NULL').all(planId) as { id: string }[]).map((r) => r.id))
     db.prepare('UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL').run(runId, planId)
-    // Self-caused: an event it was given was seen by the re-check made as the goal's previous run ended
+    const bump = db.prepare('UPDATE goal_watch_events SET attempts = attempts + 1 WHERE id = ?')
+    for (const e of runWatchEvents(db, planId, runId)) if (e.shown && waiting.has(e.id)) bump.run(e.id)
+    // Self-caused: an event it was given was seen by the re-check made as the goal's previous run ended,
+    // or was carried over from an earlier run that didn't handle it
     db.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
-      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND e.seen_during_run = (
+      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND (e.attempts > 1 OR e.seen_during_run = (
         SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
-        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1))`).run(runId, runId, planId, runId, runId)
+        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1)))`).run(runId, runId, planId, runId, runId)
   }
-  const rows = db.prepare(`
-    SELECT e.line, COALESCE(w.name, 'a removed watch') AS watch
-    FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id
-    WHERE e.plan_id = ? AND ${runId ? 'e.run_id = ?' : 'e.run_id IS NULL'}
-    ORDER BY e.created_at, e.rowid
-  `).all(...(runId ? [planId, runId] : [planId])) as { line: string; watch: string }[]
-  const byWatch = new Map<string, string[]>()
-  for (const r of rows) byWatch.set(r.watch, [...(byWatch.get(r.watch) ?? []), r.line])
-  return [...byWatch.entries()].map(([watch, lines]) => ({
-    watch, new: lines.slice(0, WATCH_BRIEF_LINES), omitted: Math.max(0, lines.length - WATCH_BRIEF_LINES),
-  }))
+  const byWatch = new Map<string, RunWatchEvent[]>()
+  for (const e of runWatchEvents(db, planId, runId)) byWatch.set(e.watch, [...(byWatch.get(e.watch) ?? []), e])
+  return [...byWatch.entries()].map(([watch, events]) => {
+    const shown = events.filter((e) => e.shown)
+    const carried = shown.filter((e) => e.attempts > 1).map((e) => ({ line: e.line, attempts: e.attempts - 1 }))
+    return { watch, new: shown.map((e) => e.line), omitted: events.length - shown.length, ...(carried.length ? { carried_over: carried } : {}) }
+  })
+}
+
+/**
+ * Gives back the events of a run that ended normally but didn't mark them handled,
+ * so they queue the next watch run: every event of the run not in `handledIds`.
+ */
+export function releaseUnhandledWatchEvents(db: Database, runId: string, handledIds: string[]): void {
+  const keep = new Set(handledIds)
+  const release = db.prepare('UPDATE goal_watch_events SET run_id = NULL, queued_at = NULL WHERE id = ?')
+  for (const r of db.prepare('SELECT id FROM goal_watch_events WHERE run_id = ?').all(runId) as { id: string }[]) {
+    if (!keep.has(r.id)) release.run(r.id)
+  }
 }
 
 /**

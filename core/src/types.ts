@@ -301,6 +301,8 @@ export interface WatchEvent {
   run_id: string | null
   /** The run whose end the check that saw it was made for (null: an ordinary check). */
   seen_during_run: string | null
+  /** How many runs were shown it in their brief. */
+  attempts: number
 }
 
 export interface CronConfig {

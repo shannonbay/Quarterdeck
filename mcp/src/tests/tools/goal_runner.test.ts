@@ -382,6 +382,27 @@ describe('tool watches', () => {
     await expect(watch_report({ watch_id: 'nope', text: '' })).rejects.toThrow(/not found/)
   })
 
+  it('end_run needs handled after a watch run, and brings back the events it leaves out (#201)', async () => {
+    const { id } = await create_goal({ name: 'Mail', objective: 'Answer new mail', working_dir: tmpdir() })
+    await update_goal({ goal_id: id, watches: { mail: { tool: SEARCH, input: { query: 'is:unread' }, every_minutes: 1 } } })
+    const pass = await goals_tick({ holder: 'session-A', tool_watches: true }) as PassResult
+    const watchId = pass.tool_watches![0]!.watch_id
+    await watch_report({ watch_id: watchId, text: answer('1a') })
+    await watch_report({ watch_id: watchId, text: answer('2b', '3c', '1a') })
+    const run = (await tick('session-A')).claimed[0]!
+    await withScope({ planId: id, runId: run.run_id }, async () => {
+      await get_goal_brief({ goal_id: id, run_id: run.run_id })
+      await expect(end_run({ run_id: run.run_id, summary: 'done' })).rejects.toThrow('This run had watch_events, so end_run needs handled')
+      await expect(end_run({ run_id: run.run_id, summary: 'done', handled: ['9z'] })).rejects.toThrow('handled names "9z"')
+      expect(getRun(run.run_id)!.status).toBe('running')
+      await end_run({ run_id: run.run_id, summary: 'answered 2b', handled: ['2b'] })
+    })
+    const next = (await tick('session-A')).claimed[0]!
+    expect(next).toMatchObject({ trigger: 'watch' })
+    const brief = await withScope({ planId: id, runId: next.run_id }, () => get_goal_brief({ goal_id: id, run_id: next.run_id })) as { watch_events: unknown[] }
+    expect(brief.watch_events).toEqual([{ watch: 'mail', new: ['3c'], omitted: 0, carried_over: [{ line: '3c', attempts: 1 }] }])
+  })
+
   it('a watch is a command or a tool, and not a tool the goal would have to ask for', async () => {
     const { id } = await create_goal({ name: 'Mail', objective: 'x', working_dir: tmpdir(), tool_map: { 'mcp__*Gmail*__send_message': 'email.send' } })
     await expect(update_goal({ goal_id: id, watches: { x: { command: 'echo 1', tool: SEARCH } } })).rejects.toThrow()

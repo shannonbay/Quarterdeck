@@ -15,6 +15,9 @@ import { statusNote } from './goal-overview.js'
 let db: Database
 let dir: string
 const now = new Date().toISOString()
+/** Ends a run marking every watch event it took as handled. */
+const endAll = (db: Database, runId: string, summary: string, status?: string) =>
+  endRun(db, runId, summary, status, undefined, undefined, (db.prepare("SELECT id FROM goal_watch_events WHERE run_id = ?").all(runId) as { id: string }[]).map((r) => r.id))
 /** Prints items.txt: the test changes the file to change what the watch sees. */
 const LIST = `node -e "process.stdout.write(require('fs').readFileSync('items.txt','utf8'))"`
 const items = (...lines: string[]) => writeFileSync(join(dir, 'items.txt'), lines.join('\n'))
@@ -236,7 +239,7 @@ describe('the scheduler pass', () => {
     expect(brief.watch_events).toEqual([{ watch: 'new issues', new: ['2'], omitted: 0 }])
     // The run is told again if it asks again, and the next run is not
     expect(buildBrief(db, 'g1', claimed[0]!.run_id).watch_events).toHaveLength(1)
-    endRun(db, claimed[0]!.run_id, 'Triaged issue 2')
+    endAll(db, claimed[0]!.run_id, 'Triaged issue 2')
     expect((await schedulerPass(db, { holder: 'A', now: later(2) })).claimed).toEqual([])
     expect(buildBrief(db, 'g1').watch_events).toEqual([])
   })
@@ -250,7 +253,7 @@ describe('the scheduler pass', () => {
     recordWatchLines(db, w.id, { lines: ['1', '2'] })
     recordWatchLines(db, w.id, { lines: ['1', '2', '3'] })
     expect(queueForWatchEvents(db, 'g1')).toBeNull() // a run is going
-    endRun(db, first.run_id, 'done')
+    endAll(db, first.run_id, 'done')
     const queued = queueForWatchEvents(db, 'g1')
     expect(queued).toMatchObject({ trigger: 'watch', status: 'queued' })
     expect(queueForWatchEvents(db, 'g1')).toBeNull()
@@ -293,7 +296,7 @@ describe('the scheduler pass', () => {
 
   it('past the daily run limit a noisy watch gets one skipped run, not one per pass', async () => {
     updateGoal(db, 'g1', { limits: { max_runs_per_day: 1 } })
-    endRun(db, claimRun(db, 'g1', { holder: 'A' })!.run_id, 'the one run today')
+    endAll(db, claimRun(db, 'g1', { holder: 'A' })!.run_id, 'the one run today')
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1', every_minutes: 1000 })
     recordWatchLines(db, w.id, { lines: [] })
     recordWatchLines(db, w.id, { lines: ['a'] })
@@ -315,7 +318,7 @@ describe('the scheduler pass', () => {
       const claimed = claimRun(db, 'g1', { holder: 'A', ...(queued ? { queuedRunId: queued.id } : {}) })!
       buildBrief(db, 'g1', claimed.run_id)
       items('a', line)
-      endRun(db, claimed.run_id, 'nothing to do')
+      endAll(db, claimed.run_id, 'nothing to do')
       await checkWatches(db, ['g1']) // not due (every 1000 minutes), but the run just ended
       expect(listWatchEvents(db, 'g1').at(-1)).toMatchObject({ line, seen_during_run: claimed.run_id })
       if (getGoal(db, 'g1')!.status === 'active') queueForWatchEvents(db, 'g1')
@@ -341,7 +344,7 @@ describe('the scheduler pass', () => {
     expect(claimed).toHaveLength(1)
     expect(buildBrief(db, 'g1', claimed[0].run_id).watch_events).toEqual([{ watch: 'x', new: ['100'], omitted: 0 }])
     expect(getWatch(db, w.id)!.last_checked_at).not.toBeNull()
-    endRun(db, claimed[0].run_id, 'handled 100')
+    endAll(db, claimed[0].run_id, 'handled 100')
     expect((await schedulerPass(db, { holder: 'A' })).claimed).toEqual([])
     expect(getOpenRun(db, 'g1')).toBeUndefined()
     expect(getRun(db, claimed[0].run_id)!.self_caused).toBe(0)
@@ -355,7 +358,7 @@ describe('the scheduler pass', () => {
     const first = (await schedulerPass(db, { holder: 'A' })).claimed[0]
     buildBrief(db, 'g1', first.run_id)
     items('a', 'b')
-    endRun(db, first.run_id, 'done')
+    endAll(db, first.run_id, 'done')
     const next = (await schedulerPass(db, { holder: 'A' })).claimed
     expect(next).toHaveLength(1)
     expect(getRun(db, next[0].run_id)!.trigger).toBe('watch')
@@ -430,7 +433,7 @@ describe('the brief', () => {
   it("marks the run as having read untrusted content when it hands out watch lines, and not otherwise", () => {
     const quiet = claimRun(db, 'g1', { holder: 'A' })!
     expect(buildBrief(db, 'g1', quiet.run_id).run!.untrusted).toBeNull()
-    endRun(db, quiet.run_id, 'nothing new')
+    endAll(db, quiet.run_id, 'nothing new')
 
     const w = setWatch(db, 'g1', 'x', { command: 'echo 1' })
     recordWatchLines(db, w.id, { lines: [] })
@@ -453,7 +456,7 @@ describe('the brief', () => {
     markRunUntrusted(db, run.run_id, WATCH_EVENTS_SOURCE)
     expect(getRun(db, run.run_id)!.untrusted_source).toBe('WebFetch')
     // The status it sets carries the stronger source, so the pane keeps the ⚠
-    endRun(db, run.run_id, 'done', '1 issue triaged')
+    endAll(db, run.run_id, 'done', '1 issue triaged')
     expect(getGoal(db, 'g1')!.status_note_untrusted).toBe('WebFetch')
   })
 })
@@ -698,7 +701,7 @@ describe('status rules', () => {
     const note = () => statusNote(getGoal(db, 'g1')!, listRuns(db, 'g1', 5), listWatches(db, 'g1'))!
     expect(note()).toMatchObject({ text: 'clean', stale: false, source: 'watch:tree' })
     const run = startRun(db, queueRun(db, 'g1').id, null)
-    endRun(db, run.id, 'Nothing to do.')
+    endAll(db, run.id, 'Nothing to do.')
     expect(note().stale).toBe(false)
     for (let i = 0; i < WATCH_FAILING_AFTER; i++) recordWatchLines(db, w.id, { error: 'down' })
     expect(note().stale).toBe(true)
@@ -717,10 +720,10 @@ describe('status rules', () => {
     const w = setWatch(db, 'g1', 'tree', { command: 'echo', status: rules })
     recordWatchLines(db, w.id, { lines: [] })
     const first = startRun(db, queueRun(db, 'g1').id, null)
-    endRun(db, first.id, 'Checked.', 'all good')
+    endAll(db, first.id, 'Checked.', 'all good')
     expect(getGoal(db, 'g1')).toMatchObject({ status_note: 'all good', status_source: 'run' })
     const second = startRun(db, queueRun(db, 'g1').id, null)
-    endRun(db, second.id, 'Checked.', '')
+    endAll(db, second.id, 'Checked.', '')
     expect(getGoal(db, 'g1')).toMatchObject({ status_note: null, status_source: null })
   })
 })
@@ -909,7 +912,7 @@ describe('fewer quiet runs (#111)', () => {
     const afterAWatchRun = (watchId: string, line: string) => {
       const run = claimRun(db, 'g1', { holder: 'A', queuedRunId: queueForWatchEvents(db, 'g1')!.id })!
       buildBrief(db, 'g1', run.run_id)
-      endRun(db, run.run_id, 'done')
+      endAll(db, run.run_id, 'done')
       recordWatchLines(db, watchId, { lines: ['a', line] })
       return run
     }
@@ -988,5 +991,102 @@ describe('schema version 17', () => {
     expect(cols).toEqual(expect.arrayContaining(['ignore', 'urgent']))
     const trigger = old.prepare("SELECT sql FROM sqlite_master WHERE name = 'trg_goal_watches_update_revision'").get() as { sql: string }
     expect(trigger.sql).toContain('ignore, urgent')
+  })
+})
+
+describe('watch events a run did not handle (#201)', () => {
+  /** Claims the watch run queued for what waits and reads its brief. */
+  const watchRun = () => {
+    const queued = queueForWatchEvents(db, 'g1')
+    expect(queued).not.toBeNull()
+    const run = claimRun(db, 'g1', { holder: 'A', queuedRunId: queued!.id })!
+    return { id: run.run_id, brief: buildBrief(db, 'g1', run.run_id) }
+  }
+  const watchWith = (...lines: string[]) => {
+    const w = setWatch(db, 'g1', 'issues', { command: 'echo 1' })
+    recordWatchLines(db, w.id, { lines: [] })
+    recordWatchLines(db, w.id, { lines })
+    return w
+  }
+
+  it('brings back only the unhandled events, carried over and self-caused', () => {
+    watchWith('101', '102', '103')
+    const first = watchRun()
+    expect(first.brief.watch_events).toEqual([{ watch: 'issues', new: ['101', '102', '103'], omitted: 0 }])
+    endRun(db, first.id, 'did 101', undefined, undefined, undefined, ['101'])
+    const second = watchRun()
+    expect(second.brief.watch_events).toEqual([{ watch: 'issues', new: ['102', '103'], omitted: 0, carried_over: [{ line: '102', attempts: 1 }, { line: '103', attempts: 1 }] }])
+    expect(getRun(db, second.id)!.self_caused).toBeTruthy()
+    endRun(db, second.id, 'did the rest', undefined, undefined, undefined, ['102', '103'])
+    expect(queueForWatchEvents(db, 'g1')).toBeNull()
+  })
+
+  it('starts no follow-up run when every event is handled, an id counting as well as a line', () => {
+    watchWith('101', '102')
+    const run = watchRun()
+    const id102 = listWatchEvents(db, 'g1').find((e) => e.line === '102')!.id
+    endRun(db, run.id, 'did both', undefined, undefined, undefined, ['101', id102])
+    expect(queueForWatchEvents(db, 'g1')).toBeNull()
+    expect(listWatchEvents(db, 'g1').every((e) => e.run_id === run.id)).toBe(true)
+  })
+
+  it('refuses end_run without handled when the run had events, leaving the run open, and needs none without', () => {
+    watchWith('101', '102')
+    const run = watchRun()
+    expect(() => endRun(db, run.id, 'done')).toThrow('This run had watch_events, so end_run needs handled: the lines you dealt with, skipped ones included. Your events: "issues": 101, 102.')
+    expect(getRun(db, run.id)!.status).toBe('running')
+    endRun(db, run.id, 'done', undefined, undefined, undefined, ['101', '102'])
+    const manual = claimRun(db, 'g1', { holder: 'A' })!
+    expect(endRun(db, manual.run_id, 'nothing to do').status).toBe('completed')
+  })
+
+  it('refuses a handled line that is not one of the run\'s events', () => {
+    watchWith('101')
+    const run = watchRun()
+    expect(() => endRun(db, run.id, 'done', undefined, undefined, undefined, ['110'])).toThrow('handled names "110", which isn\'t one of this run\'s watch_events lines. Your events: "issues": 101.')
+    expect(getRun(db, run.id)!.status).toBe('running')
+  })
+
+  it('brings back events the brief left out, without counting an attempt for them', () => {
+    const lines = Array.from({ length: WATCH_BRIEF_LINES + 2 }, (_, i) => `#${i}`)
+    watchWith(...lines)
+    const first = watchRun()
+    expect(first.brief.watch_events[0]).toMatchObject({ omitted: 2 })
+    endRun(db, first.id, 'did the shown ones', undefined, undefined, undefined, lines.slice(0, WATCH_BRIEF_LINES))
+    const second = watchRun()
+    expect(second.brief.watch_events).toEqual([{ watch: 'issues', new: lines.slice(WATCH_BRIEF_LINES), omitted: 0 }])
+  })
+
+  it('stops bringing an event back after max_item_attempts runs and asks the person once', () => {
+    watchWith('101')
+    for (let i = 0; i < 3; i++) {
+      const run = watchRun()
+      expect(run.brief.watch_events[0].new).toEqual(['101'])
+      endRun(db, run.id, 'forgot it', undefined, undefined, undefined, [])
+    }
+    expect(queueForWatchEvents(db, 'g1')).toBeNull()
+    const event = listWatchEvents(db, 'g1')[0]
+    expect(event.attempts).toBe(3)
+    const asked = db.prepare('SELECT goal FROM tasks WHERE plan_id = ? AND external_ref = ?').all('g1', `watch-event:${event.id}`) as { goal: string }[]
+    expect(asked).toHaveLength(1)
+    expect(asked[0].goal).toContain('3 runs got "101" from the watch "issues" and none dealt with it')
+  })
+
+  it('leaves failRun handing every event back without a new run', () => {
+    watchWith('101', '102')
+    const run = watchRun()
+    failRun(db, run.id, 'failed', 'killed')
+    expect(listWatchEvents(db, 'g1').every((e) => e.run_id === null && e.queued_at !== null)).toBe(true)
+  })
+})
+
+describe('schema version 29', () => {
+  it('adds attempts to goal_watch_events in a database from version 28', () => {
+    const old = openDatabase(':memory:')
+    old.exec('ALTER TABLE goal_watch_events DROP COLUMN attempts')
+    old.exec('PRAGMA user_version = 28')
+    runMigrations(old)
+    const cols = (old.prepare('PRAGMA table_info(goal_watch_events)').all() as { name: string }[]).map((c) => c.name)
+    expect(cols).toContain('attempts')
   })
 })

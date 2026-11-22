@@ -36,7 +36,7 @@ export const REVISION_TRIGGERS = [
  * a session still running older code then sees it is outdated (`schemaOutdated`)
  * and leaves scheduling to the newer one.
  */
-export const SCHEMA_VERSION = 28
+export const SCHEMA_VERSION = 29
 
 /** The schema version recorded in the database (0 before versions existed). */
 export function dbSchemaVersion(db: Database): number {
@@ -498,7 +498,9 @@ export function runMigrations(db: Database): void {
       queued_at  TEXT,
       run_id     TEXT,
       -- the run whose end the check that saw it was made for (null: an ordinary check)
-      seen_during_run TEXT
+      seen_during_run TEXT,
+      -- how many runs have been shown it in their brief (schema version 29)
+      attempts   INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
@@ -507,6 +509,8 @@ export function runMigrations(db: Database): void {
   try { db.exec('ALTER TABLE goal_watches ADD COLUMN asked_at TEXT') } catch { /* already exists */ }
   // Schema version 11: events seen by the re-check made as a run ended
   try { db.exec('ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT') } catch { /* already exists */ }
+  // Schema version 29: how many runs were shown an event, for re-queueing unhandled ones
+  try { db.exec("ALTER TABLE goal_watch_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0") } catch { /* already exists */ }
   // Schema version 8: a watch can fire on change
   try { db.exec("ALTER TABLE goal_watches ADD COLUMN fires TEXT NOT NULL DEFAULT 'new' CHECK (fires IN ('new', 'change'))") } catch { /* already exists */ }
   // Schema version 15: a tool watch can be a sequence of calls (steps) with a final clean-up call
