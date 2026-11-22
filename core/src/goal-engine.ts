@@ -17,6 +17,7 @@ import { claimUsedGuardedCheck } from './guarded.js'
 export const AFTER_OUTSIDE_ITEM_NOTE = 'Went through after outside content because you allowed it (checked by guarded_run)'
 import { listHealth } from './health.js'
 import { releaseWatchEvents, takeWatchEvents, type WatchNews } from './watches.js'
+import { cleanOutsideText, isHidden } from './outside-text.js'
 import type { AutonomyMode, Goal, GoalMemory, GoalRun, MemoryKind, MemorySource, Task, TriggerKind } from './types.js'
 
 export class GoalError extends Error {}
@@ -372,7 +373,8 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
     .sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id))
 
   // Watch lines are outside text (issue titles, email subjects): handing them to the run marks it
-  const watchEvents = takeWatchEvents(db, planId, runId)
+  // Each line is cleaned: hidden comments and invisible characters show as markers
+  const watchEvents = takeWatchEvents(db, planId, runId).map((w) => ({ ...w, new: w.new.map((line) => cleanOutsideText(line).text) }))
   if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE)
   // So is memory a marked run wrote: otherwise injected text could wait one run and act unchecked
   const taintedMemory = memory.find((m) => m.untrusted_source)
@@ -529,19 +531,13 @@ export function startRun(db: Database, runId: string, sessionId: string | null):
 /** The longest goal status a run can set: it sits in the goal's one-line summary. */
 export const STATUS_NOTE_MAX = 40
 
-/** Control characters, zero-width and text-direction marks: they could hide or reorder what the pane shows. */
-function isHidden(code: number): boolean {
-  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || (code >= 0x200b && code <= 0x200f)
-    || (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)
-}
-
 /**
  * A run's goal status as the pane shows it: plain text on one line (control
  * characters and escape sequences dropped, whitespace collapsed), capped at
  * STATUS_NOTE_MAX characters. Empty means clear it.
  */
 export function cleanStatusNote(text: string): string {
-  const plain = [...text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')] // ANSI escape sequences
+  const plain = [...cleanOutsideText(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ''), { markers: false }).text] // ANSI escape sequences, then hidden comments and tag characters
     .map((c) => (isHidden(c.codePointAt(0)!) ? ' ' : c)) // control and direction characters
     .join('')
     .replace(/\s+/g, ' ')
