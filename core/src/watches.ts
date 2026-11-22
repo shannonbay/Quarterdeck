@@ -146,8 +146,35 @@ export function getWatch(db: Database, id: string): Watch | undefined {
 export function fixedMatch(pattern: string): boolean {
   // A capturing group: ( not escaped and not followed by ?
   if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false
-  const rest = pattern.replace(/\[(?:\\.|[^\]\\])*\]/g, '').replace(/\\[^wWdDsS]/g, '').replace(/\(\?<?[:=!]/g, '(')
+  const rest = withoutClassesAndEscapes(pattern).replace(/\(\?<?[:=!]/g, '(')
   return !/[.+*?{|]|\\[wWdDsS]/.test(rest)
+}
+
+/**
+ * A pattern with its bracket classes and escaped characters taken out, keeping the
+ * escapes that vary (\w \W \d \D \s \S). One pass, so a long run of `[` can't make it slow.
+ */
+function withoutClassesAndEscapes(pattern: string): string {
+  let out = ''
+  // Once a [ finds no closing ], no later one can: they would scan the same rest.
+  let unclosed = false
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i]
+    if (c === '\\') {
+      const next = pattern[i + 1]
+      if (next !== undefined && 'wWdDsS'.includes(next)) out += c + next
+      i++
+      continue
+    }
+    if (c === '[' && !unclosed) {
+      let j = i + 1
+      while (j < pattern.length && pattern[j] !== ']') j += pattern[j] === '\\' ? 2 : 1
+      if (j < pattern.length) { i = j; continue }
+      unclosed = true
+    }
+    out += c
+  }
+  return out
 }
 
 /** The warning for a tool watch whose match can only give one fixed line, or null. */

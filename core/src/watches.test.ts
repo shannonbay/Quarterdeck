@@ -970,6 +970,17 @@ describe('a tool watch whose match can only give one fixed line (#181)', () => {
     const { fixedMatch } = await import('./watches.js')
     for (const p of ['Dryer', '[Dd]ryer', 'Dryer\\.', '(?:Dryer)']) expect(fixedMatch(p)).toBe(true)
     for (const p of ['(\\w+) · Dryer', 'Dryer \\d+', 'Dryer.*', 'a|b', '(?<item>\\w+)']) expect(fixedMatch(p)).toBe(false)
+    // Classes may hold an escaped ] or vary; an unclosed [ is plain text
+    expect(fixedMatch('[\\]x]Dryer')).toBe(true)
+    expect(fixedMatch('[Dd]ryer\\s')).toBe(false)
+    expect(fixedMatch('[Dryer.')).toBe(false)
+  })
+
+  it('fixedMatch stays fast on a long run of [ (CodeQL polynomial regex)', async () => {
+    const { fixedMatch } = await import('./watches.js')
+    const start = Date.now()
+    expect(fixedMatch('['.repeat(200_000))).toBe(true)
+    expect(Date.now() - start).toBeLessThan(1000)
   })
 
   it('warns when the watch is set, and not for a command watch', async () => {
