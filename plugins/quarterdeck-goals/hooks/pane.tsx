@@ -438,6 +438,7 @@ function goalCard($: Engine, e: E, view: View, g: GoalCard, index: number) {
         </Text>
       )}
       {g.watchFailing && <Text color="red">a watch can't check{isOpen ? '' : ': expand the goal to see why'}</Text>}
+      {g.watchNeverSaw && <Text color="yellow">a watch has never seen anything{isOpen ? '' : ': expand the goal to see which'}</Text>}
       {g.needsYou.map((item) => proposalRow($, e, view, g, item))}
       {g.needsYouCount > g.needsYou.length && (
         <Text dimColor>… and {g.needsYouCount - g.needsYou.length} more waiting: expand the goal ({index < 9 ? index + 1 : 'its name'}) to see them all</Text>

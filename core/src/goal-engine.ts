@@ -16,7 +16,7 @@ import { claimUsedGuardedCheck } from './guarded.js'
 /** Kept on an item recorded auto after outside content because the person allowed it (#159). */
 export const AFTER_OUTSIDE_ITEM_NOTE = 'Went through after outside content because you allowed it (checked by guarded_run)'
 import { listHealth } from './health.js'
-import { releaseUnhandledWatchEvents, releaseWatchEvents, runWatchEvents, takeWatchEvents, type RunWatchEvent, type WatchNews } from './watches.js'
+import { listWatches, neverSawHint, releaseUnhandledWatchEvents, releaseWatchEvents, runWatchEvents, takeWatchEvents, watchNeverSaw, type RunWatchEvent, type WatchNews } from './watches.js'
 import { cleanOutsideText, isHidden } from './outside-text.js'
 import type { AutonomyMode, Goal, GoalMemory, GoalRun, MemoryKind, MemorySource, Task, TriggerKind } from './types.js'
 
@@ -306,6 +306,8 @@ export interface GoalBrief {
   health: { passed: boolean; value: number | null; at: string; output?: string } | null
   /** What the goal's watches saw that no earlier run was told: one line per new thing. */
   watch_events: WatchNews[]
+  /** Watches that have never seen anything since their baseline (#185), each with what to do about it; left out when none. */
+  watches_never_saw?: { name: string; hint: string }[]
 }
 
 /** Everything a fresh agent needs to work on a goal, in one compact object. */
@@ -428,6 +430,10 @@ export function buildBrief(db: Database, planId: string, runId?: string): GoalBr
       return h ? { passed: h.passed, value: h.value, at: h.created_at, ...(!h.passed && h.output && { output: h.output.slice(-500) }) } : null
     })(),
     watch_events: watchEvents,
+    ...(() => {
+      const never = listWatches(db, planId).filter((w) => watchNeverSaw(w)).map((w) => ({ name: w.name, hint: neverSawHint(w.name) }))
+      return never.length ? { watches_never_saw: never } : {}
+    })(),
   }
 }
 

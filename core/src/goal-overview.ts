@@ -12,7 +12,7 @@ import { getOpenRun, getGoal, listGoals, listMemory, listRuns, purgeDate } from 
 import { autonomyFor, isAttemptBlocked } from './goal-engine.js'
 import { getSchedule } from './schedule.js'
 import { listHealth } from './health.js'
-import { describeWatch, listWatches, watchFailing } from './watches.js'
+import { describeWatch, listWatches, watchFailing, watchNeverSaw } from './watches.js'
 import type { Event, Goal, GoalRun, Task, Watch } from './types.js'
 import { autoAfterOutsideWarning, getRunHold } from './goal-changes.js'
 import { schemaOutdated } from './migrate.js'
@@ -390,10 +390,12 @@ export function buildOverview(db: Database, detail: OverviewDetail = 'all', stan
         // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
         watches: watches.map((w) => ({
           name: w.name, kind: w.kind, every_minutes: w.every_minutes, fires: w.fires, urgent: w.urgent, runs: clip(describeWatch(w), CLIP.watch)!,
-          last_fired_at: w.last_fired_at, failing: watchFailing(w), cleanup_failures: w.cleanup_failures, error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null,
+          last_fired_at: w.last_fired_at, failing: watchFailing(w), cleanup_failures: w.cleanup_failures, never_saw: watchNeverSaw(w), error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null,
         })),
         watch_count: watches.length,
         watch_failing: watches.some(watchFailing),
+        // A watch that has never seen anything since its baseline (#185): yellow in the pane, like one that can't check
+        watch_never_saw: watches.some((w) => watchNeverSaw(w)),
       }
     }
   const goals = [...all.filter(({ goal }) => goal.status !== 'retired'), ...done]

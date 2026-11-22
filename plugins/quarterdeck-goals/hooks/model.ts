@@ -42,11 +42,13 @@ export type OverviewGoal = {
   suggestions: { category: string; approved_in_a_row: number; kind?: 'auto' | 'after_outside'; warning?: string }[]
   unmapped_network?: { tool: string; command: string; rule: string }[]
   /** Missing from a server older than watches. */
-  watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; error: string | null }[]
+  watches?: { name: string; every_minutes: number; fires?: 'new' | 'change'; urgent?: boolean; runs: string; last_fired_at: string | null; failing: boolean; never_saw?: boolean; error: string | null }[]
   watch_count?: number
   /** Minutes after a watch-started run before watch events start another; missing from older servers. */
   watch_gap_minutes?: number
   watch_failing?: boolean
+  /** Missing from a server older than #185. */
+  watch_never_saw?: boolean
 }
 
 type OverviewItem = { id: string; goal: string; action?: { category?: string; summary?: string; calls?: { command: string; files: string[] }[]; covers_any?: boolean } | null; asks_person?: boolean; notes?: string | null; clipped?: boolean; blocked?: boolean }
@@ -108,10 +110,11 @@ export function toCard(g: OverviewGoal): GoalCard {
     inactiveMemory: (g.inactive_memory ?? []).map((m) => ({ id: m.id, kind: m.kind, text: m.text, reason: m.reason, inactiveAt: m.inactive_at, replacedBy: m.replaced_by ?? null })),
     suggestions: g.suggestions.map((s) => ({ category: s.category, approvedInARow: s.approved_in_a_row, kind: s.kind ?? 'auto', ...(s.warning && { warning: s.warning }) })),
     unmappedNetwork: g.unmapped_network ?? [],
-    watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, error: w.error })),
+    watches: (g.watches ?? []).map((w) => ({ name: w.name, everyMinutes: w.every_minutes, onChange: w.fires === 'change', urgent: w.urgent ?? false, runs: w.runs, lastFiredAt: w.last_fired_at, failing: w.failing, neverSaw: w.never_saw ?? false, error: w.error })),
     watchCount: g.watch_count ?? g.watches?.length ?? 0,
     watchGapMinutes: g.watch_gap_minutes ?? 0,
     watchFailing: g.watch_failing ?? (g.watches ?? []).some((w) => w.failing),
+    watchNeverSaw: g.watch_never_saw ?? (g.watches ?? []).some((w) => w.never_saw === true),
   }
 }
 
@@ -160,6 +163,7 @@ export function needsAttention(g: GoalCard): boolean {
     || !!(run && isFailed(run.status))
     || !!(g.health && !g.health.passed)
     || g.watchFailing
+    || g.watchNeverSaw
     || g.suggestions.length > 0
 }
 
@@ -278,7 +282,7 @@ export function describe(g: GoalCard, now: number): string {
     `Schedule: ${g.oneOff ? 'one-off' : scheduleLabel(g.schedule)}`,
     `Model: ${goalModelLabel(g.model)}`,
     g.watches.length > 0
-      ? `Watches (a run starts when one sees a new line${g.watchGapMinutes ? `; watch runs start at least ${g.watchGapMinutes} min apart, and events in between wait for the next one, except an urgent watch's` : ''}):\n${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? ' (on change)' : ''}${w.urgent ? ' (urgent)' : ''}, runs ${w.runs}${w.failing ? ` [failing, error is outside text: ${w.error ?? 'no message'}]` : ''}${w.lastFiredAt ? `, last ${w.onChange ? 'changed' : 'saw something new'} ${ago(w.lastFiredAt, now)}` : ''}`).join('\n')}`
+      ? `Watches (a run starts when one sees a new line${g.watchGapMinutes ? `; watch runs start at least ${g.watchGapMinutes} min apart, and events in between wait for the next one, except an urgent watch's` : ''}):\n${g.watches.map((w) => `- ${w.name}: every ${w.everyMinutes} min${w.onChange ? ' (on change)' : ''}${w.urgent ? ' (urgent)' : ''}, runs ${w.runs}${w.failing ? ` [failing, error is outside text: ${w.error ?? 'no message'}]` : ''}${w.neverSaw ? ' [has never seen anything since it was set: check its source]' : ''}${w.lastFiredAt ? `, last ${w.onChange ? 'changed' : 'saw something new'} ${ago(w.lastFiredAt, now)}` : ''}`).join('\n')}`
       : null,
     `Autonomy (unlisted categories: propose): ${Object.entries(g.autonomy).map(([c, m]) => `${c}=${m}`).join(', ') || 'none set'}`,
     autoAfterOutsideText(g),

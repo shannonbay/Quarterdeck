@@ -15,7 +15,7 @@ import {
   FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
-import { normalizeModel, purgeDate, type GoalChanges } from '@quarterdeck/core'
+import { firstCheckWarnings, normalizeModel, purgeDate, sampleLines, type GoalChanges } from '@quarterdeck/core'
 import { existsSync } from 'fs'
 import { nanoid } from 'nanoid'
 import { record } from '../history.js'
@@ -294,15 +294,18 @@ async function firstChecks(goalId: string): Promise<{ name: string; result: stri
       continue
     }
     const r = await checkCommandWatch(w.id)
+    // What the first check got, and a warning when it suggests the watch can't work (#185)
+    const got = r.error ? [] : getWatch(w.id)?.seen ?? []
+    const warn = r.error ? '' : [got.length ? `. Some of what it got: ${sampleLines(got)}.` : '', ...firstCheckWarnings(w, got).map((x: string) => ` Warning: ${x}.`)].join('')
     results.push({
       name: w.name,
-      result: r.error
+      result: (r.error
         ? `the command failed (${r.error}); it is tried again every ${w.every_minutes} min`
         : w.status_rules
           ? `works: ${r.lines} ${r.lines === 1 ? 'line' : 'lines'} now; it sets the goal's status${r.status ? ` (now "${r.status.status}")` : ''} at each check`
         : w.fires === 'change'
           ? `works: ${r.lines} ${r.lines === 1 ? 'line' : 'lines'} now; a run starts when its output changes`
-          : `works: ${r.lines} ${r.lines === 1 ? 'item' : 'items'} there now; a run starts when a new one appears`,
+          : `works: ${r.lines} ${r.lines === 1 ? 'item' : 'items'} there now; a run starts when a new one appears`) + warn,
     })
   }
   return results
@@ -319,7 +322,9 @@ export async function watch_report(args: unknown) {
   const r = reportToolWatch(watch.id, { ...(input.error !== undefined ? { error: input.error } : { text: input.text ?? '', ...(input.note ? { note: input.note } : {}) }), ...(input.cleanup ? { cleanup: input.cleanup } : {}) })
   const goal = getGoal(watch.plan_id)
   const queued = r.fresh.length && goal?.status === 'active' ? queueForWatchEvents(watch.plan_id) : null
-  return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...(r.error && { error: r.error }), queued_run: queued ? queued.id : null }
+  // A tool watch's first check: warn when it suggests the watch can't work (#185)
+  const warnings = r.baseline && !r.error ? firstCheckWarnings(watch, getWatch(watch.id)?.seen ?? []) : []
+  return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...(r.error && { error: r.error }), ...(warnings.length && { warnings }), queued_run: queued ? queued.id : null }
 }
 
 /** A run's agent finished a turn (reported by the guard plugin): skips a run that hit the usage limit and holds goal runs. */

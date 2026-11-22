@@ -389,6 +389,52 @@ export function watchFailing(watch: Pick<Watch, 'fail_count'> & { cleanup_failur
   return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch)
 }
 
+/** How long a watch must have seen nothing (or one same line) since its baseline before it is flagged (#185). */
+export const WATCH_NEVER_SAW_MS = 24 * 60 * 60_000
+/** And at least this many checks' worth of time. */
+export const WATCH_NEVER_SAW_CHECKS = 3
+
+/**
+ * True when a watch has never seen anything (#185): every check since its baseline saw zero lines
+ * or the same one line, it has never fired, and its baseline is older than
+ * max(24 h, 3 × every_minutes). A second distinct line or an event clears it; editing the
+ * watch resets its baseline, and so the flag. A status watch is never flagged (it reads one
+ * value by design and starts no run while nothing needs one), and a 'change' watch only for zero lines.
+ */
+export function watchNeverSaw(
+  watch: Pick<Watch, 'baseline_at' | 'seen' | 'every_minutes' | 'last_fired_at' | 'fires' | 'status_rules'>,
+  now: Date = new Date(),
+): boolean {
+  if (!watch.baseline_at) return false
+  if (watch.status_rules) return false
+  if (watch.seen.length > (watch.fires === 'change' ? 0 : 1)) return false
+  const baseline = new Date(watch.baseline_at).getTime()
+  if (watch.last_fired_at && new Date(watch.last_fired_at).getTime() >= baseline) return false
+  const wait = Math.max(WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS * watch.every_minutes * 60_000)
+  return now.getTime() - baseline >= wait
+}
+
+/**
+ * What a watch's first check got that suggests it can't work (#185): zero lines, or every line
+ * the same (lines are de-duplicated, so one line, for a watch that fires on new lines and has no
+ * status rules: a status or a 'change' watch reads one value by design). They warn; the watch stays set.
+ */
+export function firstCheckWarnings(watch: Pick<Watch, 'fires' | 'status_rules'>, lines: string[]): string[] {
+  if (!lines.length) return ['the first check got zero lines: if its source should have some (an inbox, a listings page), the watch may never see anything']
+  if (lines.length === 1 && watch.fires === 'new' && !watch.status_rules) return ['every line the first check got is the same one: if its source should have several, the watch may only ever see that line']
+  return []
+}
+
+/** A few of a check's lines, for the person to see what a watch got. */
+export function sampleLines(lines: string[], n = 3): string {
+  return lines.slice(0, n).map((l) => JSON.stringify(l.length > 80 ? `${l.slice(0, 80)}…` : l)).join(', ')
+}
+
+/** The line a run is told about a watch that has never seen anything (#185). */
+export function neverSawHint(name: string): string {
+  return `watch ${name} has never seen anything: check the source yourself and propose a fix with propose_watch`
+}
+
 /** True when the watch's clean-up has failed too often: it is not checked until it is edited. */
 export function watchStopped(watch: { cleanup_failures?: number }): boolean {
   return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER

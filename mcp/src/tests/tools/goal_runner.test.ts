@@ -319,7 +319,7 @@ describe('watches', () => {
     expect(r.changed).toHaveLength(2)
     expect(r.watches).toEqual([
       { name: 'broken', result: expect.stringMatching(/^the command failed \(Exit code 2\); it is tried again every 30 min$/) },
-      { name: 'new issues', result: 'works: 2 items there now; a run starts when a new one appears' },
+      { name: 'new issues', result: 'works: 2 items there now; a run starts when a new one appears. Some of what it got: "7", "9".' },
     ])
     // The first check is the baseline: nothing starts
     expect((await tick('session-A')).claimed).toEqual([])
@@ -332,12 +332,13 @@ describe('watches', () => {
   it('update_goal says when a watch sets the status, and what it is now', async () => {
     const { id } = await create_goal({ name: 'Tree', objective: 'Watch the tree', working_dir: tmpdir() })
     const r = await update_goal({ goal_id: id, watches: { tree: { command: PRINT('M a.ts'), fires: 'change', status: { rules: [{ match: '^M ', status: 'uncommitted', tone: 'attention' }], default: { status: 'clean' } } } } })
-    expect(r.watches).toEqual([{ name: 'tree', result: `works: 1 line now; it sets the goal's status (now "uncommitted") at each check` }])
+    expect(r.watches).toEqual([{ name: 'tree', result: `works: 1 line now; it sets the goal's status (now "uncommitted") at each check. Some of what it got: "M a.ts".` }])
   })
 
   it('create_goal takes watches too, and the brief and the overview carry them', async () => {
     const r = await create_goal({ name: 'Issues', objective: 'Triage new issues', working_dir: tmpdir(), watches: { 'new issues': { command: PRINT('7') } } })
-    expect(r.watches).toEqual([{ name: 'new issues', result: 'works: 1 item there now; a run starts when a new one appears' }])
+    // One line for a watch of new lines may be one fixed line, so it warns (#185); the watch is still set
+    expect(r.watches).toEqual([{ name: 'new issues', result: 'works: 1 item there now; a run starts when a new one appears. Some of what it got: "7". Warning: every line the first check got is the same one: if its source should have several, the watch may only ever see that line.' }])
     const run = await claim(r.id)
     const brief = await withScope({ planId: r.id, runId: run.run_id }, () => get_goal_brief({ goal_id: r.id, run_id: run.run_id })) as { watch_events: unknown[] }
     expect(brief.watch_events).toEqual([])
