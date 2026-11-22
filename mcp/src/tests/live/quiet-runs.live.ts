@@ -27,10 +27,11 @@ async function claim(goalId: string, passes = 3): Promise<Claimed | null> {
   return null
 }
 
-/** Plays a claimed run's agent and gives the watch news its brief carried. */
+/** Plays a claimed run's agent, handling every watch line, and gives the watch news its brief carried. */
 async function play(run: Claimed): Promise<{ watch: string; new: string[] }[]> {
   const brief = await server.call('get_goal_brief', { goal_id: run.goal_id, run_id: run.run_id, run_scope: run.run_id })
-  await server.call('end_run', { summary: 'Live test run.', run_scope: run.run_id })
+  const handled = (brief.watch_events ?? []).flatMap((n: Any) => n.new as string[])
+  await server.call('end_run', { summary: 'Live test run.', run_scope: run.run_id, handled: handled.length ? handled : undefined })
   return (brief.watch_events ?? []).map((n: Any) => ({ watch: n.watch, new: n.new })).sort((a: Any, b: Any) => a.watch.localeCompare(b.watch))
 }
 
