@@ -5,7 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   openDatabase, createGoal, updateGoal, insertRun, addItem, guardToolCallForRun, SCHEMA_VERSION,
-  stageProposalCalls, proposalCalls, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES,
+  stageProposalCalls, proposalCalls, proposalHasCalls, clearProposalCalls, proposalCallsProblem, PROPOSAL_MAX_CALLS, GUARDED_MAX_BYTES, proposalKey,
 } from './index.js'
 
 // #167: an approved proposal covers only the exact calls it staged, each once
@@ -41,10 +41,10 @@ describe('proposal staged calls (#167)', () => {
     const [cmd] = stageProposalCalls(db, { id, plan_id: 'g1', run_id: run.id }, 'gh.review', [
       { command: 'gh pr review 12 --body-file /work/review.md', files: [{ path: '/work/review.md', contents: 'LGTM' }] },
     ], { dataDir })
-    expect(cmd).toContain(join(dataDir, 'guarded', id))
+    expect(cmd).toContain(join(dataDir, 'guarded', `g1-${id}`))
     expect(cmd).not.toContain('/work/review.md')
-    expect(proposalHasCalls(db, id)).toBe(true)
-    expect(proposalCalls(db, id)).toHaveLength(1)
+    expect(proposalHasCalls(db, proposalKey('g1', id))).toBe(true)
+    expect(proposalCalls(db, proposalKey('g1', id))).toHaveLength(1)
   })
 
   it('once approved, the exact staged call goes through once, from a later run; anything else is refused with the reason', () => {
@@ -73,7 +73,7 @@ describe('proposal staged calls (#167)', () => {
       { command: 'gh pr review 14 --body-file /w/b.md', files: [{ path: '/w/b.md', contents: 'two' }] },
     ], { dataDir })
     approve(id)
-    const [fa, fb] = proposalCalls(db, id).map((c) => c.files[0])
+    const [fa, fb] = proposalCalls(db, proposalKey('g1', id)).map((c) => c.files[0])
     writeFileSync(fa, 'changed')
     expect(bash(run.id, a).reason).toContain('changed after it was proposed')
     rmSync(fb)
@@ -84,7 +84,7 @@ describe('proposal staged calls (#167)', () => {
     const run = insertRun(db, 'g1', 'manual', 'running')
     const id = propose(run.id, 'a')
     approve(id)
-    expect(proposalHasCalls(db, id)).toBe(false)
+    expect(proposalHasCalls(db, proposalKey('g1', id))).toBe(false)
     expect(bash(run.id, 'gh pr review 1 --approve').decision).toBe('allow')
     expect(bash(run.id, 'gh pr review 2 --approve').decision).toBe('allow')
   })
@@ -97,9 +97,9 @@ describe('proposal staged calls (#167)', () => {
     approve(id)
     expect(bash(run.id, old).decision).toBe('deny')
     expect(bash(run.id, now2).decision).toBe('allow')
-    clearProposalCalls(db, id, dataDir)
-    expect(proposalHasCalls(db, id)).toBe(false)
-    expect(existsSync(join(dataDir, 'guarded', id))).toBe(false)
+    clearProposalCalls(db, proposalKey('g1', id), dataDir)
+    expect(proposalHasCalls(db, proposalKey('g1', id))).toBe(false)
+    expect(existsSync(join(dataDir, 'guarded', `g1-${id}`))).toBe(false)
   })
 
   it('caps the number of calls and their size', () => {

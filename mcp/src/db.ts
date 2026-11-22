@@ -64,10 +64,12 @@ export const addItem = (planId: string, runId: string | null, input: core.AddIte
 /** Stages a proposal's exact calls (#167) and stores the staged commands in its action as action.calls. */
 export const stageProposalCalls = (task: { id: string; plan_id: string; run_id: string | null }, category: string, calls: core.ProposalCall[]) => {
   const staged = core.stageProposalCalls(db, task, category, calls, { dataDir: core.quarterdeckDataPaths().dirs[0]! })
-  db.prepare("UPDATE tasks SET state = json_set(COALESCE(state, '{}'), '$.action.calls', json(?)) WHERE id = ?").run(JSON.stringify(staged), task.id)
+  db.prepare("UPDATE tasks SET state = json_set(COALESCE(state, '{}'), '$.action.calls', json(?)) WHERE plan_id = ? AND id = ?").run(JSON.stringify(staged), task.plan_id, task.id)
   return staged
 }
 export const proposalCallsProblem = core.proposalCallsProblem
+export const proposalHasCalls = (planId: string, taskId: string) => core.proposalHasCalls(db, core.proposalKey(planId, taskId))
+export const clearProposalCalls = (planId: string, taskId: string) => core.clearProposalCalls(db, core.proposalKey(planId, taskId), core.quarterdeckDataPaths().dirs[0]!)
 export const insertMemory = (m: Parameters<typeof core.insertMemory>[1]) => core.insertMemory(db, m)
 export const getMemory = (id: string) => core.getMemory(db, id)
 export const updateMemory = (id: string, fields: Parameters<typeof core.updateMemory>[2]) => core.updateMemory(db, id, fields)

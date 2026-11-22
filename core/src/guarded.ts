@@ -187,10 +187,13 @@ export function proposalCallsProblem(calls: ProposalCall[]): string | null {
   return null
 }
 
+/** The key a proposal's staged calls are stored under (#167): item ids are only unique within a goal. */
+export const proposalKey = (planId: string, taskId: string): string => `${planId}/${taskId}`
+
 /** Drops a proposal's staged calls and their files (#167), so an old approval can't be reused. */
-export function clearProposalCalls(db: Database, taskId: string, dataDir: string): void {
-  db.prepare('DELETE FROM guarded_checks WHERE task_id = ?').run(taskId)
-  rmSync(join(dataDir, 'guarded', taskId), { recursive: true, force: true })
+export function clearProposalCalls(db: Database, key: string, dataDir: string): void {
+  const gone = db.prepare('DELETE FROM guarded_checks WHERE task_id = ?').run(key) as { changes: number | bigint }
+  if (Number(gone.changes) > 0) rmSync(join(dataDir, 'guarded', key.replace('/', '-')), { recursive: true, force: true })
 }
 
 /**
@@ -207,9 +210,10 @@ export function stageProposalCalls(
 ): string[] {
   const problem = proposalCallsProblem(calls)
   if (problem) throw new Error(problem)
-  clearProposalCalls(db, task.id, opts.dataDir)
+  const key = proposalKey(task.plan_id, task.id)
+  clearProposalCalls(db, key, opts.dataDir)
   if (calls.length === 0) return []
-  const dir = join(opts.dataDir, 'guarded', task.id)
+  const dir = join(opts.dataDir, 'guarded', key.replace('/', '-'))
   mkdirSync(dir, { recursive: true })
   return calls.map((call, n) => {
     let staged = call.command
@@ -220,20 +224,20 @@ export function stageProposalCalls(
       return { path, contents: f.contents }
     })
     const rec = recordGuardedCheck(db, { id: task.run_id ?? '', plan_id: task.plan_id }, category, staged, copies)
-    db.prepare('UPDATE guarded_checks SET task_id = ? WHERE id = ?').run(task.id, rec.id)
+    db.prepare('UPDATE guarded_checks SET task_id = ? WHERE id = ?').run(key, rec.id)
     return staged
   })
 }
 
 /** A proposal's staged calls, in order, with whether each was used (#167). */
-export function proposalCalls(db: Database, taskId: string): { command: string; files: string[]; used_at: string | null }[] {
-  const rows = db.prepare('SELECT command, file_hashes, used_at FROM guarded_checks WHERE task_id = ? ORDER BY created_at, rowid').all(taskId) as { command: string; file_hashes: string; used_at: string | null }[]
+export function proposalCalls(db: Database, key: string): { command: string; files: string[]; used_at: string | null }[] {
+  const rows = db.prepare('SELECT command, file_hashes, used_at FROM guarded_checks WHERE task_id = ? ORDER BY created_at, rowid').all(key) as { command: string; file_hashes: string; used_at: string | null }[]
   return rows.map((r) => ({ command: r.command, files: Object.keys(JSON.parse(r.file_hashes) as Record<string, string>), used_at: r.used_at }))
 }
 
 /** Whether a proposal staged exact calls (#167); one that didn't covers its whole category. */
-export function proposalHasCalls(db: Database, taskId: string): boolean {
-  return db.prepare('SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1').get(taskId) !== undefined
+export function proposalHasCalls(db: Database, key: string): boolean {
+  return db.prepare('SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1').get(key) !== undefined
 }
 
 /**
@@ -242,10 +246,10 @@ export function proposalHasCalls(db: Database, taskId: string): boolean {
  * the run, so a later run can carry out the approval.
  */
 export function consumeProposalCall(
-  db: Database, taskId: string, command: string, readFile: (path: string) => string | Buffer | null,
+  db: Database, key: string, command: string, readFile: (path: string) => string | Buffer | null,
 ): GuardedMatch {
   const rows = db.prepare('SELECT * FROM guarded_checks WHERE task_id = ? AND command = ? ORDER BY created_at, rowid')
-    .all(taskId, command) as (Omit<GuardedCheckRecord, 'file_hashes'> & { file_hashes: string })[]
+    .all(key, command) as (Omit<GuardedCheckRecord, 'file_hashes'> & { file_hashes: string })[]
   const unused = rows.filter((r) => r.used_at === null)
   if (rows.length === 0) return { ok: false, reason: 'no staged call of the approved proposal matches this exact command' }
   if (unused.length === 0) return { ok: false, reason: 'this staged call was already made; each is good for one call' }

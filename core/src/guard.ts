@@ -48,7 +48,7 @@ import type { Database } from './sqlite.js'
 import { defaultDbPath } from './paths.js'
 import { autonomyFor, tripRun } from './goal-engine.js'
 import { afterOutsideApplies, getGoal, getRun, markRunSecretsRead, markRunUntrusted, newId, secretsReadReason } from './goals.js'
-import { consumeGuardedCheck, consumeProposalCall, hasUnusedGuardedCheck, proposalHasCalls } from './guarded.js'
+import { consumeGuardedCheck, consumeProposalCall, hasUnusedGuardedCheck, proposalHasCalls, proposalKey } from './guarded.js'
 import { readFileSync } from 'fs'
 import type { Goal, GoalRun, ToolCallRecord } from './types.js'
 
@@ -435,9 +435,10 @@ function guardRun(db: Database, run: GoalRun, toolName: string, input: Record<st
   let stagedMiss: string | null = null
   let categoryWide = false
   for (const item of approvedItems) {
-    if (!proposalHasCalls(db, item.id)) { categoryWide = true; continue }
+    const key = proposalKey(run.plan_id, item.id)
+    if (!proposalHasCalls(db, key)) { categoryWide = true; continue }
     if (command === null) { stagedMiss ??= `item ${item.id} was approved for its staged commands only`; continue }
-    const match = consumeProposalCall(db, item.id, command, readStaged)
+    const match = consumeProposalCall(db, key, command, readStaged)
     if (match.ok) {
       record(db, run, toolName, category, 'allow', `staged call of item ${item.id}`)
       return { decision: 'allow', category, run_id: run.id }
