@@ -44,6 +44,7 @@ export const getLatestVerification = (planId: string, taskId: string, gate: core
 export const describeBlockers = core.describeBlockers
 
 // Persistent goals
+export const copyGoal = (sourceId: string, input: core.CopyGoalInput) => core.copyGoal(db, sourceId, input)
 export const createGoal = (plan: core.NewPlan, goal: Omit<core.NewGoal, 'plan_id'>, interval?: core.IntervalConfig) => core.createGoal(db, plan, goal, interval)
 /** Human review actions — used by tests to simulate the web UI. */
 export const approveTask = (planId: string, taskId: string) => core.approveTask(db, planId, taskId)

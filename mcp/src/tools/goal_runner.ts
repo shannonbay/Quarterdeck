@@ -6,16 +6,16 @@
  */
 import {
   schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal, stageGuardedCall,
-  getGoal, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
+  getGoal, getPlan, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, copyGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, watchHealth, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, CopyGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
-import { firstCheckWarnings, normalizeModel, purgeDate, sampleLines, type GoalChanges } from '@quarterdeck/core'
+import { defaultRunFile, firstCheckWarnings, normalizeModel, purgeDate, repoOfRemote, rewriteForCopy, sampleLines, watchSpecOf, type GoalChanges, type Replacement, type RunFile, type WatchSpec } from '@quarterdeck/core'
 import { existsSync } from 'fs'
 import { nanoid } from 'nanoid'
 import { record } from '../history.js'
@@ -199,6 +199,46 @@ export async function create_goal(args: unknown) {
   const queued = input.one_off ? queueRun(id) : null
   const watches = await firstChecks(id)
   return { id, ...applied, one_off: input.one_off ?? false, model: getGoal(id)?.model ?? null, queued_run: queued ? queued.id : null, ...(watches.length ? { watches } : {}) }
+}
+
+/** owner/name of a folder's origin remote; null when it has none. */
+async function originRepo(dir: string, run: RunFile): Promise<string | null> {
+  try {
+    return repoOfRemote(await run('git', ['-C', dir, 'remote', 'get-url', 'origin']))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Copies a goal's set-up to another folder (#208), for the person: the plugin shows
+ * them the rewritten instructions and watches first. The copy starts paused with no
+ * next run due and its watches unchecked, so nothing runs against the new folder
+ * until they resume it.
+ */
+export async function copy_goal(args: unknown, run: RunFile = defaultRunFile) {
+  const input = CopyGoalSchema.parse(args)
+  const src = getGoal(input.goal_id)
+  const plan = src ? getPlan(input.goal_id) : undefined
+  if (!src || !plan) throw new Error(`Goal ${input.goal_id} not found.`)
+  if (!existsSync(input.working_dir)) throw new Error(`Working directory not found: ${input.working_dir}`)
+  let replacements: Replacement[] = []
+  let instructions = input.instructions
+  let watches = input.watches as Record<string, WatchSpec> | undefined
+  if (instructions === undefined || watches === undefined) {
+    const [fromRepo, toRepo] = await Promise.all([originRepo(plan.working_dir ?? '', run), originRepo(input.working_dir, run)])
+    const rewritten = rewriteForCopy(
+      { instructions: src.instructions, watches: Object.fromEntries(listWatches(input.goal_id).map((w) => [w.name, watchSpecOf(w)])) },
+      { fromDir: plan.working_dir ?? '', toDir: input.working_dir, fromRepo, toRepo },
+    )
+    instructions ??= rewritten.value.instructions
+    watches ??= rewritten.value.watches
+    replacements = rewritten.replacements
+  }
+  const id = `plan_${nanoid(10)}`
+  const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches })
+  record(id, id, 'goal_copied', { from: input.goal_id, working_dir: input.working_dir }, human)
+  return { id, name: input.name ?? plan.name, working_dir: input.working_dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements }
 }
 
 export async function delete_memory(args: unknown) {

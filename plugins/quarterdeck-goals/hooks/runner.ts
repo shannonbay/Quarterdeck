@@ -45,6 +45,7 @@ export const HUMAN_ONLY_TOOLS = serverToolNames(
   'fail_run',
   'guard_check',
   'create_goal',
+  'copy_goal',
   'delete_goal',
   'restore_goal',
   'purge_goal',
