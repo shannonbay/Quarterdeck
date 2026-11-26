@@ -141,6 +141,21 @@ export async function updateGoal($: Engine, goalId: string, changes: GoalChanges
   return { changed: r.changed, watches: r.watches ?? [] }
 }
 
+/** A watch as the server stores it (copy_goal's preview gives them in full). */
+export type WatchSpecRecord = Record<string, unknown>
+/** What copy_goal's preview found: the instructions and watches with the folder and repo rewritten, and each replacement. */
+export type CopyPreview = { name: string; working_dir: string; instructions: string; watches: Record<string, WatchSpecRecord>; replacements: { from: string; to: string; count?: number }[] }
+
+/** The rewrite a copy of the goal to workingDir would make (#208); creates nothing. */
+export async function previewCopy($: Engine, goalId: string, workingDir: string, name?: string): Promise<CopyPreview> {
+  return call<CopyPreview>($, 'copy_goal', { goal_id: goalId, working_dir: workingDir, ...(name && { name }), preview: true })
+}
+
+/** Copies the goal with the instructions and watches the person confirmed; the copy starts paused. */
+export async function copyGoal($: Engine, p: CopyPreview, goalId: string): Promise<{ id: string; name: string; status: string }> {
+  return call($, 'copy_goal', { goal_id: goalId, working_dir: p.working_dir, name: p.name, instructions: p.instructions, watches: p.watches })
+}
+
 /** Deletes a goal so it can be restored until it is purged (the pane confirms first). */
 export async function deleteGoal($: Engine, goalId: string): Promise<void> {
   await call($, 'delete_goal', { goal_id: goalId })

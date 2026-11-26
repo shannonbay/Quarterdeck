@@ -6,7 +6,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { DeletedGoal, GoalCard } from '../types'
-import { type WatchHealth, addTodo, answerItem, approve, createGoal, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
+import { type CopyPreview, type WatchHealth, addTodo, answerItem, approve, copyGoal, createGoal, previewCopy, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
 import { ago, clip, describe, describeWatchHealth, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
@@ -61,6 +61,19 @@ export const TOOLS = [
         name: { type: 'string', description: 'A short name, 2-5 words; left out, one is suggested' },
       },
       required: ['objective'],
+    },
+  },
+  {
+    name: 'copy_goal',
+    description: "Copies one or more Quarterdeck goals to another existing folder, so a goal that works can be reused in another project: objective, instructions, schedule, watches, autonomy, tool rules, model and limits, with the old folder and repo rewritten; no runs, items, questions, to-dos or memory. For each goal the person sees the rewritten instructions and watches and confirms first. Each copy starts paused.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goals: { type: 'array', items: { type: 'string' }, description: 'Goal names or ids to copy' },
+        to: { type: 'string', description: 'The folder the copies work in (must exist)' },
+        name: { type: 'string', description: "The copy's name, only with one goal; left out, the same name" },
+      },
+      required: ['goals', 'to'],
     },
   },
   {
@@ -265,6 +278,42 @@ async function confirmWith($: Engine, question: string, yes: string): Promise<bo
   }
 }
 
+/** A watch's command, tool or steps, for the copy confirm. */
+function watchLine(spec: Record<string, unknown>): string {
+  if (typeof spec.command === 'string') return spec.command
+  if (typeof spec.tool === 'string') return `${spec.tool} ${JSON.stringify(spec.tool_input ?? {})}`
+  if (Array.isArray(spec.steps)) return spec.steps.map((s) => JSON.stringify(s)).join(' → ')
+  return JSON.stringify(spec)
+}
+
+/** The copy confirm (#208): the rewritten instructions and watches the person checks before anything is saved. */
+export function copyQuestion(goalName: string, p: CopyPreview): string {
+  const made = p.replacements.length ? p.replacements.map((r) => `• ${r.from} → ${r.to}`).join('\n') : '• nothing (no old folder or repo in its text)'
+  const watches = Object.entries(p.watches).map(([n, w]) => `• ${n}: ${watchLine(w)}`).join('\n')
+  return `Copy the goal "${goalName}" to ${p.working_dir} as "${p.name}"? It starts paused.\n\nReplaced:\n${made}\n\nInstructions:\n${p.instructions || '(none)'}${watches ? `\n\nWatches:\n${watches}` : ''}`
+}
+
+/** Copies one goal after the person confirms its rewrite; Cancel creates nothing. */
+export async function copyOneGoal($: Engine, ref: unknown, to: string, newName?: string): Promise<{ copied: boolean; text: string }> {
+  const found = await resolveGoal($, ref)
+  if ('error' in found) return { copied: false, text: found.error }
+  const { goal } = found
+  let preview: CopyPreview
+  try {
+    preview = await previewCopy($, goal.id, to, newName)
+  } catch (e) {
+    return { copied: false, text: `${goal.name}: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (!(await confirmWith($, copyQuestion(goal.name, preview), 'Copy'))) return { copied: false, text: `${goal.name}: the person declined; nothing was copied.` }
+  let made: { id: string; name: string } | undefined
+  const ok = await act($, `copy:${goal.id}`, 'copy the goal', async () => {
+    made = await copyGoal($, preview, goal.id)
+  })
+  if (!ok || !made) return { copied: false, text: `${goal.name}: ${await actFailure($, "the copy didn't go through.")}` }
+  const replaced = preview.replacements.length ? ` Replaced: ${preview.replacements.map((r) => `${r.from} → ${r.to}`).join('; ')}.` : ' Nothing in its text named the old folder or repo.'
+  return { copied: true, text: `Copied ${goal.name} to ${to} as "${made.name}" (${made.id}). It is paused: resume it once you've checked it.${replaced}` }
+}
+
 /** The text a tool call answers with. */
 export async function runTool($: Engine, name: ToolName, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
   const now = await $.clock.now()
@@ -294,6 +343,22 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
     const given = typeof input.name === 'string' && input.name.trim() ? input.name.trim() : null
     const made = await createNewGoal($, given, objective, true)
     return made.created ? { text: made.text, isError: false } : fail(made.text)
+  }
+
+  if (name === 'copy_goal') {
+    const wanted = Array.isArray(input.goals) ? input.goals.map(String) : typeof input.goals === 'string' ? [input.goals] : []
+    const to = String(input.to ?? '').trim()
+    if (!wanted.length || !to) return fail('Give the goals to copy and the folder to copy them to.')
+    const newName = typeof input.name === 'string' && input.name.trim() ? input.name.trim() : undefined
+    if (newName && wanted.length > 1) return fail('A new name works only when copying one goal.')
+    const lines: string[] = []
+    let copied = 0
+    for (const ref of wanted) {
+      const res = await copyOneGoal($, ref, to, newName)
+      if (res.copied) copied++
+      lines.push(res.text)
+    }
+    return { text: lines.join('\n'), isError: copied === 0 }
   }
 
   const found = await resolveGoal($, input.goal)

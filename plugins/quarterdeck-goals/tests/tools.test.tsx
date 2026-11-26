@@ -265,6 +265,32 @@ test('the set_schedule tool asks first', async ($, on) => {
   expect(fake.of('set_schedule')).toEqual([])
 })
 
+test('the copy_goal tool shows the rewrite and copies only on Copy (#208)', async ($, on) => {
+  const { asked } = engine(on, { answer: 'Copy' })
+  const fake = fakeQuarterdeck(on, [inbox()])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__copy_goal', goals: ['Inbox'], to: '/work/beta', name: 'Inbox (beta)' } as never)
+  expect(asked[0]).toContain('Copy the goal "Inbox" to /work/beta as "Inbox (beta)"? It starts paused.')
+  expect(asked[0]).toContain('/work/project → /work/beta')
+  expect(asked[0]).toContain('issues: gh issue list -R me/beta')
+  expect(fake.of('copy_goal').map((c) => c.input)).toEqual([
+    { goal_id: 'g1', working_dir: '/work/beta', name: 'Inbox (beta)', preview: true },
+    { goal_id: 'g1', working_dir: '/work/beta', name: 'Inbox (beta)', instructions: 'In /work/beta', watches: { issues: { command: 'gh issue list -R me/beta' } } },
+  ])
+  expect(String(res.result)).toContain('It is paused')
+})
+
+test('the copy_goal tool copies nothing on Cancel, and a new name needs one goal', async ($, on) => {
+  engine(on, { answer: 'Cancel' })
+  const fake = fakeQuarterdeck(on, [inbox()])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__copy_goal', goals: ['Inbox'], to: '/work/beta' } as never)
+  expect(String(res.result)).toContain('declined')
+  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true])
+  const two = await $.tool.call({ tool: 'mcp__quarterdeck-goals__copy_goal', goals: ['Inbox', 'Inbox'], to: '/work/beta', name: 'X' } as never)
+  expect(String(two.result)).toContain('only when copying one goal')
+})
+
 test('/goal-new offers the choices with the suggestion first; a one-off runs at once', async ($, on) => {
   const { asked, spawned, clock } = engine(on, { answer: 'One-off: run once now', suggestion: '{"choice": "one-off", "reason": "it is a single task"}' })
   const fake = fakeQuarterdeck(on, [])

@@ -90,7 +90,7 @@ export const SPILL_TEXT = 'result (68,739 characters across 1 line) exceeds maxi
 
 const TOOLS = [
   'goals_overview', 'decide_item', 'run_goal', 'request_run', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
-  'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold',
+  'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold', 'copy_goal',
 ] as const
 
 /**
@@ -242,6 +242,14 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
           g!.next_run_at = g!.schedule ? (g!.schedule.kind === 'interval' ? new Date(NOW).toISOString() : '2026-11-08T09:00:00Z') : null
           version++
           return ok({ goal_id: g!.id, schedule: g!.schedule, next_run_at: g!.next_run_at }) as never
+        }
+        case 'copy_goal': {
+          // The preview rewrites the folder; the copy itself is a new paused goal
+          if (!g) return { result: `Error: Goal ${String(input.goal_id)} not found.`, isError: true } as never
+          const name = String(input.name ?? g.name)
+          if (input.preview) return ok({ preview: true, name, working_dir: input.working_dir, instructions: `In ${String(input.working_dir)}`, watches: { issues: { command: `gh issue list -R me/beta` } }, replacements: [{ from: '/work/project', to: input.working_dir, count: 1 }] }) as never
+          version++
+          return ok({ id: 'g-copy', name, working_dir: input.working_dir, status: 'paused', next_run_at: null, watches: 1, replacements: [] }) as never
         }
         case 'update_goal': {
           const changed: string[] = []
