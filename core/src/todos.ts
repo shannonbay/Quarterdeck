@@ -33,7 +33,7 @@ export interface TodoList {
 }
 
 /** Paths compare case- and slash-insensitively (Windows spells one folder several ways). */
-const samePath = (a: string, b: string) => norm(a) === norm(b)
+export const samePath = (a: string, b: string) => norm(a) === norm(b)
 const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
 
 function listPlans(db: Database, workingDir: string): PlanRow[] {

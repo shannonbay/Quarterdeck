@@ -27,7 +27,7 @@ import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, ge
 import { addFromPane, askFromPane, cancelHeldTodo, editFromPane, toggleTodo, workFromPane } from './todos'
 import { GUARD_MISSING, PLAN_MODE_ON } from './runner'
 import { act, refresh, tooBigText } from './sync'
-import { copyOneGoal } from './tools'
+import { moveOrCopyOneGoal } from './tools'
 
 type Engine = EngineInterface
 type E = RenderInput<'Pane'>
@@ -789,7 +789,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     )
   }
 
-  // Run with a prompt… (#143): what the person types goes to this one run as run.request, trusted, not to memory
+  // Prompt… (#143): what the person types goes to this one run as run.request, trusted, not to memory
   const promptKey = `prompt-${g.id}`
   if (view.open === promptKey && Input && canRun(g)) {
     const send = (text: string) => {
@@ -807,22 +807,23 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     )
   }
 
-  // Copy to another folder… (#208): the folder typed here, then the same confirm as the copy_goal tool
-  const copyKey = `copy-${g.id}`
-  if (view.open === copyKey && Input) {
+  // Folder… (#208): the folder typed here, then one question with the rewrite: Move, Copy or Cancel
+  // (Copy only while a run is going). A folder that doesn't exist is made, one level, once confirmed
+  const folderKey = `folder-${g.id}`
+  if (view.open === folderKey && Input) {
     const send = (text: string) => {
       const to = text.trim()
       if (!to) return
-      void copyOneGoal($, g.id, to).then((res) => {
+      void moveOrCopyOneGoal($, g.id, to).then((res) => {
         $.ui.toast(res.text)
-        if (res.copied) void setRejecting($, null)
+        if (res.done) void setRejecting($, null)
       })
     }
     return (
       <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
-        <Input key={`copy-input-${g.id}`} label="Copy to folder" submitLabel="Copy…" autoFocus onSubmit={send} />
+        <Input key={`folder-input-${g.id}`} label="Move or copy to folder" submitLabel="Next…" autoFocus onSubmit={send} />
         <Text dimColor> · </Text>
-        {action($, e, { key: `copy-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
+        {action($, e, { key: `folder-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
       </Box>
     )
   }
@@ -843,7 +844,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
   if (canRun(g)) {
     buttons.push(
       action($, e, { key: `run-${g.id}`, label: view.doing === `run:${g.id}` ? 'Starting…' : 'Run now', hotkey: view.runnable === g.id ? 'n' : undefined, onPress: () => void act($, `run:${g.id}`, 'start the run', () => runNow($, g.id)) }),
-      action($, e, { key: `run-prompt-${g.id}`, label: 'Run with a prompt…', onPress: () => void setRejecting($, promptKey) }),
+      action($, e, { key: `run-prompt-${g.id}`, label: 'Prompt…', onPress: () => void setRejecting($, promptKey) }),
     )
   }
   if (g.openRun) {
@@ -854,7 +855,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
   ) : (
     action($, e, { key: `resume-${g.id}`, label: view.doing === `resume:${g.id}` ? 'Resuming…' : 'Resume', onPress: () => void act($, `resume:${g.id}`, 'resume the goal', () => setGoalStatus($, g.id, 'active')) })
   ))
-  buttons.push(action($, e, { key: `copy-${g.id}`, label: 'Copy to…', onPress: () => void setRejecting($, copyKey) }))
+  buttons.push(action($, e, { key: `folder-${g.id}`, label: 'Folder…', onPress: () => void setRejecting($, folderKey) }))
   if (!g.openRun) {
     // Last, and only without a run going (a run in progress must be cancelled first)
     buttons.push(action($, e, { key: `delete-${g.id}`, label: 'Delete', onPress: () => void setConfirm($, { kind: 'delete-goal', goalId: g.id }) }))

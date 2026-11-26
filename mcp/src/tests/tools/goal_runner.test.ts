@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check, run_refused,
-  create_goal, copy_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
+  create_goal, copy_goal, move_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
 import { create_plan } from '../../tools/create_plan.js'
-import { createGoal, queueRun, getRun, getGoal, getEvents, updateGoal, insertMemory, getMemory, getRunHold } from '../../db.js'
+import { createGoal, queueRun, getRun, getGoal, getPlan, getEvents, updateGoal, insertMemory, getMemory, getRunHold } from '../../db.js'
 import { tmpdir } from 'os'
+import { existsSync, mkdtempSync } from 'fs'
+import { join } from 'path'
 import { getOpenPlan, getOpenRun, withScope } from '../../session.js'
 import type { PassResult } from '@quarterdeck/core'
 
@@ -510,5 +512,43 @@ describe('copy_goal (#208)', () => {
     const r = await copy_goal({ goal_id: src.id, working_dir: to, preview: true }, run)
     expect(r).toMatchObject({ preview: true, name: 'P', working_dir: to, instructions: expect.stringContaining('me/beta'), watches: {} })
     expect(r).not.toHaveProperty('id')
+  })
+
+  it('makes a missing folder only when asked, and only one level', async () => {
+    const src = await create_goal({ name: 'N', objective: 'B', working_dir: from })
+    const fresh = join(mkdtempSync(join(tmpdir(), 'qd-copy-')), 'Selling')
+    expect(await copy_goal({ goal_id: src.id, working_dir: fresh, preview: true }, run)).toMatchObject({ exists: false })
+    await expect(copy_goal({ goal_id: src.id, working_dir: fresh }, run)).rejects.toThrow(/not found/)
+    await expect(copy_goal({ goal_id: src.id, working_dir: join(fresh, 'deeper'), preview: true }, run)).rejects.toThrow(/neither is the folder/)
+    const r = await copy_goal({ goal_id: src.id, working_dir: fresh, create_dir: true }, run)
+    expect(existsSync(fresh)).toBe(true)
+    expect(r.working_dir).toBe(fresh)
+  })
+})
+
+describe('move_goal', () => {
+  const from = process.cwd()
+  const remotes: Record<string, string> = { [from]: 'https://github.com/me/alpha.git' }
+  const run = async (_cmd: string, args: string[]) => remotes[args[1]] ?? Promise.reject(new Error('no remote'))
+
+  it('moves the same goal, rewriting its folder, and records it', async () => {
+    const src = await create_goal({ name: 'Web', objective: 'Sell things', working_dir: from, instructions: `Keep photos in ${from}` })
+    insertMemory({ plan_id: src.id, kind: 'fact', text: 'kept', source: 'human' })
+    const to = join(mkdtempSync(join(tmpdir(), 'qd-move-')), 'Selling')
+    const preview = await move_goal({ goal_id: src.id, working_dir: to, preview: true }, run)
+    expect(preview).toMatchObject({ preview: true, exists: false, instructions: `Keep photos in ${to}` })
+    expect(getPlan(src.id)!.working_dir).toBe(from)
+    const r = await move_goal({ goal_id: src.id, working_dir: to, instructions: preview.instructions, watches: preview.watches, create_dir: true }, run)
+    expect(r).toMatchObject({ id: src.id, working_dir: to })
+    expect(getPlan(src.id)!.working_dir).toBe(to)
+    expect(getGoal(src.id)!.instructions).toBe(`Keep photos in ${to}`)
+    expect(getEvents(src.id).find((e) => e.event_type === 'goal_moved')).toBeTruthy()
+  })
+
+  it('refuses the same folder and a goal with a run going', async () => {
+    const src = await create_goal({ name: 'R', objective: 'B', working_dir: from })
+    await expect(move_goal({ goal_id: src.id, working_dir: from.toUpperCase() + '/' }, run)).rejects.toThrow(/already works/)
+    queueRun(src.id)
+    await expect(move_goal({ goal_id: src.id, working_dir: tmpdir() }, run)).rejects.toThrow(/run is going/)
   })
 })

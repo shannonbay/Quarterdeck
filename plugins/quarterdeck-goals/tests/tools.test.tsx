@@ -291,6 +291,29 @@ test('the copy_goal tool copies nothing on Cancel, and a new name needs one goal
   expect(String(two.result)).toContain('only when copying one goal')
 })
 
+test('the move_goal tool shows the rewrite and moves the same goal only on Move', async ($, on) => {
+  const { asked } = engine(on, { answer: 'Move' })
+  const fake = fakeQuarterdeck(on, [inbox()])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__move_goal', goals: ['Inbox'], to: '/work/new' } as never)
+  expect(asked[0]).toContain('Move the goal "Inbox" to /work/new? It keeps its runs, items and memory')
+  expect(asked[0]).toContain("/work/new doesn't exist yet: it will be created.")
+  expect(fake.of('move_goal').map((c) => c.input)).toEqual([
+    { goal_id: 'g1', working_dir: '/work/new', preview: true },
+    { goal_id: 'g1', working_dir: '/work/new', instructions: 'In /work/new', watches: { issues: { command: 'gh issue list -R me/beta' } }, create_dir: true },
+  ])
+  expect(String(res.result)).toContain('Moved Inbox to /work/new. Created /work/new.')
+})
+
+test('the move_goal tool moves nothing on Cancel', async ($, on) => {
+  engine(on, { answer: 'Cancel' })
+  const fake = fakeQuarterdeck(on, [inbox()])
+  await $.session.start(START)
+  const res = await $.tool.call({ tool: 'mcp__quarterdeck-goals__move_goal', goals: ['Inbox'], to: '/work/beta' } as never)
+  expect(String(res.result)).toContain('nothing was moved')
+  expect(fake.of('move_goal').map((c) => c.input.preview)).toEqual([true])
+})
+
 test('/goal-new offers the choices with the suggestion first; a one-off runs at once', async ($, on) => {
   const { asked, spawned, clock } = engine(on, { answer: 'One-off: run once now', suggestion: '{"choice": "one-off", "reason": "it is a single task"}' })
   const fake = fakeQuarterdeck(on, [])

@@ -56,6 +56,7 @@ const HUMAN_ONLY = new Set([
   'guard_check',
   'create_goal',
   'copy_goal',
+  'move_goal',
   'delete_goal',
   'restore_goal',
   'purge_goal',
