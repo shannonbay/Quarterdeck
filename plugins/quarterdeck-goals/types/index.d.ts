@@ -102,6 +102,8 @@ export type GoalCard = {
   watchFailing: boolean
   /** A watch has seen nothing, or the same one line, since it was set, for a day and 3 checks (#185). */
   watchNeverSaw: boolean
+  /** The goal's folder (its plan's working_dir); null from a server older than #47: the pane puts it in the session's group (#207). */
+  workingDir: string | null
 }
 
 export type Watch = {

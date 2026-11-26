@@ -115,6 +115,7 @@ export function toCard(g: OverviewGoal): GoalCard {
     watchGapMinutes: g.watch_gap_minutes ?? 0,
     watchFailing: g.watch_failing ?? (g.watches ?? []).some((w) => w.failing),
     watchNeverSaw: g.watch_never_saw ?? (g.watches ?? []).some((w) => w.never_saw === true),
+    workingDir: g.working_dir ?? null,
   }
 }
 
@@ -165,6 +166,96 @@ export function needsAttention(g: GoalCard): boolean {
     || g.watchFailing
     || g.watchNeverSaw
     || g.suggestions.length > 0
+}
+
+/** One folder's goals in the Goals pane (#207). */
+export type GoalGroup = {
+  /** The folder, normalized (`normalizeDir`): the group's key, `group:<key>` in the expanded atom. */
+  key: string
+  /** The folder as the first of its goals gave it (the session's folder for goals with none). */
+  dir: string
+  /** The folder's base name, with its parent folder when another group has the same base name. */
+  label: string
+  /** The session's folder. */
+  current: boolean
+  /** Its goals in the pane's order: those that need attention first, then the rest as given. */
+  goals: GoalCard[]
+}
+
+/**
+ * A folder in a form two spellings of it share: a backslash and `/` the same, no
+ * trailing separator, and lower case when it is a Windows path (a drive
+ * letter or a backslash), where case doesn't matter.
+ */
+export function normalizeDir(dir: string): string {
+  let d = dir.split('\\').join('/')
+  let end = d.length
+  while (end > 1 && d[end - 1] === '/' && !(end === 3 && d[1] === ':')) end--
+  d = d.slice(0, end)
+  return /^[A-Za-z]:/.test(d) || dir.includes('\\') ? d.toLowerCase() : d
+}
+
+function dirParts(dir: string): string[] {
+  return dir.split('\\').join('/').split('/').filter((p) => p !== '')
+}
+
+/**
+ * Groups goals by folder (#207). The session's folder (`root`) comes first,
+ * then the groups with a goal that needs attention, then the rest, each
+ * alphabetical by label. A goal with no folder (an older server) goes in the
+ * session's group. Inside a group goals keep the pane's order: those that need
+ * attention first, then the rest in the order given.
+ */
+export function groupGoals(goals: GoalCard[], root: string): GoalGroup[] {
+  const rootKey = normalizeDir(root)
+  const byKey = new Map<string, { dir: string; goals: GoalCard[] }>()
+  for (const g of goals) {
+    const dir = g.workingDir ?? root
+    const key = normalizeDir(dir)
+    const group = byKey.get(key) ?? { dir, goals: [] }
+    group.goals.push(g)
+    byKey.set(key, group)
+  }
+  const base = (dir: string) => dirParts(dir).at(-1) ?? dir
+  const counts = new Map<string, number>()
+  for (const { dir } of byKey.values()) counts.set(base(dir).toLowerCase(), (counts.get(base(dir).toLowerCase()) ?? 0) + 1)
+  const label = (dir: string) => {
+    if ((counts.get(base(dir).toLowerCase()) ?? 0) < 2) return base(dir)
+    return dirParts(dir).slice(-2).join('/')
+  }
+  const groups: GoalGroup[] = [...byKey].map(([key, { dir, goals: gs }]) => ({
+    key, dir, label: label(dir), current: key === rootKey,
+    goals: [...gs.filter(needsAttention), ...gs.filter((g) => !needsAttention(g))],
+  }))
+  const rank = (g: GoalGroup) => (g.current ? 0 : g.goals.some(needsAttention) ? 1 : 2)
+  return groups.sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+}
+
+/** What a collapsed group's one line counts: proposals and questions waiting, runs going, goals failing (#207). */
+export type GroupCounts = { goals: number; toApprove: number; questions: number; running: number; failing: number }
+
+export function groupCounts(group: Pick<GoalGroup, 'goals'>): GroupCounts {
+  const c: GroupCounts = { goals: group.goals.length, toApprove: 0, questions: 0, running: 0, failing: 0 }
+  for (const g of group.goals) {
+    const questions = g.needsYou.filter((i) => i.asksPerson).length
+    c.questions += questions
+    c.toApprove += Math.max(0, Math.max(g.needsYouCount, g.needsYou.length) - questions)
+    if (isWorking(g)) c.running++
+    const run = lastRun(g)
+    if ((run && isFailed(run.status)) || (g.health && !g.health.passed) || g.watchFailing || g.watchNeverSaw) c.failing++
+  }
+  return c
+}
+
+/** A collapsed group's line, e.g. "OtherRepo · 5 goals · 2 to approve · 1 running"; `needsYou`: colour it as an attention line. */
+export function groupSummary(group: Pick<GoalGroup, 'label' | 'goals'>): { text: string; needsYou: boolean } {
+  const c = groupCounts(group)
+  const parts = [group.label, `${c.goals} goal${c.goals === 1 ? '' : 's'}`]
+  if (c.toApprove) parts.push(`${c.toApprove} to approve`)
+  if (c.questions) parts.push(`${c.questions} question${c.questions === 1 ? '' : 's'}`)
+  if (c.running) parts.push(`${c.running} running`)
+  if (c.failing) parts.push(`${c.failing} failing`)
+  return { text: parts.join(' · '), needsYou: c.toApprove + c.questions + c.failing > 0 || group.goals.some((g) => g.suggestions.length > 0) }
 }
 
 /** The frames of the spinner a goal's title shows while its run is working (Claude Code's own kind). */
