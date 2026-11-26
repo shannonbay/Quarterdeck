@@ -27,6 +27,7 @@ import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, ge
 import { addFromPane, askFromPane, cancelHeldTodo, editFromPane, toggleTodo, workFromPane } from './todos'
 import { GUARD_MISSING, PLAN_MODE_ON } from './runner'
 import { act, refresh, tooBigText } from './sync'
+import { copyOneGoal } from './tools'
 
 type Engine = EngineInterface
 type E = RenderInput<'Pane'>
@@ -754,6 +755,26 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     )
   }
 
+  // Copy to another folder… (#208): the folder typed here, then the same confirm as the copy_goal tool
+  const copyKey = `copy-${g.id}`
+  if (view.open === copyKey && Input) {
+    const send = (text: string) => {
+      const to = text.trim()
+      if (!to) return
+      void copyOneGoal($, g.id, to).then((res) => {
+        $.ui.toast(res.text)
+        if (res.copied) void setRejecting($, null)
+      })
+    }
+    return (
+      <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
+        <Input key={`copy-input-${g.id}`} label="Copy to folder" submitLabel="Copy…" autoFocus onSubmit={send} />
+        <Text dimColor> · </Text>
+        {action($, e, { key: `copy-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
+      </Box>
+    )
+  }
+
   // The buttons that apply, joined by dots so they don't read as one phrase
   const buttons: RenderChildren[] = []
   const run = lastRun(g)
@@ -781,6 +802,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
   ) : (
     action($, e, { key: `resume-${g.id}`, label: view.doing === `resume:${g.id}` ? 'Resuming…' : 'Resume', onPress: () => void act($, `resume:${g.id}`, 'resume the goal', () => setGoalStatus($, g.id, 'active')) })
   ))
+  buttons.push(action($, e, { key: `copy-${g.id}`, label: 'Copy to…', onPress: () => void setRejecting($, copyKey) }))
   if (!g.openRun) {
     // Last, and only without a run going (a run in progress must be cancelled first)
     buttons.push(action($, e, { key: `delete-${g.id}`, label: 'Delete', onPress: () => void setConfirm($, { kind: 'delete-goal', goalId: g.id }) }))

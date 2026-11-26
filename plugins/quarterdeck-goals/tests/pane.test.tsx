@@ -547,9 +547,9 @@ test('a goal\'s controls are separated by dots, and a scheduled goal has Resched
   expect(await ui.find({ key: 'reschedule-g1' })).toBeDefined()
   expect(await ui.find({ key: 'schedule-g1' })).toBeUndefined()
   expect(await ui.find({ key: 'reschedule-g2' })).toBeUndefined()
-  // Each goal: Reschedule (or Set schedule) · Run now · Run with a prompt… · Pause · Delete, with no
+  // Each goal: Reschedule (or Set schedule) · Run now · Run with a prompt… · Pause · Copy to… · Delete, with no
   // dot at either end, and its facts line: Runs … · model
-  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(10)
+  expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(12)
   await ui.unmount()
 })
 
@@ -570,6 +570,39 @@ test('Run with a prompt opens a box and sends the typed text as a trusted reques
   await ui.press({ key: 'prompt-cancel-g1' })
   expect(await ui.find({ key: 'prompt-input-g1' })).toBeUndefined()
   expect(await ui.find({ key: 'run-prompt-g1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Copy to… asks for a folder, shows the rewrite and copies only on Copy (#208)', async ($, on) => {
+  const { asked, toasts } = engine(on, { answer: 'Copy' })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  await ui.press({ key: 'copy-g1' })
+  await ui.input({ key: 'copy-input-g1', text: '  /work/beta ' })
+  expect(asked[0]).toContain('Copy the goal "Inbox" to /work/beta as "Inbox"? It starts paused.')
+  expect(asked[0]).toContain('/work/project → /work/beta')
+  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true, undefined])
+  expect(toasts.join(' ')).toContain('It is paused')
+  // A copy closes the box
+  expect(await ui.find({ key: 'copy-input-g1' })).toBeUndefined()
+  expect(await ui.find({ key: 'copy-g1' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Copy to… copies nothing on Cancel and keeps the box open', async ($, on) => {
+  const { toasts } = engine(on) // the fake dismisses (answers Cancel)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  await ui.press({ key: 'copy-g1' })
+  await ui.input({ key: 'copy-input-g1', text: '/work/beta' })
+  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true])
+  expect(toasts.join(' ')).toContain('nothing was copied')
+  await ui.press({ key: 'copy-cancel-g1' })
+  expect(await ui.find({ key: 'copy-input-g1' })).toBeUndefined()
   await ui.unmount()
 })
 
