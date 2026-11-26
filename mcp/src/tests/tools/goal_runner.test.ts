@@ -484,7 +484,8 @@ describe('copy_goal (#208)', () => {
     const src = await create_goal({
       name: 'Fixer', objective: 'Fix issues', working_dir: from, instructions: `Work in ${from} on me/alpha`,
       autonomy: { 'email.send': 'auto' }, tool_map: { 'mcp__x__send*': 'email.send' }, schedule: { kind: 'interval', minutes: 60 },
-      watches: { issues: { command: 'gh issue list -R me/alpha' } },
+      // A local command, so creating the goal's first check doesn't reach GitHub
+      watches: { issues: { command: `node -e "console.log('me/alpha')"` } },
     })
     insertMemory({ plan_id: src.id, kind: 'fact', text: 'about alpha', source: 'human' })
     const r = await copy_goal({ goal_id: src.id, working_dir: to, name: 'Fixer (beta)' }, run)
