@@ -8,7 +8,7 @@ import { create_plan } from '../../tools/create_plan.js'
 import { createGoal, queueRun, getRun, getGoal, getPlan, getEvents, updateGoal, insertMemory, getMemory, getRunHold } from '../../db.js'
 import { homedir, tmpdir } from 'os'
 import { existsSync, mkdirSync, mkdtempSync } from 'fs'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { getOpenPlan, getOpenRun, withScope } from '../../session.js'
 import type { PassResult } from '@quarterdeck/core'
 
@@ -537,7 +537,8 @@ describe('resolveTargetDir', () => {
 
   it('goes from the folder itself for ./ and ../, from home for ~, and keeps a full path', () => {
     expect(resolveTargetDir(from, './Selling')).toBe(join(from, 'Selling'))
-    expect(resolveTargetDir(from, '.\\Selling')).toBe(process.platform === 'win32' ? join(from, 'Selling') : join(github, '.\\Selling'))
+    // A backslash counts as a separator after the dot everywhere, so .\Selling is inside too
+    expect(resolveTargetDir(from, '.\\Selling')).toBe(resolve(from, '.\\Selling'))
     expect(resolveTargetDir(from, '../Selling')).toBe(join(github, 'Selling'))
     expect(resolveTargetDir(from, '~/Selling')).toBe(join(homedir(), 'Selling'))
     expect(resolveTargetDir(from, '~')).toBe(homedir())

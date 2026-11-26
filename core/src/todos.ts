@@ -34,7 +34,13 @@ export interface TodoList {
 
 /** Paths compare case- and slash-insensitively (Windows spells one folder several ways). */
 export const samePath = (a: string, b: string) => norm(a) === norm(b)
-const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+const norm = (p: string) => {
+  const s = p.replace(/\\/g, '/')
+  // Trailing slashes off without a regex: /\/+$/ is slow on a long run of slashes
+  let end = s.length
+  while (end > 0 && s[end - 1] === '/') end--
+  return s.slice(0, end).toLowerCase()
+}
 
 function listPlans(db: Database, workingDir: string): PlanRow[] {
   const plans = db.prepare("SELECT * FROM plans WHERE status = 'active' AND kind != 'goal' ORDER BY updated_at DESC").all() as PlanRow[]
