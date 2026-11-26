@@ -20,7 +20,7 @@ import type { Confirm, DeletedGoal, GoalCard, TodoItem, Todos, Update } from '..
 import { answerItem, approve, baseUrl, clearRunHold, deleteGoal, deleteMemory, getItem, NOT_LOADED, purgeGoal, reject, restoreGoal, restoreMemory, runNow, setGoalStatus, trustMemory, updateGoal } from './api'
 import { cancelRun } from './runner'
 import { chooseSchedule, rescheduleGoal } from './schedule'
-import { ago, allowRules, allowRulesPrompt, clip, lastRefusals, refusalText, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, secretsReadText, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
+import { ago, allowRules, groupGoals, groupSummary, type GoalGroup, allowRulesPrompt, clip, lastRefusals, refusalText, discussPrompt, goalModelLabel, holdUntilText, isFailed, isQuiet, isWorking, lastRun, MODEL_CHOICES, modelName, needsAttention, nextRunText, permissionWhere, planModeBlocked, readModelAnswer, runCost, runsText, runTokens, secretsReadText, spark, SPINNER_FRAMES, SPINNER_MS, updatePrompt } from './model'
 import { connectRemote, markActive } from './alerts'
 import { sendToChat } from './chat'
 import { advanceSpinner, getAddingTo, getAskingAbout, getBusy, getDiscussing, getEditingTodo, getHeldTodos, getConfirm, getExpanded, getFullItems, getGuardMissing, getNotice, getPhone, getPlanMode, getRejecting, getRuns, getSnapshot, getSpinnerFrame, getTodos, setAddingTo, setAskingAbout, setConfirm, setDiscussing, setEditingTodo, setFullItem, setRejecting, toggleExpanded } from './state'
@@ -179,10 +179,18 @@ export async function renderPane($: Engine, e: E) {
   // (alphabetical) order, so the first hotkeys go to them; every index below follows
   // this order. Done one-offs (retired) go in their own section at the bottom
   const active = s.goals.filter((g) => g.status !== 'retired')
-  const current = [...active.filter(needsAttention), ...active.filter((g) => !needsAttention(g))]
   const done = s.goals.filter((g) => g.status === 'retired')
-  const firstWithProposal = current.find((g) => g.needsYou.length > 0)
   const shown = await getExpanded($)
+  // Goals in several folders are grouped by folder (#207): the session's group open by
+  // default, the others closed. Goals in a collapsed group are left out of `current`, so
+  // hotkeys, the Needs you key and Run now skip them. One folder: the flat list as before
+  const groups = groupGoals(active, await $.session.root())
+  const grouped = groups.length > 1
+  const groupOpen = (gr: GoalGroup) => shown.includes(groupKey(gr)) !== gr.current
+  const current = grouped
+    ? groups.flatMap((gr) => (groupOpen(gr) ? gr.goals : []))
+    : [...active.filter(needsAttention), ...active.filter((g) => !needsAttention(g))]
+  const firstWithProposal = current.find((g) => g.needsYou.length > 0)
   // A goal with nothing for the person is one line until it is expanded
   const oneLine = current.map((g) => isQuiet(g) && !shown.includes(g.id))
   // A quiet goal the person expanded (its title must stay where they pressed it)
@@ -254,11 +262,8 @@ export async function renderPane($: Engine, e: E) {
           <Text dimColor>Create one with /goal-new &lt;objective&gt;; /goal-new alone offers ready-made ones.</Text>
         </Box>
       )}
-      {current.map((g, i) => (oneLine[i]
-        // One-line goals sit together; a blank line only before a card that needs you or the
-        // next section, none above a goal you opened, so its title stays where you pressed it
-        ? quietLine($, e, view, g, i, oneLine[i + 1] || opened[i + 1] ? 0 : 1)
-        : goalCard($, e, view, g, i)))}
+      {!grouped && current.map((g, i) => goalRow($, e, view, current, oneLine, opened, i, i))}
+      {grouped && groupRows($, e, view, groups, groupOpen, current, oneLine, opened)}
       {todos && todos.lists.length > 0 && todoSection($, e, view, todos, addingTo, askingAbout, editing, held)}
       {done.length > 0 && doneSection($, e, view, done)}
       {s.deleted && s.deleted.length > 0 && deletedSection($, e, view, s.deleted)}
@@ -335,6 +340,53 @@ function welcome($: Engine, e: E) {
  * A goal with nothing for the person, on one line: its name (press it, or its
  * number, for the full card), the tokens its last run used and when it runs next.
  */
+/** One goal in the list: a one-line goal, or its card. `hotkey`: its number key (0 is 1). */
+function goalRow($: Engine, e: E, view: View, current: GoalCard[], oneLine: boolean[], opened: boolean[], i: number, hotkey: number) {
+  const g = current[i]!
+  return oneLine[i]
+    // One-line goals sit together; a blank line only before a card that needs you or the
+    // next section, none above a goal you opened, so its title stays where you pressed it
+    ? quietLine($, e, view, g, hotkey, oneLine[i + 1] || opened[i + 1] ? 0 : 1)
+    : goalCard($, e, view, g, hotkey)
+}
+
+/** The expanded atom's key for a folder group (#207). */
+function groupKey(gr: GoalGroup): string {
+  return `group:${gr.key}`
+}
+
+/**
+ * The goals grouped by folder (#207): each group's header, pressed to open or close
+ * it, then its goals when open. A closed group is its one-line summary, coloured
+ * and given a number key when something in it needs you.
+ */
+function groupRows($: Engine, e: E, view: View, groups: GoalGroup[], groupOpen: (gr: GoalGroup) => boolean, current: GoalCard[], oneLine: boolean[], opened: boolean[]) {
+  const { Box, Button, Text } = parts($, e)
+  const rows: unknown[] = []
+  let hotkey = 0
+  for (const gr of groups) {
+    const toggle = () => void toggleExpanded($, groupKey(gr)).then(() => refresh($))
+    if (groupOpen(gr)) {
+      rows.push(<Button key={`group-${gr.key}`} plain label={`▾ ${gr.label}`} onPress={toggle} />)
+      for (const g of gr.goals) {
+        const i = current.indexOf(g)
+        rows.push(goalRow($, e, view, current, oneLine, opened, i, hotkey++))
+      }
+    } else {
+      const summary = groupSummary(gr)
+      const key = summary.needsYou && hotkey < 9 ? String(++hotkey) : undefined
+      rows.push(
+        <Box key={`group-${gr.key}`} marginBottom={1}>
+          {summary.needsYou
+            ? <Button key={`group-toggle-${gr.key}`} plain label={`▸ ${summary.text}`} hotkey={key} onPress={toggle}><Text color="yellow">▸ {summary.text}</Text></Button>
+            : <Button key={`group-toggle-${gr.key}`} plain label={`▸ ${summary.text}`} onPress={toggle} />}
+        </Box>,
+      )
+    }
+  }
+  return rows
+}
+
 function quietLine($: Engine, e: E, view: View, g: GoalCard, index: number, gap: number) {
   const { Box, Text, Button } = parts($, e)
   const run = lastRun(g)
