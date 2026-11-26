@@ -63,6 +63,8 @@ test("the person's Quarterdeck actions are refused to a run, to other agents and
     expect(said(r)).toContain('Goals pane')
     const s = await $.tool.call(call({ tool: 'mcp__quarterdeck__set_schedule', goal_id: 'g1', schedule: null, ...(agentId && { agentId }) }))
     expect(said(s)).toContain('Goals pane')
+    const c = await $.tool.call(call({ tool: 'mcp__quarterdeck__copy_goal', goal_id: 'g1', working_dir: '/b', ...(agentId && { agentId }) }))
+    expect(said(c)).toContain('Goals pane')
   }
 })
 

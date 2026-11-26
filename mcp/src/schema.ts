@@ -344,6 +344,14 @@ export const CreateGoalSchema = z.object({
   model: z.string().nullable().optional().describe("The model its runs use: haiku, sonnet, opus or a full model id; left out or null, the model of the session that starts each run"),
 })
 
+export const CopyGoalSchema = z.object({
+  goal_id: z.string().describe('The goal to copy'),
+  working_dir: z.string().min(1).describe('The folder the copy works in (must exist)'),
+  name: z.string().trim().min(1).optional().describe("The copy's name; left out, the same name"),
+  instructions: z.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the original's with its folder and repo rewritten"),
+  watches: z.record(z.string(), WatchSchema).optional().describe("Every watch to save, by name (as the person confirmed them); left out, the original's with its folder and repo rewritten"),
+})
+
 export const SetScheduleSchema = z.object({
   goal_id: z.string(),
   schedule: GoalScheduleSchema.describe('null makes the goal run only on demand'),

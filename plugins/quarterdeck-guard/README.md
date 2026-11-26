@@ -36,7 +36,7 @@ It also reads the engine's list of running agents (`$.agent.list()`) to tell a g
 
 **The permission hook** (`tool.check`) only ever refuses, or passes the check on to Claude Code's own permission rules; it never allows. It refuses:
 
-- for a goal run's agent: the person-only Quarterdeck tools (`decide_item`, `cancel_run`, `set_goal_status`, `update_goal`, `create_goal`, `delete_goal`, `delete_memory`, `set_schedule`, `run_goal` and the rest), quarterdeck-goals' own tools (`mcp__quarterdeck-goals__*`), and the Agent tool (a run doesn't start other agents);
+- for a goal run's agent: the person-only Quarterdeck tools (`decide_item`, `cancel_run`, `set_goal_status`, `update_goal`, `create_goal`, `copy_goal`, `delete_goal`, `delete_memory`, `set_schedule`, `run_goal` and the rest), quarterdeck-goals' own tools (`mcp__quarterdeck-goals__*`), and the Agent tool (a run doesn't start other agents);
 - for Claude in your conversation and other agents: the same person-only tools, except `run_goal`. The quarterdeck-goals plugin itself still uses them when you press its buttons, and to start and stop runs.
 
 Everything else goes on to your permission rules unchanged.

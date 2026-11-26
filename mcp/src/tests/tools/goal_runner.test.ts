@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check, run_refused,
-  create_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
+  create_goal, copy_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
 import { create_plan } from '../../tools/create_plan.js'
@@ -470,5 +470,38 @@ describe('clear_run_hold (#104)', () => {
     const ev = getEvents(id).filter((e) => e.event_type === 'run_hold_cleared')
     expect(ev).toHaveLength(1)
     expect(ev[0].actor).toBe('agent')
+  })
+})
+
+describe('copy_goal (#208)', () => {
+  const from = process.cwd()
+  const to = tmpdir()
+  // Each folder's origin remote, without running git
+  const remotes: Record<string, string> = { [from]: 'https://github.com/me/alpha.git', [to]: 'git@github.com:me/beta.git' }
+  const run = async (_cmd: string, args: string[]) => remotes[args[1]] ?? Promise.reject(new Error('no remote'))
+
+  it('copies the set-up, paused, with the folder and repo rewritten, and records it', async () => {
+    const src = await create_goal({
+      name: 'Fixer', objective: 'Fix issues', working_dir: from, instructions: `Work in ${from} on me/alpha`,
+      autonomy: { 'email.send': 'auto' }, tool_map: { 'mcp__x__send*': 'email.send' }, schedule: { kind: 'interval', minutes: 60 },
+      // A local command, so creating the goal's first check doesn't reach GitHub
+      watches: { issues: { command: `node -e "console.log('me/alpha')"` } },
+    })
+    insertMemory({ plan_id: src.id, kind: 'fact', text: 'about alpha', source: 'human' })
+    const r = await copy_goal({ goal_id: src.id, working_dir: to, name: 'Fixer (beta)' }, run)
+    expect(r).toMatchObject({ name: 'Fixer (beta)', working_dir: to, status: 'paused', next_run_at: null, watches: 1 })
+    expect(r.replacements.map((x) => x.to)).toEqual(expect.arrayContaining(['me/beta']))
+    expect(getGoal(r.id)).toMatchObject({ instructions: expect.stringContaining('me/beta'), autonomy: { 'email.send': 'auto' }, tool_map: { 'mcp__x__send*': 'email.send' }, status: 'paused', next_run_at: null })
+    expect(getGoal(r.id)!.instructions).not.toContain('me/alpha')
+    expect(getEvents(r.id).find((e) => e.event_type === 'goal_copied')).toBeTruthy()
+  })
+
+  it('saves the text the person confirmed, and refuses a missing goal or folder', async () => {
+    const src = await create_goal({ name: 'A', objective: 'B', working_dir: from, instructions: 'old' })
+    const r = await copy_goal({ goal_id: src.id, working_dir: to, instructions: 'confirmed', watches: {} }, run)
+    expect(getGoal(r.id)!.instructions).toBe('confirmed')
+    expect(r.replacements).toEqual([])
+    await expect(copy_goal({ goal_id: 'nope', working_dir: to }, run)).rejects.toThrow(/not found/)
+    await expect(copy_goal({ goal_id: src.id, working_dir: '/no/such/dir/xyz' }, run)).rejects.toThrow(/not found/)
   })
 })
