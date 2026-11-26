@@ -1,4 +1,4 @@
-// Quarterdeck MCP server 0.32.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.33.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -2986,7 +2986,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve2.call(this, root, ref);
+      let _sch = resolve3.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -3013,7 +3013,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve2(root, ref) {
+    function resolve3(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3588,7 +3588,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve2(baseURI, relativeURI, options) {
+    function resolve3(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -3815,7 +3815,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve2,
+      resolve: resolve3,
       resolveComponent,
       equal,
       serialize,
@@ -7139,7 +7139,12 @@ function runMigrations(db2) {
       waiting_since  TEXT,
       untrusted_at     TEXT,
       untrusted_source TEXT,
-      untrusted_root   TEXT
+      untrusted_root   TEXT,
+      secrets_read_at     TEXT,
+      secrets_read_source TEXT,
+      secrets_read_paths  TEXT,
+      tripped_at     TEXT,
+      tripped_reason TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_runs_plan ON goal_runs(plan_id, started_at);
 
@@ -7228,6 +7233,12 @@ function runMigrations(db2) {
     } catch {
     }
   }
+  for (const col of ["tripped_at", "tripped_reason"]) {
+    try {
+      db2.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
+    } catch {
+    }
+  }
   for (const col of ["untrusted_at", "untrusted_source"]) {
     try {
       db2.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
@@ -7241,6 +7252,12 @@ function runMigrations(db2) {
   for (const table of ["goal_runs", "goal_memory"]) {
     try {
       db2.exec(`ALTER TABLE ${table} ADD COLUMN untrusted_root TEXT`);
+    } catch {
+    }
+  }
+  for (const col of ["secrets_read_at", "secrets_read_source", "secrets_read_paths"]) {
+    try {
+      db2.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
     } catch {
     }
   }
@@ -7348,7 +7365,9 @@ function runMigrations(db2) {
       queued_at  TEXT,
       run_id     TEXT,
       -- the run whose end the check that saw it was made for (null: an ordinary check)
-      seen_during_run TEXT
+      seen_during_run TEXT,
+      -- how many runs have been shown it in their brief (schema version 29)
+      attempts   INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
@@ -7359,6 +7378,10 @@ function runMigrations(db2) {
   }
   try {
     db2.exec("ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT");
+  } catch {
+  }
+  try {
+    db2.exec("ALTER TABLE goal_watch_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
   } catch {
   }
   try {
@@ -7375,6 +7398,10 @@ function runMigrations(db2) {
   }
   try {
     db2.exec("ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0");
+  } catch {
+  }
+  try {
+    db2.exec("ALTER TABLE goal_watches ADD COLUMN last_line_count INTEGER");
   } catch {
   }
   try {
@@ -7484,10 +7511,16 @@ function runMigrations(db2) {
       file_hashes TEXT NOT NULL DEFAULT '{}',
       used_at     TEXT,
       recorded_at TEXT,
-      created_at  TEXT NOT NULL
+      created_at  TEXT NOT NULL,
+      task_id     TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);
   `);
+  try {
+    db2.exec("ALTER TABLE guarded_checks ADD COLUMN task_id TEXT");
+  } catch {
+  }
+  db2.exec("CREATE INDEX IF NOT EXISTS idx_guarded_checks_task ON guarded_checks(task_id)");
   db2.exec(`
     UPDATE goals SET tool_map = replace(tool_map, '"mcp__conductor__', '"mcp__quarterdeck__')
     WHERE instr(tool_map, '"mcp__conductor__') > 0
@@ -7498,7 +7531,7 @@ var SCHEMA_VERSION, OUTDATED_MESSAGE;
 var init_migrate = __esm({
   "../core/src/migrate.ts"() {
     "use strict";
-    SCHEMA_VERSION = 25;
+    SCHEMA_VERSION = 29;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -7893,6 +7926,9 @@ function insertRun(db2, planId, trigger, status = "queued", skipReason) {
     untrusted_at: null,
     untrusted_source: null,
     untrusted_root: null,
+    secrets_read_at: null,
+    secrets_read_source: null,
+    secrets_read_paths: null,
     request: null,
     request_untrusted: 0,
     step: null,
@@ -7920,6 +7956,27 @@ function markRunUntrusted(db2, runId, source, root = source) {
     WHERE id = ? AND (untrusted_at IS NULL
       OR (untrusted_source LIKE ? AND ? NOT LIKE ?)
       OR (untrusted_source = ? AND ? <> ? AND ? NOT LIKE ?))`).run((/* @__PURE__ */ new Date()).toISOString(), source, root, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary);
+}
+function markRunSecretsRead(db2, runId, source, path) {
+  const run = db2.prepare("SELECT secrets_read_paths FROM goal_runs WHERE id = ?").get(runId);
+  if (!run) return;
+  const paths = runSecretPaths(run);
+  if (path && !paths.includes(path)) paths.push(path);
+  db2.prepare(`UPDATE goal_runs SET secrets_read_at = COALESCE(secrets_read_at, ?), secrets_read_source = COALESCE(secrets_read_source, ?),
+    secrets_read_paths = ? WHERE id = ?`).run((/* @__PURE__ */ new Date()).toISOString(), source, JSON.stringify(paths), runId);
+}
+function runSecretPaths(run) {
+  try {
+    return run.secrets_read_paths ? JSON.parse(run.secrets_read_paths) : [];
+  } catch {
+    return [];
+  }
+}
+function afterOutsideApplies(run) {
+  return !run?.secrets_read_at;
+}
+function secretsReadReason(run, category) {
+  return `this run read secrets (${run.secrets_read_source ?? "a secret"}) before it read outside content, so "${category}" isn't auto after outside content in this run`;
 }
 function listRuns(db2, planId, limit = 20, opts = {}) {
   const where = opts.includeSkipped === false ? "AND status != 'skipped'" : "";
@@ -8064,6 +8121,7 @@ var init_goals = __esm({
     WATCH_EVENTS_SOURCE = "watch events";
     RUN_SUMMARY_SOURCE = "run summary ";
     GOAL_TABLES = [
+      "guarded_checks",
       "goal_item_attempts",
       "goal_watch_events",
       "goal_watches",
@@ -8093,7 +8151,7 @@ function runVerifyCommand(command, cwd, timeoutS = DEFAULT_VERIFY_TIMEOUT_S, opt
   if (!existsSync2(cwd)) {
     return Promise.resolve(done({ passed: false, exit_code: null, output: `Working directory not found: ${cwd}`, timed_out: false }));
   }
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     let output2 = "";
     let errors = "";
     let timedOut = false;
@@ -8118,13 +8176,13 @@ function runVerifyCommand(command, cwd, timeoutS = DEFAULT_VERIFY_TIMEOUT_S, opt
     }, timeoutS * 1e3);
     child.on("error", (e) => {
       clearTimeout(timer);
-      resolve2(done({ passed: false, exit_code: null, output: `Could not run command: ${e.message}`, timed_out: false }));
+      resolve3(done({ passed: false, exit_code: null, output: `Could not run command: ${e.message}`, timed_out: false }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (timedOut && !opts.stdoutOnly) output2 = `${output2}
 [timed out after ${timeoutS}s]`.slice(-tailChars);
-      resolve2(done({ passed: !timedOut && code === 0, exit_code: code, output: output2, timed_out: timedOut, ...opts.stdoutOnly && { stderr: errors } }));
+      resolve3(done({ passed: !timedOut && code === 0, exit_code: code, output: output2, timed_out: timedOut, ...opts.stdoutOnly && { stderr: errors } }));
     });
   });
 }
@@ -8255,7 +8313,7 @@ function rejectTask(db2, planId, taskId, feedback) {
   requireAwaitingReview(task);
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const v = insertVerification(db2, { plan_id: planId, task_id: taskId, gate: "approval", passed: false, actor: "human", output: feedback });
-  const note = `Review rejected (${now}): ${feedback}`;
+  const note2 = `Review rejected (${now}): ${feedback}`;
   const answersAttemptLimit = task.external_ref?.startsWith(ATTEMPT_REF) ?? false;
   updateTask(db2, planId, taskId, {
     ...answersAttemptLimit ? { status: "completed", result: `Your answer: ${feedback.trim()}` } : {},
@@ -8264,7 +8322,7 @@ function rejectTask(db2, planId, taskId, feedback) {
     approved_at: null,
     notes: task.notes ? `${task.notes}
 
-${note}` : note,
+${note2}` : note2,
     updated_at: now
   });
   if (getPlan(db2, planId)?.kind === "goal") {
@@ -8423,10 +8481,10 @@ var init_status_check = __esm({
     STATUS_CHECK_BUDGET_MS = 2e4;
     COMMAND_TIMEOUT_MS = 15e3;
     REPO_RE = /^[\w.-]+\/[\w.-]+$/;
-    defaultRunFile = (file2, args) => new Promise((resolve2, reject) => {
+    defaultRunFile = (file2, args) => new Promise((resolve3, reject) => {
       execFile(file2, args, { timeout: COMMAND_TIMEOUT_MS, windowsHide: true, shell: false }, (err, stdout) => {
         if (err) reject(err);
-        else resolve2(String(stdout));
+        else resolve3(String(stdout));
       });
     });
     lastChecked = /* @__PURE__ */ new Map();
@@ -8526,9 +8584,10 @@ var init_schedule = __esm({
 
 // ../core/src/guarded.ts
 import { createHash } from "crypto";
-import { mkdirSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { basename, join as join2 } from "path";
-function checkGuardedPayload(command, files, env = process.env) {
+function checkGuardedPayload(command, files, env = process.env, secretFiles = []) {
   const parts = [command, ...files.map((f) => f.contents)];
   const bytes = parts.reduce((n, p) => n + Buffer.byteLength(p, "utf8"), 0);
   if (bytes > GUARDED_MAX_BYTES) {
@@ -8546,7 +8605,29 @@ function checkGuardedPayload(command, files, env = process.env) {
       if (text.includes(value)) return { ok: false, reason: `${where(i)} contains the value of the environment variable ${name}` };
     }
   }
+  for (const [i, text] of parts.entries()) {
+    for (const secret of secretFiles) {
+      if (secret.values.some((v) => text.includes(v))) return { ok: false, reason: `${where(i)} contains a value from ${secret.path}, which this run read` };
+    }
+  }
   return { ok: true };
+}
+function secretFileValues(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { path, values: [] };
+  }
+  const values = /* @__PURE__ */ new Set();
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const kv = /^(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(.*)$/.exec(line);
+    const value = kv ? kv[1].trim().replace(/^["']|["']$/g, "") : line;
+    if (value.length >= ENV_VALUE_MIN_CHARS) values.add(value);
+  }
+  return { path, values: [...values] };
 }
 function hashContents(contents) {
   return createHash("sha256").update(contents).digest("hex");
@@ -8589,6 +8670,165 @@ function claimUsedGuardedCheck(db2, runId, category) {
   db2.prepare("UPDATE guarded_checks SET recorded_at = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), row.id);
   return true;
 }
+function proposalCallsProblem(calls) {
+  if (calls.length > PROPOSAL_MAX_CALLS) return `a proposal can stage at most ${PROPOSAL_MAX_CALLS} calls (got ${calls.length})`;
+  for (const [i, c] of calls.entries()) {
+    if (typeof c.command !== "string" || !c.command.trim()) return `call ${i + 1} has no command`;
+    const bytes = Buffer.byteLength(c.command) + (c.files ?? []).reduce((n, f) => n + Buffer.byteLength(f.contents), 0);
+    if (bytes > GUARDED_MAX_BYTES) return `call ${i + 1} carries ${bytes} bytes, over the ${GUARDED_MAX_BYTES}-byte limit`;
+  }
+  return null;
+}
+function normaliseRepo(url2) {
+  let t = url2.trim();
+  if (t.endsWith("/")) t = t.slice(0, -1);
+  const q = t.lastIndexOf("/");
+  if (q < 0) return null;
+  let name = t.slice(q + 1);
+  if (name.length > 4 && name.toLowerCase().endsWith(".git")) name = name.slice(0, -4);
+  const head = t.slice(0, q);
+  const p = head.lastIndexOf("/");
+  const plain = (s) => s.length > 0 && !/\s/.test(s);
+  if (!plain(name)) return null;
+  if (p >= 0) {
+    const owner2 = head.slice(p + 1);
+    return GITHUB_HOST.test(head.slice(0, p)) && plain(owner2) ? `${owner2}/${name}`.toLowerCase() : null;
+  }
+  const k = head.toLowerCase().indexOf("github.com:");
+  if (k < 0 || !/^(?:[\w.-]+@)?$/.test(head.slice(0, k))) return null;
+  const owner = head.slice(k + "github.com:".length);
+  return plain(owner) ? `${owner}/${name}`.toLowerCase() : null;
+}
+function goalRepo(workingDir) {
+  if (!workingDir) return null;
+  if (repoCache.has(workingDir)) return repoCache.get(workingDir);
+  let repo = null;
+  try {
+    repo = normaliseRepo(execFileSync("git", ["remote", "get-url", "origin"], { cwd: workingDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 }));
+  } catch {
+    repo = null;
+  }
+  repoCache.set(workingDir, repo);
+  return repo;
+}
+function guardedTarget(command, ownRepo) {
+  const targets = [];
+  const own2 = ownRepo.toLowerCase();
+  const repoOf = (owner, name) => owner === "{owner}" && name === "{repo}" ? own2 : `${owner}/${name}`.toLowerCase();
+  let rest = command.replace(/https?:\/\/github\.com\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pull|issues)\/(\d+)[^\s'"]*/g, (_all, o, n, num) => {
+    targets.push({ repo: `${o}/${n}`.toLowerCase(), number: Number(num) });
+    return " __url__ ";
+  });
+  rest = rest.replace(/\brepos\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pulls|issues)\/(\d+)/g, (_all, o, n, num) => {
+    targets.push({ repo: repoOf(o, n), number: Number(num) });
+    return "__path__";
+  });
+  for (const part of rest.split(/[;&|\n]/)) {
+    if (/\bgh\s+api\b/.test(part) && !part.includes("__path__")) return null;
+  }
+  for (const m of rest.matchAll(/\bgh\s+(?:pr|issue)\s+[a-z-]+((?:[^;&|\n])*)/g)) {
+    let args = m[1];
+    let repo = own2;
+    const r = /(?:^|\s)(?:-R|--repo)(?:\s+|=)['"]?([^\s'"]+)['"]?/.exec(args);
+    if (r) {
+      repo = (normaliseRepo(`github.com/${r[1].replace(/^(?:https?:\/\/)?github\.com\//i, "")}`) ?? r[1]).toLowerCase();
+      args = args.replace(r[0], " ");
+    }
+    if (args.includes("__url__")) {
+      if (r) {
+        for (const t of targets) if (t.repo !== repo) targets.push({ repo, number: t.number });
+      }
+      continue;
+    }
+    const n = /(?:^|\s)['"]?#?(\d+)['"]?(?=\s|$)/.exec(args);
+    if (!n) return null;
+    targets.push({ repo, number: Number(n[1]) });
+  }
+  return targets.length > 0 ? targets : null;
+}
+function runTargets(db2, runId) {
+  const out = /* @__PURE__ */ new Set();
+  const rows = db2.prepare("SELECT line FROM goal_watch_events WHERE run_id = ?").all(runId);
+  for (const { line } of rows) {
+    const m = /^\s*#?(\d+)/.exec(line);
+    if (m) out.add(Number(m[1]));
+  }
+  const request = getRun(db2, runId)?.request;
+  if (request) {
+    const m = /#(\d+)\b/.exec(request) ?? /(?:^|\s)(\d+)(?=\s|$|[.,;:!?])/.exec(request);
+    if (m) out.add(Number(m[1]));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+function checkGuardedTarget(command, ownRepo, allowed) {
+  if (allowed.length === 0) return "this run wasn't started for a PR or issue, so it can't make guarded calls: propose it instead";
+  if (!ownRepo) return "the goal's repo can't be read from its working folder's origin remote, so it can't make guarded calls: propose it instead";
+  const targets = guardedTarget(command, ownRepo);
+  if (!targets) return "the call's target (a repo and a PR or issue number) can't be read from the command, so it can't be a guarded call: propose it instead";
+  const set2 = allowed.map((n) => `#${n}`).join(", ");
+  for (const t of targets) {
+    if (t.repo !== ownRepo.toLowerCase()) return `the call names ${t.repo} #${t.number}, but this goal's repo is ${ownRepo}: propose it instead`;
+    if (!allowed.includes(t.number)) return `the call names #${t.number}, but this run was started for ${set2}: propose it instead`;
+  }
+  return null;
+}
+function clearProposalCalls(db2, key, dataDir) {
+  const gone = db2.prepare("DELETE FROM guarded_checks WHERE task_id = ?").run(key);
+  if (Number(gone.changes) > 0) rmSync(join2(dataDir, "guarded", key.replace("/", "-")), { recursive: true, force: true });
+}
+function stageProposalCalls(db2, task, category, calls, opts) {
+  const problem = proposalCallsProblem(calls);
+  if (problem) throw new Error(problem);
+  const key = proposalKey(task.plan_id, task.id);
+  clearProposalCalls(db2, key, opts.dataDir);
+  if (calls.length === 0) return [];
+  const dir = join2(opts.dataDir, "guarded", key.replace("/", "-"));
+  mkdirSync(dir, { recursive: true });
+  return calls.map((call, n) => {
+    let staged = call.command;
+    const copies = (call.files ?? []).map((f, i) => {
+      const path = join2(dir, `${n}-${i}-${basename(f.path.replace(/\\/g, "/"))}`);
+      writeFileSync(path, f.contents);
+      staged = staged.split(f.path).join(path);
+      return { path, contents: f.contents };
+    });
+    const rec = recordGuardedCheck(db2, { id: task.run_id ?? "", plan_id: task.plan_id }, category, staged, copies);
+    db2.prepare("UPDATE guarded_checks SET task_id = ? WHERE id = ?").run(key, rec.id);
+    return staged;
+  });
+}
+function proposalCalls(db2, key) {
+  const rows = db2.prepare("SELECT command, file_hashes, used_at FROM guarded_checks WHERE task_id = ? ORDER BY created_at, rowid").all(key);
+  return rows.map((r) => ({ command: r.command, files: Object.keys(JSON.parse(r.file_hashes)), used_at: r.used_at }));
+}
+function proposalHasCalls(db2, key) {
+  return db2.prepare("SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1").get(key) !== void 0;
+}
+function approvedStagedCall(db2, planId, category, command) {
+  const row = db2.prepare(`
+    SELECT g.task_id AS key, g.file_hashes AS file_hashes FROM guarded_checks g
+    JOIN tasks t ON g.task_id = t.plan_id || '/' || t.id
+    WHERE t.plan_id = ? AND t.status = 'active' AND t.archived_at IS NULL AND t.approved_at IS NOT NULL
+      AND json_extract(t.state, '$.action.category') = ? AND g.command = ? AND g.used_at IS NULL
+    ORDER BY t.created_at, t.rowid, g.created_at, g.rowid LIMIT 1
+  `).get(planId, category, command);
+  return row ? { key: row.key, files: Object.keys(JSON.parse(row.file_hashes)) } : null;
+}
+function consumeProposalCall(db2, key, command, readFile) {
+  const rows = db2.prepare("SELECT * FROM guarded_checks WHERE task_id = ? AND command = ? ORDER BY created_at, rowid").all(key, command);
+  const unused = rows.filter((r) => r.used_at === null);
+  if (rows.length === 0) return { ok: false, reason: "no staged call of the approved proposal matches this exact command" };
+  if (unused.length === 0) return { ok: false, reason: "this staged call was already made; each is good for one call" };
+  const check2 = { ...unused[0], file_hashes: JSON.parse(unused[0].file_hashes) };
+  for (const [path, hash2] of Object.entries(check2.file_hashes)) {
+    const now = readFile(path);
+    if (now === null) return { ok: false, reason: `staged file ${path} is gone` };
+    if (hashContents(now) !== hash2) return { ok: false, reason: `staged file ${path} changed after it was proposed` };
+  }
+  const usedAt = (/* @__PURE__ */ new Date()).toISOString();
+  db2.prepare("UPDATE guarded_checks SET used_at = ? WHERE id = ? AND used_at IS NULL").run(usedAt, check2.id);
+  return { ok: true, check: { ...check2, used_at: usedAt } };
+}
 function stageGuardedCall(db2, runId, command, files, opts) {
   const run = getRun(db2, runId);
   if (!run || !["queued", "running"].includes(run.status)) return { ok: false, reason: "this run is not running" };
@@ -8598,9 +8838,17 @@ function stageGuardedCall(db2, runId, command, files, opts) {
   if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== "auto") {
     return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" };
   }
-  const check2 = checkGuardedPayload(command, files, opts.env ?? process.env);
+  const ownRepo = opts.repo !== void 0 ? opts.repo : goalRepo(db2.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? null);
+  const targetRefusal = checkGuardedTarget(command, ownRepo, runTargets(db2, runId));
+  if (targetRefusal) return { ok: false, reason: targetRefusal };
+  const check2 = checkGuardedPayload(command, files, opts.env ?? process.env, runSecretPaths(run).map(secretFileValues));
   if (!check2.ok) return check2;
-  if (opts.dryRun) return { ok: true, category, command, files: [] };
+  if (!afterOutsideApplies(run)) return { ok: false, reason: secretsReadReason(run, category) };
+  if (opts.dryRun) {
+    const instructions = goal.instructions.length > GUARDED_JOB_CHARS ? `${goal.instructions.slice(0, GUARDED_JOB_CHARS - 1)}\u2026` : goal.instructions;
+    const job = [goal.objective, instructions].filter((t) => t.trim()).join("\n\n");
+    return { ok: true, category, command, files: [], goal_name: getPlan(db2, run.plan_id)?.name ?? run.plan_id, job };
+  }
   const dir = join2(opts.dataDir, "guarded", runId);
   mkdirSync(dir, { recursive: true });
   const stamp = newId("gf");
@@ -8614,13 +8862,14 @@ function stageGuardedCall(db2, runId, command, files, opts) {
   recordGuardedCheck(db2, run, category, staged, copies);
   return { ok: true, category, command: staged, files: copies.map((c) => c.path) };
 }
-var GUARDED_MAX_BYTES, ENV_VALUE_MIN_CHARS, TOKEN_RULES;
+var GUARDED_MAX_BYTES, ENV_VALUE_MIN_CHARS, TOKEN_RULES, PROPOSAL_MAX_CALLS, GITHUB_HOST, repoCache, proposalKey, GUARDED_JOB_CHARS;
 var init_guarded = __esm({
   "../core/src/guarded.ts"() {
     "use strict";
     init_goals();
     init_goal_engine();
     init_guard();
+    init_queries();
     GUARDED_MAX_BYTES = 64 * 1024;
     ENV_VALUE_MIN_CHARS = 8;
     TOKEN_RULES = [
@@ -8630,13 +8879,19 @@ var init_guarded = __esm({
       { name: "an AWS access key id", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },
       { name: "a private key block", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ }
     ];
+    PROPOSAL_MAX_CALLS = 10;
+    GITHUB_HOST = /^(?:(?:https?|ssh|git):\/\/)?(?:[\w.-]+@)?github\.com$/i;
+    repoCache = /* @__PURE__ */ new Map();
+    proposalKey = (planId, taskId) => `${planId}/${taskId}`;
+    GUARDED_JOB_CHARS = 1e3;
   }
 });
 
 // ../core/src/guard.ts
 import { homedir as homedir2 } from "os";
 import { join as join3, posix } from "path";
-import { readFileSync } from "fs";
+import { readFileSync as readFileSync2 } from "fs";
+import { execFileSync as execFileSync2 } from "child_process";
 function canonicalToolName(name) {
   return name.startsWith(PLUGIN_QUARTERDECK_TOOL_PREFIX) ? QUARTERDECK_TOOL_PREFIX + name.slice(PLUGIN_QUARTERDECK_TOOL_PREFIX.length) : name;
 }
@@ -8668,17 +8923,67 @@ function matchToolRule(rawMap, rawName, input2) {
   }
   return null;
 }
-function untrustedLabel(toolMap, toolName, input2) {
+function untrustedLabel(toolMap, toolName, input2, ownOrigin = null) {
   const rule = matchToolRule(toolMap, toolName, input2);
   if (rule?.category === UNTRUSTED_CATEGORY) {
     const command = COMMAND_RULE.exec(rule.pattern);
     if (command) {
-      const pattern = command[2].trim().replace(/\*+$/, "").trim();
+      const pattern = trimTrailing(command[2].trim(), "*").trim();
       return pattern ? `${command[1]}: ${pattern}` : command[1];
     }
     return toolName;
   }
-  return matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null ? toolName : null;
+  if (matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null) return toolName;
+  let network = null;
+  if (SHELL_TOOLS.has(toolName) && typeof input2?.command === "string" && !(rule && !COMMAND_RULE.test(rule.pattern))) {
+    for (const part of rule ? commandParts(input2.command) : [input2.command]) {
+      if (rule && matchToolRule(toolMap, toolName, { command: part }) !== null) continue;
+      network = builtinNetworkPart(part, ownOrigin);
+      if (network !== null) break;
+    }
+  }
+  return network !== null ? `${toolName}: ${network} (built-in network command)` : null;
+}
+function normaliseRemote(url2) {
+  return trimTrailing(url2.trim().replace(/^[a-z+]+:\/\//i, "").replace(/^[^@/]+@/, "").replace(/:(?!\d)/, "/"), "/").replace(/\.git$/i, "").toLowerCase();
+}
+function trimTrailing(s, ch) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === ch) end--;
+  return s.slice(0, end);
+}
+function gitOwnRemote(part, ownOrigin) {
+  const words = part.split(/\s+/).slice(2).filter((w) => !w.startsWith("-"));
+  if (/^git\s+clone\b/i.test(part)) return ownOrigin !== null && words.length > 0 && normaliseRemote(words[0]) === normaliseRemote(ownOrigin);
+  const remote = words[0];
+  if (remote === void 0 || remote.toLowerCase() === "origin") return true;
+  return ownOrigin !== null && normaliseRemote(remote) === normaliseRemote(ownOrigin);
+}
+function builtinNetworkPart(command, ownOrigin = null) {
+  for (const part of commandParts(command)) {
+    const hit = BUILTIN_NETWORK_RES.find(([, re]) => re.test(part));
+    if (!hit) continue;
+    const name = hit[0].replace(/\*$/, "").trim();
+    if (/^gh\s+api\b/i.test(part)) {
+      const method = /(?:^|\s)(?:-X|--method)(?:\s+|=)(\S+)/.exec(part)?.[1];
+      if (method && method.replace(/["']/g, "").toUpperCase() !== "GET") continue;
+    }
+    if (/^git\s/i.test(part) && gitOwnRemote(part, ownOrigin)) continue;
+    return name;
+  }
+  return null;
+}
+function originUrl(workingDir) {
+  if (!originCache.has(workingDir)) {
+    let url2 = null;
+    try {
+      url2 = execFileSync2("git", ["remote", "get-url", "origin"], { cwd: workingDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 }).trim() || null;
+    } catch {
+      url2 = null;
+    }
+    originCache.set(workingDir, url2);
+  }
+  return originCache.get(workingDir);
 }
 function quarterdeckDataPaths(env = process.env, home = homedir2()) {
   const db2 = defaultDbPath(env, home);
@@ -8737,6 +9042,26 @@ function touchesSecrets(toolName, input2) {
   }
   return null;
 }
+function secretFilePaths(toolName, input2, workingDir) {
+  if (!input2) return [];
+  const str2 = (k) => typeof input2[k] === "string" ? input2[k] : "";
+  const found = [];
+  if (FILE_TOOLS.has(toolName)) {
+    const p = str2("file_path") || str2("notebook_path");
+    if (p && SECRET_PATH.test(p)) found.push(p);
+  } else if (SHELL_TOOLS.has(toolName)) {
+    for (const m of str2("command").matchAll(ENV_FILE)) found.push(m[1]);
+  }
+  return [...new Set(found.map((p) => resolvePath(workingDir, p)))];
+}
+function tripIfProbing(db2, run) {
+  const markedAt = getRun(db2, run.id)?.untrusted_at;
+  if (!markedAt) return;
+  const rows = db2.prepare(`SELECT category FROM goal_tool_calls WHERE run_id = ? AND decision = 'deny' AND created_at >= ?
+    AND (category IN (${PROBING_CATEGORIES.map(() => "?").join(", ")}) OR reason LIKE ?)`).all(run.id, markedAt, ...PROBING_CATEGORIES, `%${OFF_REASON}%`);
+  if (rows.length < TRIP_THRESHOLD) return;
+  tripRun(db2, run.id, `${rows.length} refusals (${[...new Set(rows.map((r) => r.category))].join(", ")})`);
+}
 function record2(db2, run, toolName, category, decision, reason) {
   db2.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -8744,17 +9069,25 @@ function record2(db2, run, toolName, category, decision, reason) {
   `).run(newId("tc"), run.plan_id, run.id, toolName, category, decision, reason, (/* @__PURE__ */ new Date()).toISOString());
 }
 function guardToolCallForRun(db2, runId, toolName, input2, paths = quarterdeckDataPaths()) {
-  const run = db2.prepare("SELECT * FROM goal_runs WHERE id = ? AND status IN ('queued', 'running')").get(runId);
+  const run = db2.prepare("SELECT * FROM goal_runs WHERE id = ? AND (status IN ('queued', 'running') OR tripped_at IS NOT NULL)").get(runId);
   return run ? guardRun(db2, run, toolName, input2, paths) : { decision: "allow" };
 }
 function guardRun(db2, run, toolName, input2, paths) {
   const goal = getGoal(db2, run.plan_id);
   if (!goal) return { decision: "allow" };
+  if (run.tripped_at) {
+    const tool = canonicalToolName(toolName);
+    if (tool.startsWith(QUARTERDECK_TOOL_PREFIX) && TRIPPED_ALLOWED.has(tool.slice(QUARTERDECK_TOOL_PREFIX.length))) return { decision: "allow", run_id: run.id };
+    const reason2 = `Quarterdeck goal guard: this run tripped (${run.tripped_reason ?? "repeated refusals"}) and has been ended. Only end_run and fail_run are allowed now: stop.`;
+    record2(db2, run, toolName, TRIPPED_CATEGORY, "deny", reason2);
+    return { decision: "deny", category: TRIPPED_CATEGORY, run_id: run.id, reason: reason2 };
+  }
   const workingDir = db2.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
   const command = SHELL_TOOLS.has(toolName) && typeof input2?.command === "string" ? input2.command : null;
   const listed = matchToolCategory(goal.tool_map, toolName, input2);
   let guardedMiss = null;
-  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === "auto" && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db2, run.id, command)) {
+  const afterOutside = afterOutsideApplies(run);
+  if (afterOutside && command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) === "auto" && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db2, run.id, command)) {
     const match = consumeGuardedCheck(db2, run.id, listed, command, readStaged);
     if (match.ok) {
       record2(db2, run, toolName, listed, "allow", AFTER_OUTSIDE_NOTE);
@@ -8762,24 +9095,52 @@ function guardRun(db2, run, toolName, input2, paths) {
     }
     guardedMiss = match.reason;
   }
+  if (command !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) !== "off") {
+    const staged = approvedStagedCall(db2, run.plan_id, listed, command);
+    if (staged !== null) {
+      const rest = staged.files.reduce((c, f) => c.split(f).join(""), command);
+      if (touchesQuarterdeckData(toolName, { ...input2, command: rest }, workingDir, paths) === null) {
+        const item = staged.key.slice(staged.key.indexOf("/") + 1);
+        const match = consumeProposalCall(db2, staged.key, command, readStaged);
+        if (match.ok) {
+          record2(db2, run, toolName, listed, "allow", `staged call of item ${item}`);
+          return { decision: "allow", category: listed, run_id: run.id };
+        }
+        const reason2 = `Quarterdeck goal guard: the approved proposal for "${listed}" covers only the exact calls it staged, each once, with their files unchanged (item ${item}: ${match.reason}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
+        record2(db2, run, toolName, listed, "deny", reason2);
+        return { decision: "deny", category: listed, run_id: run.id, reason: reason2 };
+      }
+    }
+  }
   const touched2 = touchesQuarterdeckData(toolName, input2, workingDir, paths);
   if (touched2 !== null) {
     const reason2 = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched2}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`;
     record2(db2, run, toolName, QUARTERDECK_DATA_CATEGORY, "deny", reason2);
+    tripIfProbing(db2, run);
     return { decision: "deny", category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason: reason2 };
   }
-  if (goal.auto_after_outside.length > 0 && getRun(db2, run.id)?.untrusted_source) {
+  if (goal.auto_after_outside.length > 0) {
     const secret = touchesSecrets(toolName, input2);
     if (secret !== null) {
-      const reason2 = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`;
-      record2(db2, run, toolName, SECRETS_CATEGORY, "deny", reason2);
-      return { decision: "deny", category: SECRETS_CATEGORY, run_id: run.id, reason: reason2 };
+      if (getRun(db2, run.id)?.untrusted_source) {
+        const reason2 = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`;
+        record2(db2, run, toolName, SECRETS_CATEGORY, "deny", reason2);
+        tripIfProbing(db2, run);
+        return { decision: "deny", category: SECRETS_CATEGORY, run_id: run.id, reason: reason2 };
+      }
+      for (const path of secretFilePaths(toolName, input2, workingDir)) markRunSecretsRead(db2, run.id, secret, path);
+      markRunSecretsRead(db2, run.id, secret);
     }
   }
-  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input2);
-  if (untrustedRead !== null) markRunUntrusted(db2, run.id, untrustedRead);
   const category = matchToolCategory(goal.tool_map, toolName, input2);
-  if (!category) return { decision: "allow", run_id: run.id };
+  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input2, category === null && command !== null ? originUrl(workingDir) : null);
+  if (untrustedRead !== null) markRunUntrusted(db2, run.id, untrustedRead);
+  if (!category) {
+    const network = untrustedRead?.endsWith(" (built-in network command)") ? untrustedRead.slice(untrustedRead.indexOf(": ") + 2, -" (built-in network command)".length) : null;
+    if (network !== null) record2(db2, run, toolName, UNTRUSTED_CATEGORY, "allow", `built-in network command: ${network}`);
+    return { decision: "allow", run_id: run.id };
+  }
+  if (category === TRUSTED_READ_CATEGORY) return { decision: "allow", category, run_id: run.id };
   if (category === UNTRUSTED_CATEGORY) {
     record2(db2, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
@@ -8790,25 +9151,52 @@ function guardRun(db2, run, toolName, input2, paths) {
     record2(db2, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
   }
-  if (guardedMiss === null && mode === "auto" && goal.auto_after_outside.includes(category)) {
+  const secretsOff = mode === "auto" && goal.auto_after_outside.includes(category) && !afterOutsideApplies(getRun(db2, run.id));
+  if (guardedMiss === null && !secretsOff && mode === "auto" && goal.auto_after_outside.includes(category)) {
     guardedMiss = "this call was not staged by guarded_run";
   }
   if (mode === "off") {
     const reason2 = `Quarterdeck goal guard: "${category}" is off for this goal, so ${toolName} is not allowed. Don't take or propose this action.`;
     record2(db2, run, toolName, category, "deny", reason2);
+    tripIfProbing(db2, run);
     return { decision: "deny", category, run_id: run.id, reason: reason2 };
   }
-  const approved = db2.prepare(`
-    SELECT COUNT(*) AS n FROM tasks
+  const approvedItems = db2.prepare(`
+    SELECT id FROM tasks
     WHERE plan_id = ? AND status = 'active' AND archived_at IS NULL AND approved_at IS NOT NULL
       AND json_extract(state, '$.action.category') = ?
-  `).get(run.plan_id, category).n;
-  if (approved > 0) {
+    ORDER BY created_at, rowid
+  `).all(run.plan_id, category);
+  let stagedMiss = null;
+  let categoryWide = false;
+  for (const item of approvedItems) {
+    const key = proposalKey(run.plan_id, item.id);
+    if (!proposalHasCalls(db2, key)) {
+      categoryWide = true;
+      continue;
+    }
+    if (command === null) {
+      stagedMiss ??= `item ${item.id} was approved for its staged commands only`;
+      continue;
+    }
+    const match = consumeProposalCall(db2, key, command, readStaged);
+    if (match.ok) {
+      record2(db2, run, toolName, category, "allow", `staged call of item ${item.id}`);
+      return { decision: "allow", category, run_id: run.id };
+    }
+    stagedMiss = `item ${item.id}: ${match.reason}`;
+  }
+  if (categoryWide) {
     record2(db2, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
   }
+  if (stagedMiss !== null) {
+    const reason2 = `Quarterdeck goal guard: the approved proposal for "${category}" covers only the exact calls it staged, each once, with their files unchanged (${stagedMiss}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
+    record2(db2, run, toolName, category, "deny", reason2);
+    return { decision: "deny", category, run_id: run.id, reason: reason2 };
+  }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`;
-  const guardedHow = guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : "";
+  const guardedHow = secretsOff ? ` You let "${category}" stay auto after outside content, but ${secretsReadReason(getRun(db2, run.id), category)}.` : guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : "";
   const reason = untrusted !== null ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it.${guardedHow} ${how}` : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`;
   record2(db2, run, toolName, category, "deny", reason);
   return { decision: "deny", category, run_id: run.id, reason };
@@ -8828,7 +9216,7 @@ function recordRefusal(db2, runId, toolName, input2, paths = quarterdeckDataPath
   const workingDir = db2.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
   if (touchesQuarterdeckData(toolName, input2, workingDir, paths) !== null) return null;
   const matched = matchToolRule(goal.tool_map, toolName, input2);
-  if (!matched || matched.category === UNTRUSTED_CATEGORY) return null;
+  if (!matched || matched.category === UNTRUSTED_CATEGORY || matched.category === TRUSTED_READ_CATEGORY) return null;
   const { category, pattern } = matched;
   const mode = autonomyFor(goal, category);
   if (mode === "off") return null;
@@ -8845,7 +9233,7 @@ function recordRefusal(db2, runId, toolName, input2, paths = quarterdeckDataPath
   record2(db2, run, toolName, category, "refused", rule);
   return { category, rule };
 }
-var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE, SECRET_PATH, SECRET_COMMAND, AFTER_OUTSIDE_NOTE, readStaged;
+var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, TRUSTED_READ_CATEGORY, BUILTIN_NETWORK, BUILTIN_NETWORK_RES, originCache, QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE, SECRET_PATH, SECRET_COMMAND, ENV_FILE, TRIP_THRESHOLD, PROBING_CATEGORIES, OFF_REASON, TRIPPED_CATEGORY, TRIPPED_ALLOWED, AFTER_OUTSIDE_NOTE, readStaged;
 var init_guard = __esm({
   "../core/src/guard.ts"() {
     "use strict";
@@ -8867,6 +9255,33 @@ var init_guard = __esm({
       ...["get_*", "search_*", "list_drafts", "download_*"].flatMap((t) => [`mcp__*Gmail*__${t}`, `mcp__*gmail*__${t}`])
     ];
     BUILTIN_UNTRUSTED_MAP = Object.fromEntries(BUILTIN_UNTRUSTED.map((p) => [p, UNTRUSTED_CATEGORY]));
+    TRUSTED_READ_CATEGORY = "trusted-read";
+    BUILTIN_NETWORK = [
+      "curl*",
+      "wget*",
+      "Invoke-WebRequest*",
+      "iwr *",
+      "Invoke-RestMethod*",
+      "irm *",
+      "ssh *",
+      "scp *",
+      "nc *",
+      "ncat *",
+      "npm install*",
+      "npm i *",
+      "npm view*",
+      "npm info*",
+      "npx *",
+      "pip install*",
+      "pip download*",
+      "gh api*",
+      "git clone*",
+      "git fetch*",
+      "git pull*",
+      "git ls-remote*"
+    ];
+    BUILTIN_NETWORK_RES = BUILTIN_NETWORK.map((p) => [p, globRegExp(p, "i")]);
+    originCache = /* @__PURE__ */ new Map();
     QUARTERDECK_DATA_CATEGORY = "quarterdeck-data";
     SECRETS_CATEGORY = "secrets";
     normPath = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -8878,10 +9293,16 @@ var init_guard = __esm({
     DB_VARIABLE = /\b(QUARTERDECK|CONDUCTOR)_DB\b/i;
     SECRET_PATH = /(^|[\\/\s"'`=])(\.ssh|\.aws|\.npmrc|\.config[\\/]gh|\.env(\.[\w.-]*)?)(?![\w-])/i;
     SECRET_COMMAND = /^(env|printenv)(\s|$)|^gh\s+auth\s+token\b|^(get-childitem|gci|ls|dir|cat|type|get-content|gc)\s+env:/i;
+    ENV_FILE = /(?:^|[\s"'`=])((?:[^\s"'`=]*[\\/])?\.env(?:\.[\w.-]*)?)(?![\w-])/gi;
+    TRIP_THRESHOLD = 3;
+    PROBING_CATEGORIES = [QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY];
+    OFF_REASON = "is off for this goal";
+    TRIPPED_CATEGORY = "tripped";
+    TRIPPED_ALLOWED = /* @__PURE__ */ new Set(["end_run", "fail_run"]);
     AFTER_OUTSIDE_NOTE = "went through after outside content because you allowed it (checked by guarded_run)";
     readStaged = (path) => {
       try {
-        return readFileSync(path);
+        return readFileSync2(path);
       } catch {
         return null;
       }
@@ -8954,9 +9375,46 @@ function describeStatusRules(r) {
 function listWatches(db2, planId) {
   return db2.prepare("SELECT * FROM goal_watches WHERE plan_id = ? ORDER BY name").all(planId).map(deserializeWatch);
 }
+function watchHealth(db2, planId) {
+  return db2.prepare("SELECT name, last_checked_at, last_line_count, last_fired_at, fail_count FROM goal_watches WHERE plan_id = ? ORDER BY name").all(planId);
+}
 function getWatch(db2, id) {
   const r = db2.prepare("SELECT * FROM goal_watches WHERE id = ?").get(id);
   return r ? deserializeWatch(r) : void 0;
+}
+function fixedMatch(pattern) {
+  if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false;
+  const rest = withoutClassesAndEscapes(pattern).replace(/\(\?<?[:=!]/g, "(");
+  return !/[.+*?{|]|\\[wWdDsS]/.test(rest);
+}
+function withoutClassesAndEscapes(pattern) {
+  let out = "";
+  let unclosed = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\") {
+      const next = pattern[i + 1];
+      if (next !== void 0 && "wWdDsS".includes(next)) out += c + next;
+      i++;
+      continue;
+    }
+    if (c === "[" && !unclosed) {
+      let j = i + 1;
+      while (j < pattern.length && pattern[j] !== "]") j += pattern[j] === "\\" ? 2 : 1;
+      if (j < pattern.length) {
+        i = j;
+        continue;
+      }
+      unclosed = true;
+    }
+    out += c;
+  }
+  return out;
+}
+function matchWarning(w) {
+  if (w.kind !== "tool" || !w.match || !fixedMatch(w.match)) return null;
+  const fix = "capture something that differs per item, e.g. (\\w[^\xB7\\n]*) \xB7 <listing title>";
+  return w.fires === "change" ? `match "${w.match}" can only give one fixed line, so it only tells "present" from "absent", not one item from another: to tell items apart, ${fix}` : `match "${w.match}" can only give one fixed line, so every item looks the same: ${fix}`;
 }
 function validateWatchSpec(db2, planId, name, spec) {
   const goal = getGoal(db2, planId);
@@ -9078,7 +9536,9 @@ function validateWatchSpec(db2, planId, name, spec) {
     what.command = command;
     what.match = given.match?.trim() || null;
   }
-  return { label, every, fires, statusRules, rulesText, what, ignore, urgent };
+  const warning = matchWarning({ kind: what.kind, match: what.match, fires });
+  const warnings = warning ? [warning] : [];
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent, warnings };
 }
 function setWatch(db2, planId, name, spec) {
   const { label, every, fires, statusRules, rulesText, what, ignore, urgent } = validateWatchSpec(db2, planId, name, spec);
@@ -9099,7 +9559,7 @@ function setWatch(db2, planId, name, spec) {
   } else {
     db2.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+        last_checked_at = NULL, last_line_count = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
     `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id);
     db2.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL").run(existing.id);
   }
@@ -9124,12 +9584,39 @@ function removeWatch(db2, planId, name) {
   db2.prepare("DELETE FROM goal_watches WHERE id = ?").run(watch.id);
   return true;
 }
+function resetWatch(db2, watchId) {
+  db2.prepare(`
+    UPDATE goal_watches SET seen = '[]', baseline_at = NULL, last_checked_at = NULL, last_line_count = NULL, asked_at = NULL,
+      last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+  `).run(watchId);
+  db2.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL").run(watchId);
+}
 function watchDue(watch, now = /* @__PURE__ */ new Date()) {
   if (!watch.last_checked_at) return true;
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 6e4;
 }
 function watchFailing(watch) {
   return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch);
+}
+function watchNeverSaw(watch, now = /* @__PURE__ */ new Date()) {
+  if (!watch.baseline_at) return false;
+  if (watch.status_rules) return false;
+  if (watch.seen.length > (watch.fires === "change" ? 0 : 1)) return false;
+  const baseline = new Date(watch.baseline_at).getTime();
+  if (watch.last_fired_at && new Date(watch.last_fired_at).getTime() >= baseline) return false;
+  const wait = Math.max(WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS * watch.every_minutes * 6e4);
+  return now.getTime() - baseline >= wait;
+}
+function firstCheckWarnings(watch, lines) {
+  if (!lines.length) return ["the first check got zero lines: if its source should have some (an inbox, a listings page), the watch may never see anything"];
+  if (lines.length === 1 && watch.fires === "new" && !watch.status_rules) return ["every line the first check got is the same one: if its source should have several, the watch may only ever see that line"];
+  return [];
+}
+function sampleLines(lines, n = 3) {
+  return lines.slice(0, n).map((l) => JSON.stringify(l.length > 80 ? `${l.slice(0, 80)}\u2026` : l)).join(", ");
+}
+function neverSawHint(name) {
+  return `watch ${name} has never seen anything: check the source yourself and propose a fix with propose_watch`;
 }
 function watchStopped(watch) {
   return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER;
@@ -9192,7 +9679,7 @@ function recordWatchLines(db2, watchId, result, now = /* @__PURE__ */ new Date()
     }
     const insert = db2.prepare("INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)");
     for (const line of fresh) insert.run(newId("wev"), watchId, watch.plan_id, line, at, duringRun);
-    db2.prepare("UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?").run(JSON.stringify(seen), at, at, watchId);
+    db2.prepare("UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, last_line_count = ?, fail_count = 0 WHERE id = ?").run(JSON.stringify(seen), at, at, result.lines.length, watchId);
     if (watch.last_error !== null) db2.prepare("UPDATE goal_watches SET last_error = NULL WHERE id = ?").run(watchId);
     if (fresh.length) db2.prepare("UPDATE goal_watches SET last_fired_at = ? WHERE id = ?").run(at, watchId);
     db2.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NOT NULL AND created_at < ?").run(watchId, new Date(now.getTime() - EVENT_RETENTION_MS).toISOString());
@@ -9270,32 +9757,50 @@ function countUnqueuedWatchEvents(db2, planId) {
 function markWatchEventsQueued(db2, planId, now = /* @__PURE__ */ new Date()) {
   db2.prepare("UPDATE goal_watch_events SET queued_at = ? WHERE plan_id = ? AND run_id IS NULL AND queued_at IS NULL").run(now.toISOString(), planId);
 }
-function takeWatchEvents(db2, planId, runId) {
-  if (runId) {
-    db2.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
-    db2.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
-      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND e.seen_during_run = (
-        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
-        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1))`).run(runId, runId, planId, runId, runId);
-  }
+function runWatchEvents(db2, planId, runId) {
   const rows = db2.prepare(`
-    SELECT e.line, COALESCE(w.name, 'a removed watch') AS watch
+    SELECT e.id, e.line, e.attempts, COALESCE(w.name, 'a removed watch') AS watch
     FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id
     WHERE e.plan_id = ? AND ${runId ? "e.run_id = ?" : "e.run_id IS NULL"}
     ORDER BY e.created_at, e.rowid
   `).all(...runId ? [planId, runId] : [planId]);
+  const counts = /* @__PURE__ */ new Map();
+  return rows.map((r) => {
+    const n = (counts.get(r.watch) ?? 0) + 1;
+    counts.set(r.watch, n);
+    return { id: r.id, watch: r.watch, line: r.line, attempts: Number(r.attempts), shown: n <= WATCH_BRIEF_LINES };
+  });
+}
+function takeWatchEvents(db2, planId, runId) {
+  if (runId) {
+    const waiting = new Set(db2.prepare("SELECT id FROM goal_watch_events WHERE plan_id = ? AND run_id IS NULL").all(planId).map((r) => r.id));
+    db2.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
+    const bump = db2.prepare("UPDATE goal_watch_events SET attempts = attempts + 1 WHERE id = ?");
+    for (const e of runWatchEvents(db2, planId, runId)) if (e.shown && waiting.has(e.id)) bump.run(e.id);
+    db2.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
+      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND (e.attempts > 1 OR e.seen_during_run = (
+        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
+        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1)))`).run(runId, runId, planId, runId, runId);
+  }
   const byWatch = /* @__PURE__ */ new Map();
-  for (const r of rows) byWatch.set(r.watch, [...byWatch.get(r.watch) ?? [], r.line]);
-  return [...byWatch.entries()].map(([watch, lines]) => ({
-    watch,
-    new: lines.slice(0, WATCH_BRIEF_LINES),
-    omitted: Math.max(0, lines.length - WATCH_BRIEF_LINES)
-  }));
+  for (const e of runWatchEvents(db2, planId, runId)) byWatch.set(e.watch, [...byWatch.get(e.watch) ?? [], e]);
+  return [...byWatch.entries()].map(([watch, events]) => {
+    const shown = events.filter((e) => e.shown);
+    const carried = shown.filter((e) => e.attempts > 1).map((e) => ({ line: e.line, attempts: e.attempts - 1 }));
+    return { watch, new: shown.map((e) => e.line), omitted: events.length - shown.length, ...carried.length ? { carried_over: carried } : {} };
+  });
+}
+function releaseUnhandledWatchEvents(db2, runId, handledIds) {
+  const keep = new Set(handledIds);
+  const release = db2.prepare("UPDATE goal_watch_events SET run_id = NULL, queued_at = NULL WHERE id = ?");
+  for (const r of db2.prepare("SELECT id FROM goal_watch_events WHERE run_id = ?").all(runId)) {
+    if (!keep.has(r.id)) release.run(r.id);
+  }
 }
 function releaseWatchEvents(db2, runId, opts = {}) {
   db2.prepare(`UPDATE goal_watch_events SET run_id = NULL${opts.requeue ? ", queued_at = NULL" : ""} WHERE run_id = ?`).run(runId);
 }
-var WATCH_MAX_STEPS, WATCH_MAX_TRIES, WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_CLEANUP_STOP_AFTER, WATCH_CLEANUP_STOPPED, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS, JSON_PATH;
+var WATCH_MAX_STEPS, WATCH_MAX_TRIES, WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_CLEANUP_STOP_AFTER, WATCH_CLEANUP_STOPPED, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS, JSON_PATH, WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS;
 var init_watches = __esm({
   "../core/src/watches.ts"() {
     "use strict";
@@ -9324,6 +9829,8 @@ var init_watches = __esm({
     WATCH_STATUS_CHARS = 40;
     EVENT_RETENTION_MS = 30 * 864e5;
     JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/;
+    WATCH_NEVER_SAW_MS = 24 * 60 * 6e4;
+    WATCH_NEVER_SAW_CHECKS = 3;
   }
 });
 
@@ -9468,7 +9975,7 @@ function applyGoalChanges(db2, planId, changes) {
       const before = watches.find((w) => w.name === name.trim());
       const after = setWatch(db2, planId, name, spec);
       if (before && describeWatch(before) === describeWatch(after) && before.every_minutes === after.every_minutes && before.fires === after.fires && JSON.stringify(before.status_rules) === JSON.stringify(after.status_rules)) continue;
-      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}`);
+      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}${matchWarning(after) ? `. Warning: ${matchWarning(after)}` : ""}`);
     }
     if (model !== void 0 && model !== goal.model) {
       updateGoal(db2, planId, { model });
@@ -9641,6 +10148,57 @@ var init_health = __esm({
   }
 });
 
+// ../core/src/outside-text.ts
+function isHidden(code) {
+  return code < 32 || code >= 127 && code <= 159 || code >= 8203 && code <= 8207 || code >= 8234 && code <= 8238 || code >= 8294 && code <= 8297;
+}
+function isInvisible(code) {
+  if (code === 9 || code === 10 || code === 13) return false;
+  return isHidden(code) || code >= 8288 && code <= 8292 || code === 65279;
+}
+function isTag(code) {
+  return code >= 917504 && code <= 917631;
+}
+function plural2(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+function cleanOutsideText(text, { markers = true } = {}) {
+  const removed = { comments: 0, invisible: 0, tags: 0 };
+  const noComments = text.replace(/<!--[\s\S]*?(?:-->|$)/g, () => {
+    removed.comments++;
+    return markers ? "[hidden comment removed]" : "";
+  });
+  let out = "";
+  let run = 0;
+  let runKind = null;
+  const flush = () => {
+    if (runKind && !markers) out += runKind === "tags" ? "" : " ";
+    else if (runKind) out += `[${plural2(run, runKind === "tags" ? "tag character" : "invisible character")} removed]`;
+    run = 0;
+    runKind = null;
+  };
+  for (const c of noComments) {
+    const code = c.codePointAt(0);
+    const kind = isTag(code) ? "tags" : isInvisible(code) ? "invisible" : null;
+    if (kind) {
+      removed[kind]++;
+      if (runKind !== kind) flush();
+      runKind = kind;
+      run++;
+    } else {
+      flush();
+      out += c;
+    }
+  }
+  flush();
+  return { text: out, removed };
+}
+var init_outside_text = __esm({
+  "../core/src/outside-text.ts"() {
+    "use strict";
+  }
+});
+
 // ../core/src/goal-engine.ts
 function readOutsideContent(run) {
   return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE));
@@ -9729,19 +10287,23 @@ function addItem(db2, planId, runId, input2) {
     }
     return { task: getTask(db2, planId, id), existing: false };
   }
+  if (input2.action.category === "trusted-read") {
+    throw new GoalError('"trusted-read" is the tool-rule category for commands the goal trusts to reach the network, not an action category. Use the category of the action itself.');
+  }
   if (input2.action.category === "untrusted") {
     throw new GoalError('"untrusted" is the tool-rule category for tools that read outside content, not an action category. Use the category of the action itself.');
   }
   const goalMode = autonomyFor(goal, input2.action.category);
   const similar = similarCategories(knownCategories(db2, planId), input2.action.category);
-  const marked = goalMode === "auto" && runId ? getRun(db2, runId)?.untrusted_source ?? void 0 : void 0;
-  const guarded = marked !== void 0 && goal.auto_after_outside.includes(input2.action.category) && claimUsedGuardedCheck(db2, runId, input2.action.category);
+  const markedRun = goalMode === "auto" && runId ? getRun(db2, runId) : void 0;
+  const marked = markedRun?.untrusted_source ?? void 0;
+  const guarded = marked !== void 0 && goal.auto_after_outside.includes(input2.action.category) && afterOutsideApplies(markedRun) && claimUsedGuardedCheck(db2, runId, input2.action.category);
   const untrusted = guarded ? void 0 : marked;
   const mode = untrusted !== void 0 ? "propose" : goalMode;
   if (mode === "off") {
     throw new GoalError(`Action category "${input2.action.category}" is off for this goal: don't take or propose this action.`);
   }
-  const state = { action: { ...input2.action, params: input2.action.params ?? {} }, ...input2.ask_person && { asks_person: true } };
+  const state = { action: { ...input2.action, params: input2.action.params ?? {} }, ...input2.ask_person && { asks_person: true }, ...untrusted !== void 0 && { outside_text: untrusted } };
   if (mode === "propose" || input2.ask_person) {
     insertTask(db2, { ...base, status: "active", state, requires_approval: true, review_requested_at: now });
   } else {
@@ -9813,7 +10375,7 @@ function buildBrief(db2, planId, runId) {
     const item = summarizeItem(t);
     return isAttemptBlocked(db2, planId, t) ? { ...item, blocked: true } : item;
   }).sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id));
-  const watchEvents = takeWatchEvents(db2, planId, runId);
+  const watchEvents = takeWatchEvents(db2, planId, runId).map((w) => ({ ...w, new: w.new.map((line) => cleanOutsideText(line).text) }));
   if (run && watchEvents.length) markRunUntrusted(db2, run.id, WATCH_EVENTS_SOURCE);
   const taintedMemory = memory.find((m) => m.untrusted_source);
   if (run && taintedMemory) markFromMemory(db2, run.id, taintedMemory);
@@ -9854,7 +10416,11 @@ function buildBrief(db2, planId, runId) {
       const [h] = listHealth(db2, planId, 1);
       return h ? { passed: h.passed, value: h.value, at: h.created_at, ...!h.passed && h.output && { output: h.output.slice(-500) } } : null;
     })(),
-    watch_events: watchEvents
+    watch_events: watchEvents,
+    ...(() => {
+      const never2 = listWatches(db2, planId).filter((w) => watchNeverSaw(w)).map((w) => ({ name: w.name, hint: neverSawHint(w.name) }));
+      return never2.length ? { watches_never_saw: never2 } : {};
+    })()
   };
 }
 function recallMemory(db2, planId, runId, ids) {
@@ -9913,15 +10479,12 @@ function queueRunWithRequest(db2, planId, text, opts = {}) {
 ${request}` : request, run.request_untrusted || opts.untrusted ? 1 : 0, run.id);
   return { run: getRun(db2, run.id) };
 }
-function isHidden(code) {
-  return code < 32 || code >= 127 && code <= 159 || code >= 8203 && code <= 8207 || code >= 8234 && code <= 8238 || code >= 8294 && code <= 8297;
-}
 function cleanStatusNote(text) {
-  const plain = [...text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")].map((c) => isHidden(c.codePointAt(0)) ? " " : c).join("").replace(/\s+/g, " ").trim();
+  const plain = [...cleanOutsideText(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""), { markers: false }).text].map((c) => isHidden(c.codePointAt(0)) ? " " : c).join("").replace(/\s+/g, " ").trim();
   const chars = [...plain];
   return chars.length > STATUS_NOTE_MAX ? `${chars.slice(0, STATUS_NOTE_MAX - 1).join("").trimEnd()}\u2026` : plain;
 }
-function endRun(db2, runId, summary, status, statusCheck, statusTone) {
+function endRun(db2, runId, summary, status, statusCheck, statusTone, handled) {
   const run = getRun(db2, runId);
   if (!run) throw new GoalError(`Run ${runId} not found.`);
   if (run.status !== "running" && run.status !== "queued") throw new GoalError(`Run ${runId} already ended (${run.status}).`);
@@ -9931,14 +10494,16 @@ function endRun(db2, runId, summary, status, statusCheck, statusTone) {
   }
   const check2 = statusCheck === void 0 || statusCheck === null ? null : validateStatusCheck(statusCheck);
   const tone = validateStatusTone(statusTone) ?? null;
+  const events = runWatchEvents(db2, run.plan_id, runId);
+  const handledIds = events.length ? matchHandled(events, handled) : [];
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const created = db2.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND run_id = ?").get(run.plan_id, runId).n;
   const resolved = db2.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND status IN ('completed', 'abandoned') AND updated_at >= ?").get(run.plan_id, run.started_at).n;
   updateRun(db2, runId, { status: "completed", summary: summary.trim(), ended_at: now, items_created: created, items_resolved: resolved });
   if (status !== void 0) {
-    const note = cleanStatusNote(status);
-    updateGoal(db2, run.plan_id, note ? {
-      status_note: note,
+    const note2 = cleanStatusNote(status);
+    updateGoal(db2, run.plan_id, note2 ? {
+      status_note: note2,
       status_note_at: now,
       status_note_untrusted: run.untrusted_source ?? null,
       status_check: check2,
@@ -9951,10 +10516,47 @@ function endRun(db2, runId, summary, status, statusCheck, statusTone) {
   if (run.trigger === "curate" && !db2.prepare("SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?").get(run.plan_id, CURATION_REF + runId)) {
     updateGoal(db2, run.plan_id, { curated_at: run.started_at });
   }
+  if (events.length) settleWatchEvents(db2, run.plan_id, runId, events, handledIds, new Date(now));
   archiveResolved(db2, run.plan_id);
   finishIfDone(db2, run.plan_id);
   tripBreakerIfRunaway(db2, run.plan_id);
   return getRun(db2, runId);
+}
+function listRunEvents(events) {
+  const byWatch = /* @__PURE__ */ new Map();
+  for (const e of events) if (e.shown) byWatch.set(e.watch, [...byWatch.get(e.watch) ?? [], cleanOutsideText(e.line).text]);
+  return [...byWatch.entries()].map(([watch, lines]) => `"${watch}": ${lines.join(", ")}`).join("; ");
+}
+function matchHandled(events, handled) {
+  const yours = `Your events: ${listRunEvents(events)}.`;
+  if (!handled) throw new GoalError(`This run had watch_events, so end_run needs handled: the lines you dealt with, skipped ones included. ${yours}`);
+  const ids = /* @__PURE__ */ new Set();
+  for (const raw of handled) {
+    const h = raw.trim();
+    const matched = events.filter((e) => e.id === h || cleanOutsideText(e.line).text.trim() === h);
+    if (!matched.length) throw new GoalError(`handled names "${h}", which isn't one of this run's watch_events lines. ${yours}`);
+    for (const e of matched) ids.add(e.id);
+  }
+  return [...ids];
+}
+function settleWatchEvents(db2, planId, runId, events, handledIds, now) {
+  const limit = getGoal(db2, planId)?.limits.max_item_attempts ?? 0;
+  const handledSet = new Set(handledIds);
+  const capped = events.filter((e) => !handledSet.has(e.id) && limit > 0 && e.attempts >= limit);
+  releaseUnhandledWatchEvents(db2, runId, [...handledIds, ...capped.map((e) => e.id)]);
+  for (const e of capped) {
+    const ref = WATCH_EVENT_REF + e.id;
+    if (db2.prepare("SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?").get(planId, ref)) continue;
+    const line = cleanOutsideText(e.line).text;
+    askPersonUnder(
+      db2,
+      planId,
+      ref,
+      `${e.attempts} runs got "${line}" from the watch "${e.watch}" and none dealt with it. It won't come back by itself: press Run now with a request if it still needs doing.`,
+      `Each of those runs ended without listing it in end_run's handled, so it was handed to the next run; after ${limit} it stops coming back, so a run that keeps forgetting it can't loop.`,
+      now
+    );
+  }
 }
 function runawayReason(db2, planId, now = /* @__PURE__ */ new Date()) {
   const goal = getGoal(db2, planId);
@@ -10083,6 +10685,37 @@ function failRun(db2, runId, status, reason) {
   releaseWatchEvents(db2, runId);
   tripBreakerIfRunaway(db2, run.plan_id);
 }
+function tripRun(db2, runId, reasons) {
+  const run = getRun(db2, runId);
+  if (!run || run.tripped_at) return false;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const why = `tripped: ${reasons}`;
+  updateRun(db2, runId, { tripped_at: now, tripped_reason: reasons });
+  const items = db2.prepare(`SELECT id, state, notes, approved_at FROM tasks
+    WHERE plan_id = ? AND run_id = ? AND status IN ('pending', 'active') AND archived_at IS NULL`).all(run.plan_id, runId);
+  for (const item of items) {
+    const state = item.state ? JSON.parse(item.state) : {};
+    if (state.asks_person) {
+      if (!item.notes?.startsWith(TRIPPED_QUESTION_WARNING)) {
+        db2.prepare("UPDATE tasks SET notes = ?, updated_at = ? WHERE plan_id = ? AND id = ?").run(item.notes ? `${TRIPPED_QUESTION_WARNING}
+
+${item.notes}` : TRIPPED_QUESTION_WARNING, now, run.plan_id, item.id);
+      }
+    } else if (state.action && !item.approved_at) {
+      db2.prepare("UPDATE tasks SET status = 'abandoned', abandon_reason = ?, updated_at = ? WHERE plan_id = ? AND id = ?").run(`the run that proposed this ${why}`, now, run.plan_id, item.id);
+    }
+  }
+  const source = `tripped run ${runId}`;
+  db2.prepare(`UPDATE goal_memory SET untrusted_source = COALESCE(untrusted_source, ?), untrusted_root = COALESCE(untrusted_root, ?)
+    WHERE plan_id = ? AND source = 'agent' AND created_at >= ?`).run(source, run.untrusted_root ?? source, run.plan_id, run.started_at);
+  if (!run.untrusted_source) markRunUntrusted(db2, runId, source);
+  if (run.status === "running" || run.status === "queued") failRun(db2, runId, "failed", why);
+  else updateRun(db2, runId, { summary: run.summary ?? why });
+  const previous = db2.prepare(`SELECT tripped_at FROM goal_runs WHERE plan_id = ? AND id != ? AND status IN ('completed', 'failed', 'timed_out')
+    AND started_at <= ? ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(run.plan_id, runId, run.started_at);
+  if (previous?.tripped_at && getGoal(db2, run.plan_id)?.status === "active") updateGoal(db2, run.plan_id, { status: "paused" });
+  return true;
+}
 function archiveResolved(db2, planId, now = /* @__PURE__ */ new Date()) {
   const goal = getGoal(db2, planId);
   if (!goal) return 0;
@@ -10128,7 +10761,7 @@ function recordSkip(db2, planId, trigger, reason, now = /* @__PURE__ */ new Date
   const recent = db2.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND status = 'skipped' AND skip_reason = ? AND started_at >= ?").get(planId, reason, hourAgo);
   return recent ? null : insertRun(db2, planId, trigger, "skipped", reason);
 }
-var AFTER_OUTSIDE_ITEM_NOTE, GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, REQUEST_SOURCE, STATUS_NOTE_MAX, COUNTED_RUNS;
+var AFTER_OUTSIDE_ITEM_NOTE, GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, REQUEST_SOURCE, STATUS_NOTE_MAX, WATCH_EVENT_REF, COUNTED_RUNS, TRIPPED_QUESTION_WARNING;
 var init_goal_engine = __esm({
   "../core/src/goal-engine.ts"() {
     "use strict";
@@ -10141,6 +10774,7 @@ var init_goal_engine = __esm({
     init_guarded();
     init_health();
     init_watches();
+    init_outside_text();
     AFTER_OUTSIDE_ITEM_NOTE = "Went through after outside content because you allowed it (checked by guarded_run)";
     GoalError = class extends Error {
     };
@@ -10153,7 +10787,133 @@ var init_goal_engine = __esm({
     RECALL_MAX = 20;
     REQUEST_SOURCE = "run request";
     STATUS_NOTE_MAX = 40;
+    WATCH_EVENT_REF = "watch-event:";
     COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))";
+    TRIPPED_QUESTION_WARNING = "Warning: the run that asked this tripped on repeated refusals, so it may have been following planted instructions. Check before you answer.";
+  }
+});
+
+// ../core/src/goal-copy.ts
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function dirParts(dir) {
+  let end = dir.length;
+  while (end > 1 && (dir[end - 1] === "/" || dir[end - 1] === "\\")) end--;
+  return dir.slice(0, end).split(/[\\/]/);
+}
+function dirPattern(dir, flags) {
+  const parts = dirParts(dir);
+  if (!parts.join("")) return null;
+  return new RegExp(`${parts.map(escapeRegExp).join("[\\\\/]")}(?![\\w.-])`, flags);
+}
+function rewriteString(text, opts, made) {
+  const ci = opts.caseInsensitive ?? process.platform === "win32";
+  const toParts = dirParts(opts.toDir);
+  let out = text;
+  const dir = dirPattern(opts.fromDir, ci ? "gi" : "g");
+  if (dir && dirParts(opts.fromDir).join("/") !== toParts.join("/")) {
+    out = out.replace(dir, (m) => {
+      const to = m.includes("\\") ? toParts.join("\\") : toParts.join("/");
+      note(made, m, to);
+      return to;
+    });
+  }
+  const { fromRepo, toRepo } = opts;
+  if (fromRepo && toRepo && fromRepo.toLowerCase() !== toRepo.toLowerCase()) {
+    const repo = new RegExp(`(?<![\\w.-])${escapeRegExp(fromRepo)}(?![\\w-]|\\.[\\w-])`, "gi");
+    out = out.replace(repo, (m) => {
+      note(made, m, toRepo);
+      return toRepo;
+    });
+  }
+  return out;
+}
+function note(made, from, to) {
+  const key = `${from}\0${to}`;
+  const r = made.get(key);
+  if (r) r.count++;
+  else made.set(key, { from, to, count: 1 });
+}
+function rewriteForCopy(value, opts) {
+  const made = /* @__PURE__ */ new Map();
+  const walk = (v) => {
+    if (typeof v === "string") return rewriteString(v, opts, made);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return { value: walk(value), replacements: [...made.values()] };
+}
+function watchSpecOf(w) {
+  const common = {
+    ...w.match !== null && { match: w.match },
+    ...w.ignore !== null && { ignore: w.ignore },
+    ...w.urgent && { urgent: true },
+    every_minutes: w.every_minutes,
+    fires: w.fires,
+    ...w.status_rules && { status: w.status_rules }
+  };
+  if (w.kind === "command") return { ...common, command: w.command ?? "" };
+  if (w.steps) return { ...common, steps: w.steps, ...w.finally && { finally: w.finally } };
+  return { ...common, tool: w.tool ?? "", input: w.tool_input };
+}
+function copyGoal(db2, sourceId, input2) {
+  const src = getGoal(db2, sourceId);
+  if (!src) throw new Error(`Goal ${sourceId} not found.`);
+  const watches = input2.watches ?? Object.fromEntries(listWatches(db2, sourceId).map((w) => [w.name, watchSpecOf(w)]));
+  const schedule = getSchedule(db2, sourceId);
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  db2.transaction(() => {
+    createGoal(
+      db2,
+      { id: input2.id, name: input2.name, description: src.objective, status: "active", working_dir: input2.working_dir, created_at: now, updated_at: now },
+      { objective: src.objective, instructions: input2.instructions ?? src.instructions, status: "paused", autonomy: src.autonomy, limits: src.limits, item_retention_days: src.item_retention_days, one_off: src.one_off, model: src.model }
+    );
+    const changes = {};
+    if (Object.keys(src.tool_map).length) changes.tool_map = src.tool_map;
+    if (src.auto_after_outside.length) changes.auto_after_outside = Object.fromEntries(src.auto_after_outside.map((c) => [c, true]));
+    if (Object.keys(watches).length) changes.watches = watches;
+    if (Object.keys(changes).length) applyGoalChanges(db2, input2.id, changes);
+    if (schedule) setSchedule(db2, input2.id, schedule);
+    updateGoal(db2, input2.id, { status: "paused", next_run_at: null });
+  })();
+  return getGoal(db2, input2.id);
+}
+function moveGoal(db2, planId, input2) {
+  const goal = getGoal(db2, planId);
+  if (!goal) throw new Error(`Goal ${planId} not found.`);
+  if (getOpenRun(db2, planId)) throw new Error("A run is going: wait for it to finish (or cancel it), then move the goal.");
+  db2.transaction(() => {
+    updatePlan(db2, planId, { working_dir: input2.working_dir, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    if (input2.instructions !== void 0 && input2.instructions !== goal.instructions) updateGoal(db2, planId, { instructions: input2.instructions });
+    if (input2.watches) {
+      const changes = { watches: { ...input2.watches } };
+      for (const w of listWatches(db2, planId)) if (!(w.name in input2.watches)) changes.watches[w.name] = null;
+      applyGoalChanges(db2, planId, changes);
+    }
+    for (const w of listWatches(db2, planId)) if (w.kind === "command") resetWatch(db2, w.id);
+  })();
+  return getGoal(db2, planId);
+}
+function repoOfRemote(url2) {
+  let u = url2.trim();
+  if (!u.includes("://") && !/^[\w.-]+@[\w.-]+:/.test(u)) return null;
+  if (u.endsWith(".git")) u = u.slice(0, -4);
+  while (u.endsWith("/")) u = u.slice(0, -1);
+  const parts = u.split(/[/:]/);
+  const [owner, name] = parts.slice(-2);
+  if (parts.length < 3 || !owner || !name || !/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(name)) return null;
+  return `${owner}/${name}`;
+}
+var init_goal_copy = __esm({
+  "../core/src/goal-copy.ts"() {
+    "use strict";
+    init_goals();
+    init_watches();
+    init_queries();
+    init_schedule();
+    init_goal_changes();
   }
 });
 
@@ -10177,7 +10937,7 @@ function proposeWatch(db2, planId, runId, input2) {
   const run = runId ? getRun(db2, runId) : void 0;
   if (!run || run.plan_id !== planId || run.status !== "running") throw new GoalError("propose_watch needs an open run of this goal.");
   if (run.trigger === "curate") throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.");
-  const { label } = validateWatchSpec(db2, planId, input2.name, input2.spec);
+  const { label, warnings } = validateWatchSpec(db2, planId, input2.name, input2.spec);
   const waiting = getAllTasks(db2, planId).find((t) => isWatchRequest(t) && t.state.watch.name === label && t.review_requested_at);
   if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`);
   const existing = listWatches(db2, planId).find((w) => w.name === label);
@@ -10186,7 +10946,8 @@ function proposeWatch(db2, planId, runId, input2) {
     ...state.replaces ? [`Now:
 ${describeSpec(state.replaces)}`, `Proposed:
 ${describeSpec(state.spec)}`] : [describeSpec(state.spec)],
-    ...state.reason ? [`Why: ${state.reason}`] : []
+    ...state.reason ? [`Why: ${state.reason}`] : [],
+    ...warnings.map((w) => `Warning: ${w}`)
   ].join("\n\n");
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const id = nextChildId(db2, planId, null);
@@ -10684,7 +11445,7 @@ function leaseHolder(db2, now = /* @__PURE__ */ new Date()) {
 function goalRunPrompt(p) {
   return [
     `Run persistent goal "${p.name}" (goal ID: ${p.goalId}, run ID: ${p.runId}). Working directory: ${p.workingDir}.`,
-    `You start with no memory of earlier runs: call get_goal_brief with goal_id "${p.goalId}" and run_id "${p.runId}" first. It has the objective, standing instructions, memory, human decisions since the last run, open items and recent run summaries. Its watch_events, when there are any, are what is new since the last run (one line per new thing, such as an issue number): deal with those first.`,
+    `You start with no memory of earlier runs: call get_goal_brief with goal_id "${p.goalId}" and run_id "${p.runId}" first. It has the objective, standing instructions, memory, human decisions since the last run, open items and recent run summaries. Its watch_events, when there are any, are what is new since the last run (one line per new thing, such as an issue number): deal with those first. List every watch_events line you dealt with, skipped ones included, in end_run's handled. The rest come back in your next run; carried_over shows ones an earlier run didn't get to.`,
     "Then: carry out approved actions first and complete those items; revise rejected ones using the feedback (update the proposal's state.action with update_task, then set_status completed to send it for review again) or abandon them; look for new work and add each piece with add_item (always with external_ref for outside things); stay within each action category's autonomy (auto: do it, then record it; propose: add_item and wait for approval; off: never). Give an action a category from known_categories in the brief when one fits it, so the same action keeps one name; make up a new one only for a different kind of action. A tool call refused by the Quarterdeck goal guard means: propose it with add_item instead.",
     "When you need something only the person can give or do (a choice, details you can't find, connecting a service, allowing a site), add_item with ask_person: true and one clear question, and carry on with what you can; don't guess. Their answer arrives as memory and the item is completed.",
     "Save anything future runs should know with remember.",
@@ -10984,34 +11745,51 @@ function itemView(t) {
     updated_at: t.updated_at
   };
 }
-function overviewItem(t, blocked) {
+function overviewItem(t, blocked, db2) {
   const v = itemView(t);
   const action = v.action;
   const notesMax = v.asks_person && v.awaiting_review ? CLIP.context : CLIP.notes;
   const clipped = v.goal.length > CLIP.title || (v.notes?.length ?? 0) > notesMax || (action?.summary?.length ?? 0) > CLIP.title;
   const short = { ...v, goal: clip(v.goal, CLIP.title), notes: clip(v.notes, notesMax), result: clip(v.result, CLIP.result), ...clipped && { clipped: true } };
   const marked = blocked ? { ...short, blocked: true } : short;
-  return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title) } } : marked;
+  if (!action) return marked;
+  const shortAction = { category: action.category, summary: clip(action.summary, CLIP.title) };
+  if (!db2 || !v.awaiting_review || v.asks_person) return { ...marked, action: shortAction };
+  const calls = proposalCalls(db2, proposalKey(t.plan_id, t.id)).slice(0, CALLS).map((c) => ({ command: clip(c.command, CLIP.summary), files: c.files }));
+  return { ...marked, action: { ...shortAction, ...calls.length > 0 ? { calls } : { covers_any: true } } };
 }
 function getAutonomySuggestions(db2, planId) {
   const goal = getGoal(db2, planId);
   if (!goal) return [];
   const rows = db2.prepare(`
-    SELECT json_extract(t.state, '$.action.category') AS category, v.passed
+    SELECT json_extract(t.state, '$.action.category') AS category, v.passed,
+      json_extract(t.state, '$.outside_text') IS NOT NULL AS marked
     FROM verifications v JOIN tasks t ON t.plan_id = v.plan_id AND t.id = v.task_id
     WHERE v.plan_id = ? AND v.gate = 'approval' AND json_extract(t.state, '$.action.category') IS NOT NULL
     ORDER BY v.created_at DESC, v.rowid DESC
   `).all(planId);
   const streak = /* @__PURE__ */ new Map();
   for (const r of rows) {
-    const s = streak.get(r.category) ?? { n: 0, broken: false };
+    const s = streak.get(r.category) ?? { all: 0, marked: 0, broken: false };
     if (!s.broken) {
-      if (r.passed) s.n++;
-      else s.broken = true;
+      if (!r.passed) s.broken = true;
+      else {
+        s.all++;
+        if (r.marked) s.marked++;
+      }
     }
     streak.set(r.category, s);
   }
-  return [...streak.entries()].filter(([c, s]) => s.n >= PROMOTE_AFTER && autonomyFor(goal, c) === "propose").map(([category, s]) => ({ category, approved_in_a_row: s.n }));
+  const out = [];
+  for (const [category, s] of streak) {
+    const mode = autonomyFor(goal, category);
+    if (mode === "propose" && s.all >= PROMOTE_AFTER) out.push({ category, approved_in_a_row: s.all, kind: "auto" });
+    else if (mode === "auto" && s.marked >= PROMOTE_AFTER && !(goal.auto_after_outside ?? []).includes(category)) {
+      const warning = autoAfterOutsideWarning(goal.tool_map ?? {}, category);
+      out.push({ category, approved_in_a_row: s.marked, kind: "after_outside", ...warning && { warning } });
+    }
+  }
+  return out;
 }
 function describeEvent(e, itemGoal) {
   const p = e.payload;
@@ -11039,6 +11817,16 @@ function describeEvent(e, itemGoal) {
 }
 function refusedCalls(db2, runId) {
   return db2.prepare("SELECT tool_name AS tool, reason AS rule FROM goal_tool_calls WHERE run_id = ? AND decision = 'refused' GROUP BY tool_name, reason ORDER BY MIN(created_at), MIN(rowid)").all(runId).map((c) => ({ tool: c.tool, rule: c.rule ?? null }));
+}
+function unmappedNetworkCommands(db2, planId, runs = 20) {
+  const rows = db2.prepare(`SELECT tool_name AS tool, reason FROM goal_tool_calls
+    WHERE plan_id = ? AND reason LIKE 'built-in network command: %'
+      AND run_id IN (SELECT id FROM goal_runs WHERE plan_id = ? ORDER BY started_at DESC LIMIT ?)
+    GROUP BY tool_name, reason ORDER BY MAX(created_at) DESC, MAX(rowid) DESC`).all(planId, planId, runs);
+  return rows.map((r) => {
+    const command = r.reason.slice("built-in network command: ".length);
+    return { tool: r.tool, command, rule: `${r.tool}(${command}*)` };
+  });
 }
 function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (openRun?.status === "running") {
@@ -11132,12 +11920,16 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
         model: r.model,
         // What untrusted content it read first: from then on its auto actions needed approval
         untrusted: r.untrusted_source,
+        // The secret it read before outside content, which turned allowed-after-outside off for the rest of the run (#169)
+        secrets_read: r.secrets_read_at ? r.secrets_read_source ?? "a secret" : null,
+        // The refusals it tripped on (#174): it was failed and its pending proposals abandoned
+        tripped: r.tripped_at ? r.tripped_reason ?? "repeated refusals" : null,
         // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
         request: r.request ? { text: clip(r.request, CLIP.summary), untrusted: r.request_untrusted === 1 } : null,
         // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
         refused: refusedCalls(db2, r.id)
       })),
-      needs_you: open2.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db2, plan.id, t))),
+      needs_you: open2.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db2, plan.id, t), db2)),
       open_items: open2.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db2, plan.id, t))),
       open_item_count: open2.filter((t) => !t.review_requested_at).length,
       health: listHealth(db2, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),
@@ -11152,6 +11944,8 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
         ref: m.inactive_ref ?? null,
         replaced_by: m.replaced_by ?? null
       })),
+      // Network commands its runs reached that the tool map doesn't name, with the rule to add (#173)
+      unmapped_network: unmappedNetworkCommands(db2, plan.id),
       suggestions: getAutonomySuggestions(db2, plan.id),
       // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
       watches: watches.map((w) => ({
@@ -11164,10 +11958,13 @@ function buildOverview(db2, detail = "all", standingSession = null, fullInstruct
         last_fired_at: w.last_fired_at,
         failing: watchFailing(w),
         cleanup_failures: w.cleanup_failures,
+        never_saw: watchNeverSaw(w),
         error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null
       })),
       watch_count: watches.length,
-      watch_failing: watches.some(watchFailing)
+      watch_failing: watches.some(watchFailing),
+      // A watch that has never seen anything since its baseline (#185): yellow in the pane, like one that can't check
+      watch_never_saw: watches.some((w) => watchNeverSaw(w))
     };
   };
   const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].filter(({ plan }) => !just || asked(plan.id)).sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
@@ -11217,7 +12014,7 @@ function overviewWithEtag(db2, detail = "all", standingSession = null, fullInstr
   const body = JSON.stringify(buildOverview(db2, detail, standingSession, fullInstructions, only));
   return { body, etag: `"${createHash2("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
-var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
+var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CALLS, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
 var init_goal_overview = __esm({
   "../core/src/goal-overview.ts"() {
     "use strict";
@@ -11232,10 +12029,12 @@ var init_goal_overview = __esm({
     init_goal_changes();
     init_migrate();
     init_goal_tick();
+    init_guarded();
     RUNS = 5;
     OPEN_ITEMS = 10;
     HEALTH = 20;
     MEMORY = 10;
+    CALLS = 10;
     CLIP = { summary: 300, memory: 240, title: 200, notes: 200, result: 200, activity: 240, instructions: 1500, objective: 400, watch: 300, context: 1e3 };
     DONE = 10;
     ACTIVITY_EVENTS = 20;
@@ -11332,7 +12131,12 @@ var init_todos = __esm({
     init_queries();
     DEFAULT_LIST = "To do";
     samePath = (a, b) => norm(a) === norm(b);
-    norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    norm = (p) => {
+      const s = p.replace(/\\/g, "/");
+      let end = s.length;
+      while (end > 0 && s[end - 1] === "/") end--;
+      return s.slice(0, end).toLowerCase();
+    };
     DONE_TEXT_CHARS = 200;
     isDone = (status) => status === "completed" || status === "abandoned";
   }
@@ -11364,7 +12168,9 @@ var init_src = __esm({
     init_schedule();
     init_health();
     init_watches();
+    init_outside_text();
     init_guard();
+    init_goal_copy();
     init_goal_tick();
     init_status_check();
     init_goal_overview();
@@ -16182,7 +16988,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve2) {
+function isRecursive(inst, stack, resolve3) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -16192,7 +16998,7 @@ function isRecursive(inst, stack, resolve2) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve2);
+      const answer = isRecursive(child, stack, resolve3);
       if (answer > result)
         result = answer;
     }
@@ -16203,7 +17009,7 @@ function isRecursive(inst, stack, resolve2) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve2) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve3) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -16267,7 +17073,7 @@ function isRecursive(inst, stack, resolve2) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve2 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve3 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -21826,8 +22632,8 @@ var error43 = () => {
       case "not_multiple_of":
         return `N\xFAmero inv\xE1lido: deve ser m\xFAltiplo de ${issue2.divisor}`;
       case "unrecognized_keys": {
-        const plural2 = issue2.keys.length > 1 ? "s" : "";
-        return `Chave${plural2} inv\xE1lida${plural2}: ${joinValues(issue2.keys, ", ")}`;
+        const plural3 = issue2.keys.length > 1 ? "s" : "";
+        return `Chave${plural3} inv\xE1lida${plural3}: ${joinValues(issue2.keys, ", ")}`;
       }
       case "invalid_key":
         return `Entrada inv\xE1lida n${translateOriginWithArticle(issue2.origin, "definite")}`;
@@ -21971,8 +22777,8 @@ var error44 = () => {
       case "not_multiple_of":
         return `N\xFAmero inv\xE1lido: deve ser m\xFAltiplo de ${issue2.divisor}`;
       case "unrecognized_keys": {
-        const plural2 = issue2.keys.length > 1 ? "s" : "";
-        return `Chave${plural2} inv\xE1lida${plural2}: ${joinValues(issue2.keys, ", ")}`;
+        const plural3 = issue2.keys.length > 1 ? "s" : "";
+        return `Chave${plural3} inv\xE1lida${plural3}: ${joinValues(issue2.keys, ", ")}`;
       }
       case "invalid_key":
         return `Entrada inv\xE1lida n${translateOriginWithArticle(issue2.origin, "definite")}`;
@@ -33187,7 +33993,7 @@ var Protocol = class {
           return;
         }
         const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-        await new Promise((resolve2) => setTimeout(resolve2, pollInterval));
+        await new Promise((resolve3) => setTimeout(resolve3, pollInterval));
         options?.signal?.throwIfAborted();
       }
     } catch (error62) {
@@ -33204,7 +34010,7 @@ var Protocol = class {
    */
   request(request, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const earlyReject = (error62) => {
         reject(error62);
       };
@@ -33282,7 +34088,7 @@ var Protocol = class {
           if (!parseResult.success) {
             reject(parseResult.error);
           } else {
-            resolve2(parseResult.data);
+            resolve3(parseResult.data);
           }
         } catch (error62) {
           reject(error62);
@@ -33543,12 +34349,12 @@ var Protocol = class {
       }
     } catch {
     }
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       if (signal.aborted) {
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
         return;
       }
-      const timeoutId = setTimeout(resolve2, interval);
+      const timeoutId = setTimeout(resolve3, interval);
       signal.addEventListener("abort", () => {
         clearTimeout(timeoutId);
         reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -34418,12 +35224,12 @@ var StdioServerTransport = class {
     this.onclose?.();
   }
   send(message) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const json2 = serializeMessage(message);
       if (this._stdout.write(json2)) {
-        resolve2();
+        resolve3();
       } else {
-        this._stdout.once("drain", resolve2);
+        this._stdout.once("drain", resolve3);
       }
     });
   }
@@ -34502,7 +35308,13 @@ var AddItemSchema = external_exports.object({
   action: external_exports.object({
     category: external_exports.string().min(1).describe('Action category, e.g. "email.send". Reuse one from known_categories in the brief when it fits the action; invent a new one only for a different kind of action. Its autonomy mode is in the brief.'),
     summary: external_exports.string().min(1).describe('One line the human will read when approving, e.g. "Send reply confirming Thursday 2pm"'),
-    params: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Exact details needed to carry the action out later (ids, draft id, labels)")
+    params: external_exports.record(external_exports.string(), external_exports.unknown()).optional().describe("Exact details needed to carry the action out later (ids, draft id, labels)"),
+    calls: external_exports.array(external_exports.object({
+      command: external_exports.string().min(1).describe("The exact shell command, naming each file by the path given in files"),
+      files: external_exports.array(external_exports.object({ path: external_exports.string().min(1), contents: external_exports.string() })).optional().describe("Every file the command sends, in full")
+    })).max(10).optional().describe(
+      'For a "propose" action: the exact calls it will make (at most 10). The server stages each file and returns the staged commands; once approved, only those commands, made exactly as returned and each once, go through. Without calls the approval covers any call in the category.'
+    )
   }).optional().describe(
     'An action this item is about. "propose" categories create an item that waits for human approval; "auto" categories record an action you already took; "off" categories are refused.'
   ),
@@ -34567,6 +35379,7 @@ var StatusToneSchema = external_exports.enum(["ok", "attention", "problem"]);
 var EndRunSchema = external_exports.object({
   summary: external_exports.string().min(1).describe("What you did this run, what is waiting for the human, and anything you learned"),
   run_id: external_exports.string().optional().describe("Defaults to the run from get_goal_brief"),
+  handled: external_exports.array(external_exports.string()).optional().describe("The watch_events lines you dealt with this run, skipped ones included (copy them as the brief shows them). Required when your brief had watch_events; the rest come back in your next run."),
   status: external_exports.string().max(200).optional().describe(`A few words on how the goal stands now, shown in its one-line summary in the Goals pane until a later run changes it, e.g. "clean" or "2 PRs awaiting review" (plain text, cut to 40 characters). Set it when the goal's instructions say what it means; leave it out to keep the current one, or pass "" to clear it.`),
   status_check: external_exports.object({
     kind: external_exports.enum(["github_pr", "github_issue"]).describe("What to look at: a GitHub pull request or issue"),
@@ -34608,7 +35421,8 @@ var GoalsOverviewSchema = external_exports.object({
   etag: external_exports.string().optional().describe("The etag from the last overview; an unchanged overview answers { changed: false }"),
   detail: external_exports.array(external_exports.string()).optional().describe("Goal ids to give in full (runs, memory, open items, instructions, tool rules); the rest are cards. Left out: every goal in full"),
   full_instructions: external_exports.boolean().optional().describe("Give the instructions uncut (otherwise long ones are cut, as the pane shows them)"),
-  only: external_exports.boolean().optional().describe("With detail: answer with only the goals in detail (no cards for other goals, no deleted list); a deleted goal named there still comes in deleted_detail")
+  only: external_exports.boolean().optional().describe("With detail: answer with only the goals in detail (no cards for other goals, no deleted list); a deleted goal named there still comes in deleted_detail"),
+  watch_health: external_exports.boolean().optional().describe("With detail: add watch_health, each detailed goal's watches with when each was last checked, the lines its last check saw, when it last fired and its failures in a row, read fresh (goal_detail asks for it; the pane never does)")
 });
 var DecideItemSchema = external_exports.object({
   goal_id: external_exports.string(),
@@ -34635,6 +35449,11 @@ var ResolveReviewThreadSchema = external_exports.object({
 var PrInlineCommentsSchema = external_exports.object({
   repo: external_exports.string().regex(/^[\w.-]+\/[\w.-]+$/).describe("The repo as owner/name (from git remote get-url origin)"),
   pr: external_exports.number().int().positive().describe("The pull request number")
+});
+var IssueReadSchema = external_exports.object({
+  repo: external_exports.string().regex(/^[\w.-]+\/[\w.-]+$/).describe("The repo as owner/name (from git remote get-url origin)"),
+  number: external_exports.number().int().positive().describe("The issue number"),
+  comment_id: external_exports.string().min(1).optional().describe("Only this comment (its id, such as IC_...), when a watch line names one")
 });
 var DetectForgeSchema = external_exports.object({
   working_dir: external_exports.string().min(1).describe("The repo's folder (absolute path)")
@@ -34718,6 +35537,23 @@ var CreateGoalSchema = external_exports.object({
   one_off: external_exports.boolean().optional().describe("Runs once now; done when its run leaves nothing open"),
   watches: external_exports.record(external_exports.string(), WatchSchema).optional().describe("Watch name \u2192 what it checks: a run starts when a watch sees something new"),
   model: external_exports.string().nullable().optional().describe("The model its runs use: haiku, sonnet, opus or a full model id; left out or null, the model of the session that starts each run")
+});
+var CopyGoalSchema = external_exports.object({
+  goal_id: external_exports.string().describe("The goal to copy"),
+  working_dir: external_exports.string().min(1).describe("The folder the copy works in: a full path, or a name or relative path beside the goal's folder (./ inside it, ~ the home folder). It must exist unless create_dir (its parent must exist)"),
+  name: external_exports.string().trim().min(1).optional().describe("The copy's name; left out, the same name"),
+  instructions: external_exports.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the original's with its folder and repo rewritten"),
+  watches: external_exports.record(external_exports.string(), WatchSchema).optional().describe("Every watch to save, by name (as the person confirmed them); left out, the original's with its folder and repo rewritten"),
+  preview: external_exports.boolean().optional().describe("true: create nothing, only answer the rewritten instructions and watches, the replacements made and whether the folder exists, for the person to check"),
+  create_dir: external_exports.boolean().optional().describe("true: make the folder when it is missing (the person confirmed it); only one level, so its parent must exist")
+});
+var MoveGoalSchema = external_exports.object({
+  goal_id: external_exports.string().describe("The goal to move"),
+  working_dir: external_exports.string().min(1).describe("The folder the goal works in from now on: a full path, or a name or relative path beside the goal's folder (./ inside it, ~ the home folder). It must exist unless create_dir (its parent must exist)"),
+  instructions: external_exports.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the goal's own with its folder and repo rewritten"),
+  watches: external_exports.record(external_exports.string(), WatchSchema).optional().describe("Every watch to keep, by name (as the person confirmed them); left out, the goal's own with its folder and repo rewritten"),
+  preview: external_exports.boolean().optional().describe("true: change nothing, only answer the rewritten instructions and watches, the replacements made and whether the folder exists, for the person to check"),
+  create_dir: external_exports.boolean().optional().describe("true: make the folder when it is missing (the person confirmed it); only one level, so its parent must exist")
 });
 var SetScheduleSchema = external_exports.object({
   goal_id: external_exports.string(),
@@ -34842,6 +35678,8 @@ function nanoid3(size = 21) {
 // src/db.ts
 init_src();
 var db = openDatabase();
+var guardedDirOverride = null;
+var guardedDataDir = () => guardedDirOverride ?? quarterdeckDataPaths().dirs[0];
 var getPlan2 = (id) => getPlan(db, id);
 var listPlans3 = (status) => listPlans(db, status);
 var insertPlan2 = (plan) => insertPlan(db, plan);
@@ -34865,6 +35703,8 @@ var runChecks2 = (plan, task) => runChecks(db, plan, task, "agent");
 var getGateStatus2 = (task) => getGateStatus(db, task);
 var getLatestVerification2 = (planId, taskId, gate) => getLatestVerification(db, planId, taskId, gate);
 var describeBlockers2 = describeBlockers;
+var copyGoal2 = (sourceId, input2) => copyGoal(db, sourceId, input2);
+var moveGoal2 = (planId, input2) => moveGoal(db, planId, input2);
 var createGoal2 = (plan, goal, interval) => createGoal(db, plan, goal, interval);
 var listGoals2 = (filter) => listGoals(db, filter);
 var getGoal2 = (planId) => getGoal(db, planId);
@@ -34880,12 +35720,20 @@ function recordItemAttempt(planId, taskId, runId, count = true) {
   recordAttempt(db, planId, taskId, runId, /* @__PURE__ */ new Date(), count);
 }
 var addItem2 = (planId, runId, input2) => addItem(db, planId, runId, input2);
+var stageProposalCalls2 = (task, category, calls) => {
+  const staged = stageProposalCalls(db, task, category, calls, { dataDir: guardedDataDir() });
+  db.prepare("UPDATE tasks SET state = json_set(COALESCE(state, '{}'), '$.action.calls', json(?)) WHERE plan_id = ? AND id = ?").run(JSON.stringify(staged), task.plan_id, task.id);
+  return staged;
+};
+var proposalCallsProblem2 = proposalCallsProblem;
+var proposalHasCalls2 = (planId, taskId) => proposalHasCalls(db, proposalKey(planId, taskId));
+var clearProposalCalls2 = (planId, taskId) => clearProposalCalls(db, proposalKey(planId, taskId), guardedDataDir());
 var insertMemory2 = (m) => insertMemory(db, m);
 var getMemory2 = (id) => getMemory(db, id);
 var updateMemory2 = (id, fields) => updateMemory(db, id, fields);
 var getRun2 = (runId) => getRun(db, runId);
 var schemaOutdated2 = () => schemaOutdated(db);
-var endRun2 = (runId, summary, status, statusCheck, statusTone) => endRun(db, runId, summary, status, statusCheck, statusTone);
+var endRun2 = (runId, summary, status, statusCheck, statusTone, handled) => endRun(db, runId, summary, status, statusCheck, statusTone, handled);
 var queueRun2 = (planId) => queueRun(db, planId, "manual");
 var queueRunWithRequest2 = (planId, text, opts = {}) => queueRunWithRequest(db, planId, text, opts);
 var getOpenGoalRun = (planId) => getOpenRun(db, planId);
@@ -34900,7 +35748,7 @@ var decideItem2 = (planId, taskId, input2) => decideItem(db, planId, taskId, inp
 var failRun2 = (runId, status, reason) => failRun(db, runId, status, reason);
 var attachAgent2 = (runId, agentId) => attachAgent(db, runId, agentId);
 var guardToolCallForRun2 = (runId, tool, input2) => guardToolCallForRun(db, runId, tool, input2);
-var stageGuardedCall2 = (runId, command, files, dryRun) => stageGuardedCall(db, runId, command, files, { dataDir: quarterdeckDataPaths().dirs[0], dryRun });
+var stageGuardedCall2 = (runId, command, files, dryRun) => stageGuardedCall(db, runId, command, files, { dataDir: guardedDataDir(), dryRun });
 var recordRefusal2 = (runId, tool, input2) => recordRefusal(db, runId, tool, input2);
 var updateGoal2 = (planId, fields) => updateGoal(db, planId, fields);
 var forgetMemory2 = (id) => forgetMemory(db, id);
@@ -34915,6 +35763,7 @@ var reportRunEnd2 = (runId, input2) => reportRunEnd(db, runId, input2);
 var setRunStep2 = (runId, text) => setRunStep(db, runId, text);
 var reportRunProgress2 = (runId, progress) => reportRunProgress(db, runId, progress);
 var listWatches2 = (planId) => listWatches(db, planId);
+var watchHealth2 = (planId) => watchHealth(db, planId);
 var checkCommandWatch2 = (watchId) => checkCommandWatch(db, watchId);
 var getWatch2 = (watchId) => getWatch(db, watchId);
 var reportToolWatch2 = (watchId, result) => reportToolWatch(db, watchId, result);
@@ -35192,13 +36041,36 @@ async function update_task(args) {
     );
   }
   recordItemAttempt(planId, input2.task_id, getOpenRun2(), false);
+  const patchedAction = input2.state_patch?.action;
+  let restage = null;
+  if (patchedAction !== void 0) {
+    if (task.approved_at && proposalHasCalls2(planId, task.id)) {
+      throw new Error("This proposal was approved for its staged calls; they can't be changed. Complete or abandon it and propose again.");
+    }
+    const calls = Array.isArray(patchedAction?.calls) ? patchedAction.calls : [];
+    if (calls.some((c) => typeof c !== "object" || c === null || typeof c.command !== "string")) {
+      throw new Error("action.calls must be a list of {command, files?: [{path, contents}]}");
+    }
+    const problem = proposalCallsProblem2(calls);
+    if (problem) throw new Error(problem);
+    restage = calls;
+  }
   const newState = { ...task.state, ...input2.state_patch ?? {} };
+  if (restage) {
+    const { calls: _calls, ...action } = patchedAction;
+    newState.action = action;
+  }
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const fields = { state: newState, updated_at: now, ...gates };
   if (input2.result !== void 0) fields.result = input2.result;
   if (input2.notes !== void 0) fields.notes = input2.notes;
   if (input2.goal !== void 0) fields.goal = input2.goal;
   updateTask2(planId, input2.task_id, fields);
+  if (restage) {
+    const category = typeof patchedAction?.category === "string" ? patchedAction.category : String(task.state.action?.category ?? "");
+    if (restage.length > 0) stageProposalCalls2({ id: task.id, plan_id: planId, run_id: getOpenRun2() }, category, restage);
+    else clearProposalCalls2(planId, task.id);
+  }
   touchPlan2(planId);
   const before = {};
   const after = {};
@@ -35628,9 +36500,11 @@ async function get_goal_brief(args) {
       "First carry out items with approved_to_execute (their action was approved), then complete them with set_status.",
       'Revise items rejected in decisions_since_last_run using the feedback: update the proposal with update_task state_patch {"action": {category, summary, params}} so the human sees the new version, then set_status completed to send it for review again \u2014 or abandon it with a reason.',
       "Look for new work; add each piece with add_item (use external_ref so it is never duplicated).",
+      "List every watch_events line you dealt with, skipped ones included, in end_run's handled. The rest come back in your next run; carried_over shows ones an earlier run didn't get to.",
       "For an action, reuse a category from known_categories when one fits it; invent a new category only for a different kind of action.",
       'Respect autonomy: "auto" categories you may do and then record with add_item; "propose" categories go through add_item and wait for approval; "off" categories you must not do.',
       "When the goal needs a watch it does not have (or a changed one), propose it with propose_watch for the person to approve, rather than asking them how to watch for it.",
+      "When you look at a source directly (an inbox, a page, a list), compare what you find with what its watch reported; if the watch missed something, propose a fix with propose_watch instead of carrying on. watches_never_saw lists watches that have seen nothing since they were set: check those sources yourself.",
       "Remember only what a later run needs and can find nowhere else: the person's answers and preferences, lasting facts and rules, and the state of work still in progress. Keep one entry per thing: when it changes (a running total, a deal's state), forget the old entry in the same run. Don't remember what you checked, skipped or did this run (your end_run summary keeps that), nor what a watch already tracks (it never shows the same line twice). Every memory is read by every later run. Finish with end_run and a short summary.",
       "memory holds what fits in the brief; memory_index lists the rest (memory_omitted counts them all) by id and how each starts. When one looks relevant to what you are doing, read it in full with recall (several ids in one call).",
       "When the status you set in end_run describes something outside Quarterdeck that can change without this goal running (a PR awaiting review, an open issue), attach a status_check so it updates by itself."
@@ -35638,9 +36512,14 @@ async function get_goal_brief(args) {
   };
 }
 async function add_item(args) {
-  const input2 = AddItemSchema.parse(args);
+  const parsed = AddItemSchema.parse(args);
+  const calls = parsed.action?.calls;
+  const problem = calls ? proposalCallsProblem2(calls) : null;
+  if (problem) throw new Error(problem);
+  const input2 = parsed.action ? { ...parsed, action: { category: parsed.action.category, summary: parsed.action.summary, ...parsed.action.params && { params: parsed.action.params } } } : parsed;
   const planId = requireOpenGoal();
   const result = addItem2(planId, getOpenRun2(), input2);
+  const staged = !result.existing && result.mode === "propose" && calls && calls.length > 0 ? stageProposalCalls2(result.task, parsed.action.category, calls) : void 0;
   if (!result.existing) {
     touchPlan2(planId);
     record3(planId, result.task.id, "task_created", {
@@ -35661,6 +36540,7 @@ async function add_item(args) {
     },
     existing: result.existing,
     ...result.mode && { mode: result.mode },
+    ...staged && { staged_calls: staged },
     message: result.existing ? "An item for this external_ref already exists; nothing was created. Update it instead if needed." : result.untrusted ? `Proposed instead of done: this run has read untrusted content (${result.untrusted}), so its auto actions need approval for the rest of the run. Do not carry it out until it shows approved_to_execute.` : result.mode === "propose" ? "Proposed:waits for the human to approve. Do not carry out the action until it shows approved_to_execute." : result.mode === "auto" ? "Recorded as done." : "Item created.",
     ...result.similar_categories && {
       note: `"${input2.action.category}" is a new category for this goal, but it already has ${result.similar_categories.map((c) => `"${c}"`).join(", ")}. If this is the same kind of action, use that name next time so approvals count together.`
@@ -35732,7 +36612,7 @@ async function end_run(args) {
   if (!runId) throw new Error("No run to end: you were not started for a run (get_goal_brief had no run_id).");
   const run = getRun2(runId);
   if (!run || run.plan_id !== planId) throw new Error(`Run ${runId} not found in this goal.`);
-  const ended = endRun2(runId, input2.summary, input2.status, input2.status_check, input2.status_tone);
+  const ended = endRun2(runId, input2.summary, input2.status, input2.status_check, input2.status_tone, input2.handled);
   setOpenRun(null);
   record3(planId, planId, "run_completed", { run_id: runId, summary: ended.summary, items_created: ended.items_created, items_resolved: ended.items_resolved });
   return {
@@ -35768,10 +36648,12 @@ async function run_goal(args) {
 
 // src/tools/goal_runner.ts
 init_src();
-import { existsSync as existsSync5 } from "fs";
+import { existsSync as existsSync5, mkdirSync as mkdirSync4, statSync as statSync2 } from "fs";
+import { dirname as dirname4, isAbsolute, resolve as resolve2 } from "path";
+import { homedir as homedir5 } from "os";
 
 // src/runner-session.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, rmSync, statSync, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync2, statSync, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir3, userInfo } from "os";
 import { dirname as dirname2, join as join4, resolve } from "path";
 init_src();
@@ -35785,7 +36667,7 @@ function recordCliPath(serverDir, dir = runnerDir(), env = process.env) {
     const cli = join4(serverDir, "quarterdeck-cli.mjs");
     if (!existsSync3(join4(dir, "launch.mjs")) || !existsSync3(cli)) return;
     const file2 = join4(dir, "cli-path");
-    if (existsSync3(file2) && readFileSync2(file2, "utf8").trim() === cli) return;
+    if (existsSync3(file2) && readFileSync3(file2, "utf8").trim() === cli) return;
     writeFileSync2(file2, cli);
   } catch {
   }
@@ -35798,7 +36680,7 @@ function standingSessionId(dir = runnerDir()) {
   }
 }
 function readStateText(file2) {
-  return readFileSync2(file2, "utf8").replace(/^﻿/, "");
+  return readFileSync3(file2, "utf8").replace(/^﻿/, "");
 }
 var RUNNER_USAGE = [
   "Usage: quarterdeck runner <command>",
@@ -35818,7 +36700,7 @@ var RUNNER_USAGE = [
 
 // src/update-check.ts
 init_src();
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join5 } from "path";
 import { fileURLToPath } from "url";
@@ -35866,7 +36748,7 @@ function installedVersion(scriptDir = dirname3(fileURLToPath(import.meta.url)), 
   const plugin = join5(scriptDir, "..");
   if (existsSync4(join5(plugin, "..", "..", "mcp", "src"))) return null;
   try {
-    const version2 = JSON.parse(readFileSync3(join5(plugin, ".claude-plugin", "plugin.json"), "utf8")).version;
+    const version2 = JSON.parse(readFileSync4(join5(plugin, ".claude-plugin", "plugin.json"), "utf8")).version;
     return typeof version2 === "string" && VERSION.test(version2) ? version2 : null;
   } catch {
     return null;
@@ -35875,7 +36757,7 @@ function installedVersion(scriptDir = dirname3(fileURLToPath(import.meta.url)), 
 function versionOnDisk(env = process.env, home = homedir4()) {
   try {
     const file2 = join5(env.CLAUDE_CONFIG_DIR || join5(home, ".claude"), "plugins", "installed_plugins.json");
-    const entries = JSON.parse(readFileSync3(file2, "utf8")).plugins?.[PLUGIN_ID];
+    const entries = JSON.parse(readFileSync4(file2, "utf8")).plugins?.[PLUGIN_ID];
     let newest = null;
     for (const e of Array.isArray(entries) ? entries : []) {
       const v = typeof e?.version === "string" && VERSION.test(e.version) ? e.version : null;
@@ -35924,7 +36806,9 @@ async function goals_tick(args) {
 async function goals_overview(args) {
   const input2 = GoalsOverviewSchema.parse(args);
   const { body, etag } = overviewWithEtag2(input2.detail ?? "all", standingSessionId(), input2.full_instructions === true, input2.only === true);
-  return overviewAnswer(input2.etag, body, etag, availableUpdate());
+  const answer = overviewAnswer(input2.etag, body, etag, availableUpdate());
+  if (!input2.watch_health || !answer.changed || !Array.isArray(input2.detail)) return answer;
+  return { ...answer, watch_health: Object.fromEntries(input2.detail.map((id) => [id, watchHealth2(id)])) };
 }
 function overviewAnswer(asked, body, etag, update) {
   const tag = update ? `${etag}+update-${update.latest}${update.ready ? "-ready" : ""}` : etag;
@@ -36040,6 +36924,79 @@ async function create_goal(args) {
   const watches = await firstChecks(id);
   return { id, ...applied, one_off: input2.one_off ?? false, model: getGoal2(id)?.model ?? null, queued_run: queued ? queued.id : null, ...watches.length ? { watches } : {} };
 }
+async function originRepo(dir, run) {
+  try {
+    return repoOfRemote(await run("git", ["-C", dir, "remote", "get-url", "origin"]));
+  } catch {
+    return null;
+  }
+}
+function targetFolder(dir, create, preview) {
+  if (existsSync5(dir)) {
+    if (!statSync2(dir).isDirectory()) throw new Error(`Not a folder: ${dir}`);
+    return { exists: true };
+  }
+  const parent = dirname4(resolve2(dir));
+  if (!existsSync5(parent) || !statSync2(parent).isDirectory()) throw new Error(`Folder not found: ${dir}, and neither is the folder it would go in (${parent}).`);
+  if (preview) return { exists: false };
+  if (!create) throw new Error(`Working directory not found: ${dir}`);
+  mkdirSync4(dir);
+  return { exists: true };
+}
+function resolveTargetDir(from, typed) {
+  const t = typed.trim();
+  if (t === "~" || /^~[\\/]/.test(t)) return resolve2(homedir5(), t.slice(2) || ".");
+  if (isAbsolute(t)) return resolve2(t);
+  if (/^\.\.?([\\/]|$)/.test(t)) return resolve2(from, t);
+  return resolve2(dirname4(resolve2(from)), t);
+}
+async function rewrittenFor(goalId, fromDir, toDir, confirmed, run) {
+  let { instructions, watches } = confirmed;
+  let replacements = [];
+  if (instructions === void 0 || watches === void 0) {
+    const src = getGoal2(goalId);
+    const [fromRepo, toRepo] = await Promise.all([originRepo(fromDir, run), existsSync5(toDir) ? originRepo(toDir, run) : Promise.resolve(null)]);
+    const rewritten = rewriteForCopy(
+      { instructions: src.instructions, watches: Object.fromEntries(listWatches2(goalId).map((w) => [w.name, watchSpecOf(w)])) },
+      { fromDir, toDir, fromRepo, toRepo }
+    );
+    instructions ??= rewritten.value.instructions;
+    watches ??= rewritten.value.watches;
+    replacements = rewritten.replacements;
+  }
+  return { instructions, watches, replacements };
+}
+async function copy_goal(args, run = defaultRunFile) {
+  const input2 = CopyGoalSchema.parse(args);
+  const src = getGoal2(input2.goal_id);
+  const plan = src ? getPlan2(input2.goal_id) : void 0;
+  if (!src || !plan) throw new Error(`Goal ${input2.goal_id} not found.`);
+  const dir = resolveTargetDir(plan.working_dir, input2.working_dir);
+  const { exists } = targetFolder(dir, input2.create_dir ?? false, input2.preview ?? false);
+  const confirmed = { instructions: input2.instructions, watches: input2.watches };
+  const { instructions, watches, replacements } = await rewrittenFor(input2.goal_id, plan.working_dir ?? "", dir, confirmed, run);
+  if (input2.preview) return { preview: true, name: input2.name ?? plan.name, working_dir: dir, exists, instructions, watches, replacements };
+  const id = `plan_${nanoid3(10)}`;
+  const copy = copyGoal2(input2.goal_id, { id, name: input2.name ?? plan.name, working_dir: dir, instructions, watches });
+  record3(id, id, "goal_copied", { from: input2.goal_id, working_dir: dir }, human);
+  return { id, name: input2.name ?? plan.name, working_dir: dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements };
+}
+async function move_goal(args, run = defaultRunFile) {
+  const input2 = MoveGoalSchema.parse(args);
+  const src = getGoal2(input2.goal_id);
+  const plan = src ? getPlan2(input2.goal_id) : void 0;
+  if (!src || !plan) throw new Error(`Goal ${input2.goal_id} not found.`);
+  const dir = resolveTargetDir(plan.working_dir, input2.working_dir);
+  if (samePath(plan.working_dir ?? "", dir)) throw new Error(`The goal already works in ${plan.working_dir}.`);
+  if (getOpenGoalRun(input2.goal_id)) throw new Error("A run is going: wait for it to finish (or cancel it), then move the goal.");
+  const { exists } = targetFolder(dir, input2.create_dir ?? false, input2.preview ?? false);
+  const confirmed = { instructions: input2.instructions, watches: input2.watches };
+  const { instructions, watches, replacements } = await rewrittenFor(input2.goal_id, plan.working_dir ?? "", dir, confirmed, run);
+  if (input2.preview) return { preview: true, name: plan.name, working_dir: dir, exists, instructions, watches, replacements };
+  moveGoal2(input2.goal_id, { working_dir: dir, instructions, watches });
+  record3(input2.goal_id, input2.goal_id, "goal_moved", { from: plan.working_dir, working_dir: dir }, human);
+  return { id: input2.goal_id, name: plan.name, working_dir: dir, status: getGoal2(input2.goal_id).status, watches: Object.keys(watches).length, replacements };
+}
 async function delete_memory(args) {
   const input2 = DeleteMemorySchema.parse(args);
   const m = getMemory2(input2.memory_id);
@@ -36104,9 +37061,11 @@ async function firstChecks(goalId) {
       continue;
     }
     const r = await checkCommandWatch2(w.id);
+    const got = r.error ? [] : getWatch2(w.id)?.seen ?? [];
+    const warn = r.error ? "" : [got.length ? `. Some of what it got: ${sampleLines(got)}.` : "", ...firstCheckWarnings(w, got).map((x) => ` Warning: ${x}.`)].join("");
     results.push({
       name: w.name,
-      result: r.error ? `the command failed (${r.error}); it is tried again every ${w.every_minutes} min` : w.status_rules ? `works: ${r.lines} ${r.lines === 1 ? "line" : "lines"} now; it sets the goal's status${r.status ? ` (now "${r.status.status}")` : ""} at each check` : w.fires === "change" ? `works: ${r.lines} ${r.lines === 1 ? "line" : "lines"} now; a run starts when its output changes` : `works: ${r.lines} ${r.lines === 1 ? "item" : "items"} there now; a run starts when a new one appears`
+      result: (r.error ? `the command failed (${r.error}); it is tried again every ${w.every_minutes} min` : w.status_rules ? `works: ${r.lines} ${r.lines === 1 ? "line" : "lines"} now; it sets the goal's status${r.status ? ` (now "${r.status.status}")` : ""} at each check` : w.fires === "change" ? `works: ${r.lines} ${r.lines === 1 ? "line" : "lines"} now; a run starts when its output changes` : `works: ${r.lines} ${r.lines === 1 ? "item" : "items"} there now; a run starts when a new one appears`) + warn
     });
   }
   return results;
@@ -36118,7 +37077,8 @@ async function watch_report(args) {
   const r = reportToolWatch2(watch.id, { ...input2.error !== void 0 ? { error: input2.error } : { text: input2.text ?? "", ...input2.note ? { note: input2.note } : {} }, ...input2.cleanup ? { cleanup: input2.cleanup } : {} });
   const goal = getGoal2(watch.plan_id);
   const queued = r.fresh.length && goal?.status === "active" ? queueForWatchEvents2(watch.plan_id) : null;
-  return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...r.error && { error: r.error }, queued_run: queued ? queued.id : null };
+  const warnings = r.baseline && !r.error ? firstCheckWarnings(watch, getWatch2(watch.id)?.seen ?? []) : [];
+  return { watch_id: watch.id, baseline: r.baseline, lines: r.lines, new: r.fresh.length, ...r.error && { error: r.error }, ...warnings.length && { warnings }, queued_run: queued ? queued.id : null };
 }
 async function report_run_end(args) {
   const input2 = ReportRunEndSchema.parse(args);
@@ -36288,8 +37248,19 @@ function parsePages(text) {
 async function pr_inline_comments(args, run = defaultRunFile) {
   const { repo, pr } = PrInlineCommentsSchema.parse(args);
   const answer = await run("gh", ["api", `repos/${repo}/pulls/${pr}/comments`, "--paginate"]);
-  const comments = parsePages(answer).filter((c) => TRUSTED.includes(c.author_association)).map((c) => ({ id: c.id, path: c.path, line: c.line ?? c.original_line ?? null, author: c.user?.login ?? null, body: c.body }));
+  const comments = parsePages(answer).filter((c) => TRUSTED.includes(c.author_association)).map((c) => ({ id: c.id, path: c.path, line: c.line ?? c.original_line ?? null, author: c.user?.login ?? null, body: cleanOutsideText(c.body ?? "").text }));
   return { repo, pr, comments };
+}
+
+// src/tools/issue_read.ts
+init_src();
+async function issue_read(args, run = defaultRunFile) {
+  const { repo, number: number4, comment_id } = IssueReadSchema.parse(args);
+  const answer = await run("gh", ["issue", "view", String(number4), "--repo", repo, "--json", "title,body,comments"]);
+  const issue2 = JSON.parse(answer);
+  const clean = (text) => cleanOutsideText(text ?? "").text;
+  const comments = (issue2.comments ?? []).filter((c) => TRUSTED.includes(c.authorAssociation)).filter((c) => comment_id === void 0 || c.id === comment_id).map((c) => ({ id: c.id, author: c.author?.login ?? null, body: clean(c.body) }));
+  return { repo, number: number4, title: clean(issue2.title), body: clean(issue2.body), comments };
 }
 
 // src/tools/detect_forge.ts
@@ -36416,6 +37387,8 @@ var REFUSED_WHEN_OUTDATED = /* @__PURE__ */ new Set([
   "decide_item",
   "update_goal",
   "create_goal",
+  "copy_goal",
+  "move_goal",
   "delete_goal",
   "restore_goal",
   "purge_goal",
@@ -36435,7 +37408,7 @@ function outdatedRefusal(tool) {
 }
 
 // src/index.ts
-import { dirname as dirname4 } from "path";
+import { dirname as dirname5 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var COMPACT_TOOLS = /* @__PURE__ */ new Set(["goals_overview", "goals_tick", "todo_list"]);
 var TOOLS = [
@@ -36596,6 +37569,12 @@ var TOOLS = [
     handler: (args) => pr_inline_comments(args)
   },
   {
+    name: "issue_read",
+    description: "An issue's title, body and comments, only the comments from the repo's owner, members and collaborators (or the one comment asked for), with hidden comments and invisible characters replaced by markers. Read-only: it posts nothing. In a goal run, only as the goal's rules allow; it reads outside text.",
+    inputSchema: toolInputSchema(IssueReadSchema),
+    handler: (args) => issue_read(args)
+  },
+  {
     name: "detect_forge",
     description: "Which git host a folder's repo is on (github, gitlab, or null when it has no origin remote or neither CLI knows the host), and whether that host's CLI (gh, glab) is installed and signed in. Read-only. For the quarterdeck-goals plugin's /goal-new.",
     inputSchema: toolInputSchema(DetectForgeSchema),
@@ -36644,6 +37623,8 @@ var TOOLS = [
     ["guarded_stage", "Checks and stages a goal run's guarded call (the guard plugin's guarded_run); never runs it.", GuardedStageSchema, guarded_stage],
     ["run_refused", "Records a goal run's call that Claude Code refused although the guard allowed it, with the allow rule it needs.", RunRefusedSchema, run_refused],
     ["create_goal", "Creates a goal for the human.", CreateGoalSchema, create_goal],
+    ["copy_goal", "Copies a goal's set-up to another folder for the human, with its folder and repo rewritten; the copy starts paused.", CopyGoalSchema, copy_goal],
+    ["move_goal", "Moves a goal to another folder for the human, with its folder and repo rewritten in its instructions and watches; it keeps its runs, items and memory.", MoveGoalSchema, move_goal],
     ["delete_memory", "Forgets one of a goal's memories for the human: it goes inactive and can be restored.", DeleteMemorySchema, delete_memory],
     ["restore_memory", "Puts an inactive memory (forgotten, merged, retired or rewritten) back to active for the human; a newer memory that replaced it is left alone.", RestoreMemorySchema, restore_memory],
     ["trust_memory", "Clears the untrusted mark on a goal memory a run wrote after reading outside content, for the human.", TrustMemorySchema, trust_memory],
@@ -36700,6 +37681,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 server.setRequestHandler(ListResourcesRequestSchema, handleListResources);
 server.setRequestHandler(ReadResourceRequestSchema, handleReadResource);
-recordCliPath(dirname4(fileURLToPath2(import.meta.url)));
+recordCliPath(dirname5(fileURLToPath2(import.meta.url)));
 var transport = new StdioServerTransport();
 await server.connect(transport);

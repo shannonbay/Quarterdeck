@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.32.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.33.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -348,7 +348,12 @@ function runMigrations(db) {
       waiting_since  TEXT,
       untrusted_at     TEXT,
       untrusted_source TEXT,
-      untrusted_root   TEXT
+      untrusted_root   TEXT,
+      secrets_read_at     TEXT,
+      secrets_read_source TEXT,
+      secrets_read_paths  TEXT,
+      tripped_at     TEXT,
+      tripped_reason TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_goal_runs_plan ON goal_runs(plan_id, started_at);
 
@@ -437,6 +442,12 @@ function runMigrations(db) {
     } catch {
     }
   }
+  for (const col of ["tripped_at", "tripped_reason"]) {
+    try {
+      db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
+    } catch {
+    }
+  }
   for (const col of ["untrusted_at", "untrusted_source"]) {
     try {
       db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
@@ -450,6 +461,12 @@ function runMigrations(db) {
   for (const table of ["goal_runs", "goal_memory"]) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN untrusted_root TEXT`);
+    } catch {
+    }
+  }
+  for (const col of ["secrets_read_at", "secrets_read_source", "secrets_read_paths"]) {
+    try {
+      db.exec(`ALTER TABLE goal_runs ADD COLUMN ${col} TEXT`);
     } catch {
     }
   }
@@ -557,7 +574,9 @@ function runMigrations(db) {
       queued_at  TEXT,
       run_id     TEXT,
       -- the run whose end the check that saw it was made for (null: an ordinary check)
-      seen_during_run TEXT
+      seen_during_run TEXT,
+      -- how many runs have been shown it in their brief (schema version 29)
+      attempts   INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_goal_watch_events_plan ON goal_watch_events(plan_id, run_id);
 
@@ -568,6 +587,10 @@ function runMigrations(db) {
   }
   try {
     db.exec("ALTER TABLE goal_watch_events ADD COLUMN seen_during_run TEXT");
+  } catch {
+  }
+  try {
+    db.exec("ALTER TABLE goal_watch_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0");
   } catch {
   }
   try {
@@ -584,6 +607,10 @@ function runMigrations(db) {
   }
   try {
     db.exec("ALTER TABLE goal_watches ADD COLUMN cleanup_failures INTEGER NOT NULL DEFAULT 0");
+  } catch {
+  }
+  try {
+    db.exec("ALTER TABLE goal_watches ADD COLUMN last_line_count INTEGER");
   } catch {
   }
   try {
@@ -693,10 +720,16 @@ function runMigrations(db) {
       file_hashes TEXT NOT NULL DEFAULT '{}',
       used_at     TEXT,
       recorded_at TEXT,
-      created_at  TEXT NOT NULL
+      created_at  TEXT NOT NULL,
+      task_id     TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_guarded_checks_run ON guarded_checks(run_id, command);
   `);
+  try {
+    db.exec("ALTER TABLE guarded_checks ADD COLUMN task_id TEXT");
+  } catch {
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_guarded_checks_task ON guarded_checks(task_id)");
   db.exec(`
     UPDATE goals SET tool_map = replace(tool_map, '"mcp__conductor__', '"mcp__quarterdeck__')
     WHERE instr(tool_map, '"mcp__conductor__') > 0
@@ -725,7 +758,7 @@ var init_migrate = __esm({
       "trg_goal_watches_update_revision",
       "trg_goal_watches_delete_revision"
     ];
-    SCHEMA_VERSION = 25;
+    SCHEMA_VERSION = 29;
     OUTDATED_MESSAGE = "Quarterdeck was updated in another session and this session still runs the older version, which could misread newer goal data. Reload first: /reload-plugins, or reconnect the quarterdeck server in /mcp.";
   }
 });
@@ -972,7 +1005,7 @@ function getLatestVerification(db, planId, taskId, gate) {
   return row ? deserializeVerification(row) : void 0;
 }
 function clearAllData(db) {
-  db.exec("DELETE FROM goal_item_attempts; DELETE FROM goal_run_hold; DELETE FROM scheduler_lease; DELETE FROM goal_watch_events; DELETE FROM goal_watches; DELETE FROM goal_tool_calls; DELETE FROM goal_health; DELETE FROM goal_memory; DELETE FROM goal_runs; DELETE FROM goal_triggers; DELETE FROM goals; DELETE FROM verifications; DELETE FROM transcript_messages; DELETE FROM events; DELETE FROM agent_sessions; DELETE FROM tasks; DELETE FROM plans;");
+  db.exec("DELETE FROM guarded_checks; DELETE FROM goal_item_attempts; DELETE FROM goal_run_hold; DELETE FROM scheduler_lease; DELETE FROM goal_watch_events; DELETE FROM goal_watches; DELETE FROM goal_tool_calls; DELETE FROM goal_health; DELETE FROM goal_memory; DELETE FROM goal_runs; DELETE FROM goal_triggers; DELETE FROM goals; DELETE FROM verifications; DELETE FROM transcript_messages; DELETE FROM events; DELETE FROM agent_sessions; DELETE FROM tasks; DELETE FROM plans;");
 }
 var init_queries = __esm({
   "../core/src/queries.ts"() {
@@ -1135,6 +1168,9 @@ function insertRun(db, planId, trigger, status2 = "queued", skipReason) {
     untrusted_at: null,
     untrusted_source: null,
     untrusted_root: null,
+    secrets_read_at: null,
+    secrets_read_source: null,
+    secrets_read_paths: null,
     request: null,
     request_untrusted: 0,
     step: null,
@@ -1162,6 +1198,27 @@ function markRunUntrusted(db, runId, source, root = source) {
     WHERE id = ? AND (untrusted_at IS NULL
       OR (untrusted_source LIKE ? AND ? NOT LIKE ?)
       OR (untrusted_source = ? AND ? <> ? AND ? NOT LIKE ?))`).run((/* @__PURE__ */ new Date()).toISOString(), source, root, runId, summary, source, summary, WATCH_EVENTS_SOURCE, source, WATCH_EVENTS_SOURCE, source, summary);
+}
+function markRunSecretsRead(db, runId, source, path) {
+  const run = db.prepare("SELECT secrets_read_paths FROM goal_runs WHERE id = ?").get(runId);
+  if (!run) return;
+  const paths = runSecretPaths(run);
+  if (path && !paths.includes(path)) paths.push(path);
+  db.prepare(`UPDATE goal_runs SET secrets_read_at = COALESCE(secrets_read_at, ?), secrets_read_source = COALESCE(secrets_read_source, ?),
+    secrets_read_paths = ? WHERE id = ?`).run((/* @__PURE__ */ new Date()).toISOString(), source, JSON.stringify(paths), runId);
+}
+function runSecretPaths(run) {
+  try {
+    return run.secrets_read_paths ? JSON.parse(run.secrets_read_paths) : [];
+  } catch {
+    return [];
+  }
+}
+function afterOutsideApplies(run) {
+  return !run?.secrets_read_at;
+}
+function secretsReadReason(run, category) {
+  return `this run read secrets (${run.secrets_read_source ?? "a secret"}) before it read outside content, so "${category}" isn't auto after outside content in this run`;
 }
 function listRuns(db, planId, limit = 20, opts = {}) {
   const where = opts.includeSkipped === false ? "AND status != 'skipped'" : "";
@@ -1307,6 +1364,7 @@ var init_goals = __esm({
     RUN_SUMMARY_SOURCE = "run summary ";
     deleteMemory = forgetMemory;
     GOAL_TABLES = [
+      "guarded_checks",
       "goal_item_attempts",
       "goal_watch_events",
       "goal_watches",
@@ -1498,7 +1556,7 @@ function rejectTask(db, planId, taskId, feedback) {
   requireAwaitingReview(task);
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const v = insertVerification(db, { plan_id: planId, task_id: taskId, gate: "approval", passed: false, actor: "human", output: feedback });
-  const note = `Review rejected (${now}): ${feedback}`;
+  const note2 = `Review rejected (${now}): ${feedback}`;
   const answersAttemptLimit = task.external_ref?.startsWith(ATTEMPT_REF) ?? false;
   updateTask(db, planId, taskId, {
     ...answersAttemptLimit ? { status: "completed", result: `Your answer: ${feedback.trim()}` } : {},
@@ -1507,7 +1565,7 @@ function rejectTask(db, planId, taskId, feedback) {
     approved_at: null,
     notes: task.notes ? `${task.notes}
 
-${note}` : note,
+${note2}` : note2,
     updated_at: now
   });
   if (getPlan(db, planId)?.kind === "goal") {
@@ -1802,9 +1860,10 @@ var init_schedule = __esm({
 
 // ../core/src/guarded.ts
 import { createHash as createHash2 } from "crypto";
-import { mkdirSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { basename, join as join2 } from "path";
-function checkGuardedPayload(command2, files, env = process.env) {
+function checkGuardedPayload(command2, files, env = process.env, secretFiles = []) {
   const parts = [command2, ...files.map((f) => f.contents)];
   const bytes = parts.reduce((n, p) => n + Buffer.byteLength(p, "utf8"), 0);
   if (bytes > GUARDED_MAX_BYTES) {
@@ -1822,7 +1881,29 @@ function checkGuardedPayload(command2, files, env = process.env) {
       if (text.includes(value)) return { ok: false, reason: `${where(i)} contains the value of the environment variable ${name}` };
     }
   }
+  for (const [i, text] of parts.entries()) {
+    for (const secret of secretFiles) {
+      if (secret.values.some((v) => text.includes(v))) return { ok: false, reason: `${where(i)} contains a value from ${secret.path}, which this run read` };
+    }
+  }
   return { ok: true };
+}
+function secretFileValues(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return { path, values: [] };
+  }
+  const values = /* @__PURE__ */ new Set();
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const kv = /^(?:export\s+)?[A-Za-z_][\w.-]*\s*=\s*(.*)$/.exec(line);
+    const value = kv ? kv[1].trim().replace(/^["']|["']$/g, "") : line;
+    if (value.length >= ENV_VALUE_MIN_CHARS) values.add(value);
+  }
+  return { path, values: [...values] };
 }
 function hashContents(contents) {
   return createHash2("sha256").update(contents).digest("hex");
@@ -1865,6 +1946,177 @@ function claimUsedGuardedCheck(db, runId, category) {
   db.prepare("UPDATE guarded_checks SET recorded_at = ? WHERE id = ?").run((/* @__PURE__ */ new Date()).toISOString(), row.id);
   return true;
 }
+function proposalCallsProblem(calls) {
+  if (calls.length > PROPOSAL_MAX_CALLS) return `a proposal can stage at most ${PROPOSAL_MAX_CALLS} calls (got ${calls.length})`;
+  for (const [i, c] of calls.entries()) {
+    if (typeof c.command !== "string" || !c.command.trim()) return `call ${i + 1} has no command`;
+    const bytes = Buffer.byteLength(c.command) + (c.files ?? []).reduce((n, f) => n + Buffer.byteLength(f.contents), 0);
+    if (bytes > GUARDED_MAX_BYTES) return `call ${i + 1} carries ${bytes} bytes, over the ${GUARDED_MAX_BYTES}-byte limit`;
+  }
+  return null;
+}
+function normaliseRepo(url) {
+  let t = url.trim();
+  if (t.endsWith("/")) t = t.slice(0, -1);
+  const q = t.lastIndexOf("/");
+  if (q < 0) return null;
+  let name = t.slice(q + 1);
+  if (name.length > 4 && name.toLowerCase().endsWith(".git")) name = name.slice(0, -4);
+  const head = t.slice(0, q);
+  const p = head.lastIndexOf("/");
+  const plain = (s) => s.length > 0 && !/\s/.test(s);
+  if (!plain(name)) return null;
+  if (p >= 0) {
+    const owner2 = head.slice(p + 1);
+    return GITHUB_HOST.test(head.slice(0, p)) && plain(owner2) ? `${owner2}/${name}`.toLowerCase() : null;
+  }
+  const k = head.toLowerCase().indexOf("github.com:");
+  if (k < 0 || !/^(?:[\w.-]+@)?$/.test(head.slice(0, k))) return null;
+  const owner = head.slice(k + "github.com:".length);
+  return plain(owner) ? `${owner}/${name}`.toLowerCase() : null;
+}
+function goalRepo(workingDir) {
+  if (!workingDir) return null;
+  if (repoCache.has(workingDir)) return repoCache.get(workingDir);
+  let repo = null;
+  try {
+    repo = normaliseRepo(execFileSync("git", ["remote", "get-url", "origin"], { cwd: workingDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 }));
+  } catch {
+    repo = null;
+  }
+  repoCache.set(workingDir, repo);
+  return repo;
+}
+function guardedTarget(command2, ownRepo) {
+  const targets = [];
+  const own = ownRepo.toLowerCase();
+  const repoOf = (owner, name) => owner === "{owner}" && name === "{repo}" ? own : `${owner}/${name}`.toLowerCase();
+  let rest = command2.replace(/https?:\/\/github\.com\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pull|issues)\/(\d+)[^\s'"]*/g, (_all, o, n, num) => {
+    targets.push({ repo: `${o}/${n}`.toLowerCase(), number: Number(num) });
+    return " __url__ ";
+  });
+  rest = rest.replace(/\brepos\/([^/\s'"]+)\/([^/\s'"]+)\/(?:pulls|issues)\/(\d+)/g, (_all, o, n, num) => {
+    targets.push({ repo: repoOf(o, n), number: Number(num) });
+    return "__path__";
+  });
+  for (const part of rest.split(/[;&|\n]/)) {
+    if (/\bgh\s+api\b/.test(part) && !part.includes("__path__")) return null;
+  }
+  for (const m of rest.matchAll(/\bgh\s+(?:pr|issue)\s+[a-z-]+((?:[^;&|\n])*)/g)) {
+    let args = m[1];
+    let repo = own;
+    const r = /(?:^|\s)(?:-R|--repo)(?:\s+|=)['"]?([^\s'"]+)['"]?/.exec(args);
+    if (r) {
+      repo = (normaliseRepo(`github.com/${r[1].replace(/^(?:https?:\/\/)?github\.com\//i, "")}`) ?? r[1]).toLowerCase();
+      args = args.replace(r[0], " ");
+    }
+    if (args.includes("__url__")) {
+      if (r) {
+        for (const t of targets) if (t.repo !== repo) targets.push({ repo, number: t.number });
+      }
+      continue;
+    }
+    const n = /(?:^|\s)['"]?#?(\d+)['"]?(?=\s|$)/.exec(args);
+    if (!n) return null;
+    targets.push({ repo, number: Number(n[1]) });
+  }
+  return targets.length > 0 ? targets : null;
+}
+function runTargets(db, runId) {
+  const out = /* @__PURE__ */ new Set();
+  const rows = db.prepare("SELECT line FROM goal_watch_events WHERE run_id = ?").all(runId);
+  for (const { line } of rows) {
+    const m = /^\s*#?(\d+)/.exec(line);
+    if (m) out.add(Number(m[1]));
+  }
+  const request = getRun(db, runId)?.request;
+  if (request) {
+    const m = /#(\d+)\b/.exec(request) ?? /(?:^|\s)(\d+)(?=\s|$|[.,;:!?])/.exec(request);
+    if (m) out.add(Number(m[1]));
+  }
+  return [...out].sort((a, b) => a - b);
+}
+function checkGuardedTarget(command2, ownRepo, allowed) {
+  if (allowed.length === 0) return "this run wasn't started for a PR or issue, so it can't make guarded calls: propose it instead";
+  if (!ownRepo) return "the goal's repo can't be read from its working folder's origin remote, so it can't make guarded calls: propose it instead";
+  const targets = guardedTarget(command2, ownRepo);
+  if (!targets) return "the call's target (a repo and a PR or issue number) can't be read from the command, so it can't be a guarded call: propose it instead";
+  const set = allowed.map((n) => `#${n}`).join(", ");
+  for (const t of targets) {
+    if (t.repo !== ownRepo.toLowerCase()) return `the call names ${t.repo} #${t.number}, but this goal's repo is ${ownRepo}: propose it instead`;
+    if (!allowed.includes(t.number)) return `the call names #${t.number}, but this run was started for ${set}: propose it instead`;
+  }
+  return null;
+}
+function clearProposalCalls(db, key, dataDir) {
+  const gone = db.prepare("DELETE FROM guarded_checks WHERE task_id = ?").run(key);
+  if (Number(gone.changes) > 0) rmSync(join2(dataDir, "guarded", key.replace("/", "-")), { recursive: true, force: true });
+}
+function stageProposalCalls(db, task, category, calls, opts) {
+  const problem = proposalCallsProblem(calls);
+  if (problem) throw new Error(problem);
+  const key = proposalKey(task.plan_id, task.id);
+  clearProposalCalls(db, key, opts.dataDir);
+  if (calls.length === 0) return [];
+  const dir = join2(opts.dataDir, "guarded", key.replace("/", "-"));
+  mkdirSync(dir, { recursive: true });
+  return calls.map((call, n) => {
+    let staged = call.command;
+    const copies = (call.files ?? []).map((f, i) => {
+      const path = join2(dir, `${n}-${i}-${basename(f.path.replace(/\\/g, "/"))}`);
+      writeFileSync(path, f.contents);
+      staged = staged.split(f.path).join(path);
+      return { path, contents: f.contents };
+    });
+    const rec = recordGuardedCheck(db, { id: task.run_id ?? "", plan_id: task.plan_id }, category, staged, copies);
+    db.prepare("UPDATE guarded_checks SET task_id = ? WHERE id = ?").run(key, rec.id);
+    return staged;
+  });
+}
+function proposalCalls(db, key) {
+  const rows = db.prepare("SELECT command, file_hashes, used_at FROM guarded_checks WHERE task_id = ? ORDER BY created_at, rowid").all(key);
+  return rows.map((r) => ({ command: r.command, files: Object.keys(JSON.parse(r.file_hashes)), used_at: r.used_at }));
+}
+function proposalCallsWithFiles(db, key) {
+  return proposalCalls(db, key).map((c) => ({
+    ...c,
+    files: c.files.map((path) => {
+      try {
+        return { path, contents: readFileSync(path, "utf8") };
+      } catch {
+        return { path, contents: null };
+      }
+    })
+  }));
+}
+function proposalHasCalls(db, key) {
+  return db.prepare("SELECT 1 FROM guarded_checks WHERE task_id = ? LIMIT 1").get(key) !== void 0;
+}
+function approvedStagedCall(db, planId, category, command2) {
+  const row = db.prepare(`
+    SELECT g.task_id AS key, g.file_hashes AS file_hashes FROM guarded_checks g
+    JOIN tasks t ON g.task_id = t.plan_id || '/' || t.id
+    WHERE t.plan_id = ? AND t.status = 'active' AND t.archived_at IS NULL AND t.approved_at IS NOT NULL
+      AND json_extract(t.state, '$.action.category') = ? AND g.command = ? AND g.used_at IS NULL
+    ORDER BY t.created_at, t.rowid, g.created_at, g.rowid LIMIT 1
+  `).get(planId, category, command2);
+  return row ? { key: row.key, files: Object.keys(JSON.parse(row.file_hashes)) } : null;
+}
+function consumeProposalCall(db, key, command2, readFile) {
+  const rows = db.prepare("SELECT * FROM guarded_checks WHERE task_id = ? AND command = ? ORDER BY created_at, rowid").all(key, command2);
+  const unused = rows.filter((r) => r.used_at === null);
+  if (rows.length === 0) return { ok: false, reason: "no staged call of the approved proposal matches this exact command" };
+  if (unused.length === 0) return { ok: false, reason: "this staged call was already made; each is good for one call" };
+  const check = { ...unused[0], file_hashes: JSON.parse(unused[0].file_hashes) };
+  for (const [path, hash2] of Object.entries(check.file_hashes)) {
+    const now = readFile(path);
+    if (now === null) return { ok: false, reason: `staged file ${path} is gone` };
+    if (hashContents(now) !== hash2) return { ok: false, reason: `staged file ${path} changed after it was proposed` };
+  }
+  const usedAt = (/* @__PURE__ */ new Date()).toISOString();
+  db.prepare("UPDATE guarded_checks SET used_at = ? WHERE id = ? AND used_at IS NULL").run(usedAt, check.id);
+  return { ok: true, check: { ...check, used_at: usedAt } };
+}
 function stageGuardedCall(db, runId, command2, files, opts) {
   const run = getRun(db, runId);
   if (!run || !["queued", "running"].includes(run.status)) return { ok: false, reason: "this run is not running" };
@@ -1874,9 +2126,17 @@ function stageGuardedCall(db, runId, command2, files, opts) {
   if (!category || !goal.auto_after_outside.includes(category) || autonomyFor(goal, category) !== "auto") {
     return { ok: false, reason: category ? `"${category}" isn't a category the goal keeps auto after outside content` : "the command doesn't match any of the goal's tool rules" };
   }
-  const check = checkGuardedPayload(command2, files, opts.env ?? process.env);
+  const ownRepo = opts.repo !== void 0 ? opts.repo : goalRepo(db.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? null);
+  const targetRefusal = checkGuardedTarget(command2, ownRepo, runTargets(db, runId));
+  if (targetRefusal) return { ok: false, reason: targetRefusal };
+  const check = checkGuardedPayload(command2, files, opts.env ?? process.env, runSecretPaths(run).map(secretFileValues));
   if (!check.ok) return check;
-  if (opts.dryRun) return { ok: true, category, command: command2, files: [] };
+  if (!afterOutsideApplies(run)) return { ok: false, reason: secretsReadReason(run, category) };
+  if (opts.dryRun) {
+    const instructions = goal.instructions.length > GUARDED_JOB_CHARS ? `${goal.instructions.slice(0, GUARDED_JOB_CHARS - 1)}\u2026` : goal.instructions;
+    const job = [goal.objective, instructions].filter((t) => t.trim()).join("\n\n");
+    return { ok: true, category, command: command2, files: [], goal_name: getPlan(db, run.plan_id)?.name ?? run.plan_id, job };
+  }
   const dir = join2(opts.dataDir, "guarded", runId);
   mkdirSync(dir, { recursive: true });
   const stamp = newId("gf");
@@ -1890,13 +2150,14 @@ function stageGuardedCall(db, runId, command2, files, opts) {
   recordGuardedCheck(db, run, category, staged, copies);
   return { ok: true, category, command: staged, files: copies.map((c) => c.path) };
 }
-var GUARDED_MAX_BYTES, ENV_VALUE_MIN_CHARS, TOKEN_RULES;
+var GUARDED_MAX_BYTES, ENV_VALUE_MIN_CHARS, TOKEN_RULES, PROPOSAL_MAX_CALLS, GITHUB_HOST, repoCache, proposalKey, GUARDED_JOB_CHARS;
 var init_guarded = __esm({
   "../core/src/guarded.ts"() {
     "use strict";
     init_goals();
     init_goal_engine();
     init_guard();
+    init_queries();
     GUARDED_MAX_BYTES = 64 * 1024;
     ENV_VALUE_MIN_CHARS = 8;
     TOKEN_RULES = [
@@ -1906,13 +2167,19 @@ var init_guarded = __esm({
       { name: "an AWS access key id", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/ },
       { name: "a private key block", re: /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/ }
     ];
+    PROPOSAL_MAX_CALLS = 10;
+    GITHUB_HOST = /^(?:(?:https?|ssh|git):\/\/)?(?:[\w.-]+@)?github\.com$/i;
+    repoCache = /* @__PURE__ */ new Map();
+    proposalKey = (planId, taskId) => `${planId}/${taskId}`;
+    GUARDED_JOB_CHARS = 1e3;
   }
 });
 
 // ../core/src/guard.ts
 import { homedir as homedir2 } from "os";
 import { join as join3, posix } from "path";
-import { readFileSync } from "fs";
+import { readFileSync as readFileSync2 } from "fs";
+import { execFileSync as execFileSync2 } from "child_process";
 function canonicalToolName(name) {
   return name.startsWith(PLUGIN_QUARTERDECK_TOOL_PREFIX) ? QUARTERDECK_TOOL_PREFIX + name.slice(PLUGIN_QUARTERDECK_TOOL_PREFIX.length) : name;
 }
@@ -1947,17 +2214,67 @@ function matchToolRule(rawMap, rawName, input) {
 function readsUntrusted(toolMap, toolName, input) {
   return untrustedLabel(toolMap, toolName, input) !== null;
 }
-function untrustedLabel(toolMap, toolName, input) {
+function untrustedLabel(toolMap, toolName, input, ownOrigin = null) {
   const rule = matchToolRule(toolMap, toolName, input);
   if (rule?.category === UNTRUSTED_CATEGORY) {
     const command2 = COMMAND_RULE.exec(rule.pattern);
     if (command2) {
-      const pattern = command2[2].trim().replace(/\*+$/, "").trim();
+      const pattern = trimTrailing(command2[2].trim(), "*").trim();
       return pattern ? `${command2[1]}: ${pattern}` : command2[1];
     }
     return toolName;
   }
-  return matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null ? toolName : null;
+  if (matchToolCategory(BUILTIN_UNTRUSTED_MAP, toolName) !== null) return toolName;
+  let network = null;
+  if (SHELL_TOOLS.has(toolName) && typeof input?.command === "string" && !(rule && !COMMAND_RULE.test(rule.pattern))) {
+    for (const part of rule ? commandParts(input.command) : [input.command]) {
+      if (rule && matchToolRule(toolMap, toolName, { command: part }) !== null) continue;
+      network = builtinNetworkPart(part, ownOrigin);
+      if (network !== null) break;
+    }
+  }
+  return network !== null ? `${toolName}: ${network} (built-in network command)` : null;
+}
+function normaliseRemote(url) {
+  return trimTrailing(url.trim().replace(/^[a-z+]+:\/\//i, "").replace(/^[^@/]+@/, "").replace(/:(?!\d)/, "/"), "/").replace(/\.git$/i, "").toLowerCase();
+}
+function trimTrailing(s, ch) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === ch) end--;
+  return s.slice(0, end);
+}
+function gitOwnRemote(part, ownOrigin) {
+  const words = part.split(/\s+/).slice(2).filter((w) => !w.startsWith("-"));
+  if (/^git\s+clone\b/i.test(part)) return ownOrigin !== null && words.length > 0 && normaliseRemote(words[0]) === normaliseRemote(ownOrigin);
+  const remote = words[0];
+  if (remote === void 0 || remote.toLowerCase() === "origin") return true;
+  return ownOrigin !== null && normaliseRemote(remote) === normaliseRemote(ownOrigin);
+}
+function builtinNetworkPart(command2, ownOrigin = null) {
+  for (const part of commandParts(command2)) {
+    const hit = BUILTIN_NETWORK_RES.find(([, re]) => re.test(part));
+    if (!hit) continue;
+    const name = hit[0].replace(/\*$/, "").trim();
+    if (/^gh\s+api\b/i.test(part)) {
+      const method = /(?:^|\s)(?:-X|--method)(?:\s+|=)(\S+)/.exec(part)?.[1];
+      if (method && method.replace(/["']/g, "").toUpperCase() !== "GET") continue;
+    }
+    if (/^git\s/i.test(part) && gitOwnRemote(part, ownOrigin)) continue;
+    return name;
+  }
+  return null;
+}
+function originUrl(workingDir) {
+  if (!originCache.has(workingDir)) {
+    let url = null;
+    try {
+      url = execFileSync2("git", ["remote", "get-url", "origin"], { cwd: workingDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5e3 }).trim() || null;
+    } catch {
+      url = null;
+    }
+    originCache.set(workingDir, url);
+  }
+  return originCache.get(workingDir);
 }
 function quarterdeckDataPaths(env = process.env, home = homedir2()) {
   const db = defaultDbPath(env, home);
@@ -2016,6 +2333,26 @@ function touchesSecrets(toolName, input) {
   }
   return null;
 }
+function secretFilePaths(toolName, input, workingDir) {
+  if (!input) return [];
+  const str2 = (k) => typeof input[k] === "string" ? input[k] : "";
+  const found = [];
+  if (FILE_TOOLS.has(toolName)) {
+    const p = str2("file_path") || str2("notebook_path");
+    if (p && SECRET_PATH.test(p)) found.push(p);
+  } else if (SHELL_TOOLS.has(toolName)) {
+    for (const m of str2("command").matchAll(ENV_FILE)) found.push(m[1]);
+  }
+  return [...new Set(found.map((p) => resolvePath(workingDir, p)))];
+}
+function tripIfProbing(db, run) {
+  const markedAt = getRun(db, run.id)?.untrusted_at;
+  if (!markedAt) return;
+  const rows = db.prepare(`SELECT category FROM goal_tool_calls WHERE run_id = ? AND decision = 'deny' AND created_at >= ?
+    AND (category IN (${PROBING_CATEGORIES.map(() => "?").join(", ")}) OR reason LIKE ?)`).all(run.id, markedAt, ...PROBING_CATEGORIES, `%${OFF_REASON}%`);
+  if (rows.length < TRIP_THRESHOLD) return;
+  tripRun(db, run.id, `${rows.length} refusals (${[...new Set(rows.map((r) => r.category))].join(", ")})`);
+}
 function record(db, run, toolName, category, decision, reason) {
   db.prepare(`
     INSERT INTO goal_tool_calls (id, plan_id, run_id, tool_name, category, decision, reason, created_at)
@@ -2023,17 +2360,25 @@ function record(db, run, toolName, category, decision, reason) {
   `).run(newId("tc"), run.plan_id, run.id, toolName, category, decision, reason, (/* @__PURE__ */ new Date()).toISOString());
 }
 function guardToolCallForRun(db, runId, toolName, input, paths = quarterdeckDataPaths()) {
-  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND status IN ('queued', 'running')").get(runId);
+  const run = db.prepare("SELECT * FROM goal_runs WHERE id = ? AND (status IN ('queued', 'running') OR tripped_at IS NOT NULL)").get(runId);
   return run ? guardRun(db, run, toolName, input, paths) : { decision: "allow" };
 }
 function guardRun(db, run, toolName, input, paths) {
   const goal = getGoal(db, run.plan_id);
   if (!goal) return { decision: "allow" };
+  if (run.tripped_at) {
+    const tool = canonicalToolName(toolName);
+    if (tool.startsWith(QUARTERDECK_TOOL_PREFIX) && TRIPPED_ALLOWED.has(tool.slice(QUARTERDECK_TOOL_PREFIX.length))) return { decision: "allow", run_id: run.id };
+    const reason2 = `Quarterdeck goal guard: this run tripped (${run.tripped_reason ?? "repeated refusals"}) and has been ended. Only end_run and fail_run are allowed now: stop.`;
+    record(db, run, toolName, TRIPPED_CATEGORY, "deny", reason2);
+    return { decision: "deny", category: TRIPPED_CATEGORY, run_id: run.id, reason: reason2 };
+  }
   const workingDir = db.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
   const command2 = SHELL_TOOLS.has(toolName) && typeof input?.command === "string" ? input.command : null;
   const listed = matchToolCategory(goal.tool_map, toolName, input);
   let guardedMiss = null;
-  if (command2 !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && autonomyFor(goal, listed) === "auto" && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command2)) {
+  const afterOutside = afterOutsideApplies(run);
+  if (afterOutside && command2 !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) === "auto" && goal.auto_after_outside.includes(listed) && hasUnusedGuardedCheck(db, run.id, command2)) {
     const match = consumeGuardedCheck(db, run.id, listed, command2, readStaged);
     if (match.ok) {
       record(db, run, toolName, listed, "allow", AFTER_OUTSIDE_NOTE);
@@ -2041,24 +2386,52 @@ function guardRun(db, run, toolName, input, paths) {
     }
     guardedMiss = match.reason;
   }
+  if (command2 !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) !== "off") {
+    const staged = approvedStagedCall(db, run.plan_id, listed, command2);
+    if (staged !== null) {
+      const rest = staged.files.reduce((c, f) => c.split(f).join(""), command2);
+      if (touchesQuarterdeckData(toolName, { ...input, command: rest }, workingDir, paths) === null) {
+        const item = staged.key.slice(staged.key.indexOf("/") + 1);
+        const match = consumeProposalCall(db, staged.key, command2, readStaged);
+        if (match.ok) {
+          record(db, run, toolName, listed, "allow", `staged call of item ${item}`);
+          return { decision: "allow", category: listed, run_id: run.id };
+        }
+        const reason2 = `Quarterdeck goal guard: the approved proposal for "${listed}" covers only the exact calls it staged, each once, with their files unchanged (item ${item}: ${match.reason}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
+        record(db, run, toolName, listed, "deny", reason2);
+        return { decision: "deny", category: listed, run_id: run.id, reason: reason2 };
+      }
+    }
+  }
   const touched2 = touchesQuarterdeckData(toolName, input, workingDir, paths);
   if (touched2 !== null) {
     const reason2 = `Quarterdeck goal guard: a goal run can't read or change Quarterdeck's own data (${touched2}). Use the goal tools (add_item, remember, end_run) instead, and don't try another way round.`;
     record(db, run, toolName, QUARTERDECK_DATA_CATEGORY, "deny", reason2);
+    tripIfProbing(db, run);
     return { decision: "deny", category: QUARTERDECK_DATA_CATEGORY, run_id: run.id, reason: reason2 };
   }
-  if (goal.auto_after_outside.length > 0 && getRun(db, run.id)?.untrusted_source) {
+  if (goal.auto_after_outside.length > 0) {
     const secret = touchesSecrets(toolName, input);
     if (secret !== null) {
-      const reason2 = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`;
-      record(db, run, toolName, SECRETS_CATEGORY, "deny", reason2);
-      return { decision: "deny", category: SECRETS_CATEGORY, run_id: run.id, reason: reason2 };
+      if (getRun(db, run.id)?.untrusted_source) {
+        const reason2 = `Quarterdeck goal guard: this run has read outside content and its goal keeps some categories auto after that, so it can't read secrets (${secret}). Do the work without them, and don't try another way round.`;
+        record(db, run, toolName, SECRETS_CATEGORY, "deny", reason2);
+        tripIfProbing(db, run);
+        return { decision: "deny", category: SECRETS_CATEGORY, run_id: run.id, reason: reason2 };
+      }
+      for (const path of secretFilePaths(toolName, input, workingDir)) markRunSecretsRead(db, run.id, secret, path);
+      markRunSecretsRead(db, run.id, secret);
     }
   }
-  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input);
-  if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead);
   const category = matchToolCategory(goal.tool_map, toolName, input);
-  if (!category) return { decision: "allow", run_id: run.id };
+  const untrustedRead = untrustedLabel(goal.tool_map, toolName, input, category === null && command2 !== null ? originUrl(workingDir) : null);
+  if (untrustedRead !== null) markRunUntrusted(db, run.id, untrustedRead);
+  if (!category) {
+    const network = untrustedRead?.endsWith(" (built-in network command)") ? untrustedRead.slice(untrustedRead.indexOf(": ") + 2, -" (built-in network command)".length) : null;
+    if (network !== null) record(db, run, toolName, UNTRUSTED_CATEGORY, "allow", `built-in network command: ${network}`);
+    return { decision: "allow", run_id: run.id };
+  }
+  if (category === TRUSTED_READ_CATEGORY) return { decision: "allow", category, run_id: run.id };
   if (category === UNTRUSTED_CATEGORY) {
     record(db, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
@@ -2069,25 +2442,52 @@ function guardRun(db, run, toolName, input, paths) {
     record(db, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
   }
-  if (guardedMiss === null && mode === "auto" && goal.auto_after_outside.includes(category)) {
+  const secretsOff = mode === "auto" && goal.auto_after_outside.includes(category) && !afterOutsideApplies(getRun(db, run.id));
+  if (guardedMiss === null && !secretsOff && mode === "auto" && goal.auto_after_outside.includes(category)) {
     guardedMiss = "this call was not staged by guarded_run";
   }
   if (mode === "off") {
     const reason2 = `Quarterdeck goal guard: "${category}" is off for this goal, so ${toolName} is not allowed. Don't take or propose this action.`;
     record(db, run, toolName, category, "deny", reason2);
+    tripIfProbing(db, run);
     return { decision: "deny", category, run_id: run.id, reason: reason2 };
   }
-  const approved = db.prepare(`
-    SELECT COUNT(*) AS n FROM tasks
+  const approvedItems = db.prepare(`
+    SELECT id FROM tasks
     WHERE plan_id = ? AND status = 'active' AND archived_at IS NULL AND approved_at IS NOT NULL
       AND json_extract(state, '$.action.category') = ?
-  `).get(run.plan_id, category).n;
-  if (approved > 0) {
+    ORDER BY created_at, rowid
+  `).all(run.plan_id, category);
+  let stagedMiss = null;
+  let categoryWide = false;
+  for (const item of approvedItems) {
+    const key = proposalKey(run.plan_id, item.id);
+    if (!proposalHasCalls(db, key)) {
+      categoryWide = true;
+      continue;
+    }
+    if (command2 === null) {
+      stagedMiss ??= `item ${item.id} was approved for its staged commands only`;
+      continue;
+    }
+    const match = consumeProposalCall(db, key, command2, readStaged);
+    if (match.ok) {
+      record(db, run, toolName, category, "allow", `staged call of item ${item.id}`);
+      return { decision: "allow", category, run_id: run.id };
+    }
+    stagedMiss = `item ${item.id}: ${match.reason}`;
+  }
+  if (categoryWide) {
     record(db, run, toolName, category, "allow", null);
     return { decision: "allow", category, run_id: run.id };
   }
+  if (stagedMiss !== null) {
+    const reason2 = `Quarterdeck goal guard: the approved proposal for "${category}" covers only the exact calls it staged, each once, with their files unchanged (${stagedMiss}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
+    record(db, run, toolName, category, "deny", reason2);
+    return { decision: "deny", category, run_id: run.id, reason: reason2 };
+  }
   const how = `Propose it with add_item (action.category "${category}") and wait until it shows approved_to_execute; once approved, carry it out and then complete the item.`;
-  const guardedHow = guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : "";
+  const guardedHow = secretsOff ? ` You let "${category}" stay auto after outside content, but ${secretsReadReason(getRun(db, run.id), category)}.` : guardedMiss !== null ? ` You let "${category}" stay auto after outside content, but only for a call guarded_run has checked and staged, made exactly as it returned it (${guardedMiss}).` : "";
   const reason = untrusted !== null ? `Quarterdeck goal guard: this run has read untrusted content (${untrusted}), so "${category}" needs approval for the rest of the run, in case that content asked for it.${guardedHow} ${how}` : `Quarterdeck goal guard: "${category}" needs approval first. ${how}`;
   record(db, run, toolName, category, "deny", reason);
   return { decision: "deny", category, run_id: run.id, reason };
@@ -2107,7 +2507,7 @@ function recordRefusal(db, runId, toolName, input, paths = quarterdeckDataPaths(
   const workingDir = db.prepare("SELECT working_dir FROM plans WHERE id = ?").get(run.plan_id)?.working_dir ?? process.cwd();
   if (touchesQuarterdeckData(toolName, input, workingDir, paths) !== null) return null;
   const matched = matchToolRule(goal.tool_map, toolName, input);
-  if (!matched || matched.category === UNTRUSTED_CATEGORY) return null;
+  if (!matched || matched.category === UNTRUSTED_CATEGORY || matched.category === TRUSTED_READ_CATEGORY) return null;
   const { category, pattern } = matched;
   const mode = autonomyFor(goal, category);
   if (mode === "off") return null;
@@ -2148,7 +2548,7 @@ function standingAllowRules(db) {
 function listToolCalls(db, planId, limit = 50) {
   return db.prepare("SELECT * FROM goal_tool_calls WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?").all(planId, limit);
 }
-var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE, SECRET_PATH, SECRET_COMMAND, AFTER_OUTSIDE_NOTE, readStaged;
+var QUARTERDECK_TOOL_PREFIX, PLUGIN_QUARTERDECK_TOOL_PREFIX, COMMAND_RULE, ENV_PREFIX, QUOTED_WORD, UNTRUSTED_CATEGORY, BUILTIN_UNTRUSTED, BUILTIN_UNTRUSTED_MAP, TRUSTED_READ_CATEGORY, BUILTIN_NETWORK, BUILTIN_NETWORK_RES, originCache, QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY, normPath, isInside, SHELL_TOOLS, FILE_TOOLS, DATA_DIR_SEGMENT, DB_FILE_NAME, DB_VARIABLE, SECRET_PATH, SECRET_COMMAND, ENV_FILE, TRIP_THRESHOLD, PROBING_CATEGORIES, OFF_REASON, TRIPPED_CATEGORY, TRIPPED_ALLOWED, AFTER_OUTSIDE_NOTE, readStaged;
 var init_guard = __esm({
   "../core/src/guard.ts"() {
     "use strict";
@@ -2170,6 +2570,33 @@ var init_guard = __esm({
       ...["get_*", "search_*", "list_drafts", "download_*"].flatMap((t) => [`mcp__*Gmail*__${t}`, `mcp__*gmail*__${t}`])
     ];
     BUILTIN_UNTRUSTED_MAP = Object.fromEntries(BUILTIN_UNTRUSTED.map((p) => [p, UNTRUSTED_CATEGORY]));
+    TRUSTED_READ_CATEGORY = "trusted-read";
+    BUILTIN_NETWORK = [
+      "curl*",
+      "wget*",
+      "Invoke-WebRequest*",
+      "iwr *",
+      "Invoke-RestMethod*",
+      "irm *",
+      "ssh *",
+      "scp *",
+      "nc *",
+      "ncat *",
+      "npm install*",
+      "npm i *",
+      "npm view*",
+      "npm info*",
+      "npx *",
+      "pip install*",
+      "pip download*",
+      "gh api*",
+      "git clone*",
+      "git fetch*",
+      "git pull*",
+      "git ls-remote*"
+    ];
+    BUILTIN_NETWORK_RES = BUILTIN_NETWORK.map((p) => [p, globRegExp(p, "i")]);
+    originCache = /* @__PURE__ */ new Map();
     QUARTERDECK_DATA_CATEGORY = "quarterdeck-data";
     SECRETS_CATEGORY = "secrets";
     normPath = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -2181,10 +2608,16 @@ var init_guard = __esm({
     DB_VARIABLE = /\b(QUARTERDECK|CONDUCTOR)_DB\b/i;
     SECRET_PATH = /(^|[\\/\s"'`=])(\.ssh|\.aws|\.npmrc|\.config[\\/]gh|\.env(\.[\w.-]*)?)(?![\w-])/i;
     SECRET_COMMAND = /^(env|printenv)(\s|$)|^gh\s+auth\s+token\b|^(get-childitem|gci|ls|dir|cat|type|get-content|gc)\s+env:/i;
+    ENV_FILE = /(?:^|[\s"'`=])((?:[^\s"'`=]*[\\/])?\.env(?:\.[\w.-]*)?)(?![\w-])/gi;
+    TRIP_THRESHOLD = 3;
+    PROBING_CATEGORIES = [QUARTERDECK_DATA_CATEGORY, SECRETS_CATEGORY];
+    OFF_REASON = "is off for this goal";
+    TRIPPED_CATEGORY = "tripped";
+    TRIPPED_ALLOWED = /* @__PURE__ */ new Set(["end_run", "fail_run"]);
     AFTER_OUTSIDE_NOTE = "went through after outside content because you allowed it (checked by guarded_run)";
     readStaged = (path) => {
       try {
-        return readFileSync(path);
+        return readFileSync2(path);
       } catch {
         return null;
       }
@@ -2257,9 +2690,46 @@ function describeStatusRules(r) {
 function listWatches(db, planId) {
   return db.prepare("SELECT * FROM goal_watches WHERE plan_id = ? ORDER BY name").all(planId).map(deserializeWatch);
 }
+function watchHealth(db, planId) {
+  return db.prepare("SELECT name, last_checked_at, last_line_count, last_fired_at, fail_count FROM goal_watches WHERE plan_id = ? ORDER BY name").all(planId);
+}
 function getWatch(db, id) {
   const r = db.prepare("SELECT * FROM goal_watches WHERE id = ?").get(id);
   return r ? deserializeWatch(r) : void 0;
+}
+function fixedMatch(pattern) {
+  if (/(^|[^\\])\((?!\?)/.test(pattern) || /\(\?<[^=!]/.test(pattern)) return false;
+  const rest = withoutClassesAndEscapes(pattern).replace(/\(\?<?[:=!]/g, "(");
+  return !/[.+*?{|]|\\[wWdDsS]/.test(rest);
+}
+function withoutClassesAndEscapes(pattern) {
+  let out = "";
+  let unclosed = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\") {
+      const next = pattern[i + 1];
+      if (next !== void 0 && "wWdDsS".includes(next)) out += c + next;
+      i++;
+      continue;
+    }
+    if (c === "[" && !unclosed) {
+      let j = i + 1;
+      while (j < pattern.length && pattern[j] !== "]") j += pattern[j] === "\\" ? 2 : 1;
+      if (j < pattern.length) {
+        i = j;
+        continue;
+      }
+      unclosed = true;
+    }
+    out += c;
+  }
+  return out;
+}
+function matchWarning(w) {
+  if (w.kind !== "tool" || !w.match || !fixedMatch(w.match)) return null;
+  const fix = "capture something that differs per item, e.g. (\\w[^\xB7\\n]*) \xB7 <listing title>";
+  return w.fires === "change" ? `match "${w.match}" can only give one fixed line, so it only tells "present" from "absent", not one item from another: to tell items apart, ${fix}` : `match "${w.match}" can only give one fixed line, so every item looks the same: ${fix}`;
 }
 function validateWatchSpec(db, planId, name, spec) {
   const goal = getGoal(db, planId);
@@ -2381,7 +2851,9 @@ function validateWatchSpec(db, planId, name, spec) {
     what.command = command2;
     what.match = given.match?.trim() || null;
   }
-  return { label, every, fires, statusRules, rulesText, what, ignore, urgent };
+  const warning = matchWarning({ kind: what.kind, match: what.match, fires });
+  const warnings = warning ? [warning] : [];
+  return { label, every, fires, statusRules, rulesText, what, ignore, urgent, warnings };
 }
 function setWatch(db, planId, name, spec) {
   const { label, every, fires, statusRules, rulesText, what, ignore, urgent } = validateWatchSpec(db, planId, name, spec);
@@ -2402,7 +2874,7 @@ function setWatch(db, planId, name, spec) {
   } else {
     db.prepare(`
       UPDATE goal_watches SET kind = ?, command = ?, tool = ?, tool_input = ?, steps = ?, finally_call = ?, match = ?, every_minutes = ?, fires = ?, status_rules = ?, seen = '[]', baseline_at = NULL,
-        last_checked_at = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+        last_checked_at = NULL, last_line_count = NULL, asked_at = NULL, last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
     `).run(what.kind, what.command, what.tool, what.tool_input, what.steps, what.finally_call, what.match, every, fires, rulesText, existing.id);
     db.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL").run(existing.id);
   }
@@ -2427,12 +2899,39 @@ function removeWatch(db, planId, name) {
   db.prepare("DELETE FROM goal_watches WHERE id = ?").run(watch.id);
   return true;
 }
+function resetWatch(db, watchId) {
+  db.prepare(`
+    UPDATE goal_watches SET seen = '[]', baseline_at = NULL, last_checked_at = NULL, last_line_count = NULL, asked_at = NULL,
+      last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+  `).run(watchId);
+  db.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL").run(watchId);
+}
 function watchDue(watch, now = /* @__PURE__ */ new Date()) {
   if (!watch.last_checked_at) return true;
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 6e4;
 }
 function watchFailing(watch) {
   return watch.fail_count >= WATCH_FAILING_AFTER || watchStopped(watch);
+}
+function watchNeverSaw(watch, now = /* @__PURE__ */ new Date()) {
+  if (!watch.baseline_at) return false;
+  if (watch.status_rules) return false;
+  if (watch.seen.length > (watch.fires === "change" ? 0 : 1)) return false;
+  const baseline = new Date(watch.baseline_at).getTime();
+  if (watch.last_fired_at && new Date(watch.last_fired_at).getTime() >= baseline) return false;
+  const wait = Math.max(WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS * watch.every_minutes * 6e4);
+  return now.getTime() - baseline >= wait;
+}
+function firstCheckWarnings(watch, lines) {
+  if (!lines.length) return ["the first check got zero lines: if its source should have some (an inbox, a listings page), the watch may never see anything"];
+  if (lines.length === 1 && watch.fires === "new" && !watch.status_rules) return ["every line the first check got is the same one: if its source should have several, the watch may only ever see that line"];
+  return [];
+}
+function sampleLines(lines, n = 3) {
+  return lines.slice(0, n).map((l) => JSON.stringify(l.length > 80 ? `${l.slice(0, 80)}\u2026` : l)).join(", ");
+}
+function neverSawHint(name) {
+  return `watch ${name} has never seen anything: check the source yourself and propose a fix with propose_watch`;
 }
 function watchStopped(watch) {
   return (watch.cleanup_failures ?? 0) >= WATCH_CLEANUP_STOP_AFTER;
@@ -2495,7 +2994,7 @@ function recordWatchLines(db, watchId, result, now = /* @__PURE__ */ new Date(),
     }
     const insert = db.prepare("INSERT INTO goal_watch_events (id, watch_id, plan_id, line, created_at, seen_during_run) VALUES (?, ?, ?, ?, ?, ?)");
     for (const line of fresh) insert.run(newId("wev"), watchId, watch.plan_id, line, at, duringRun);
-    db.prepare("UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, fail_count = 0 WHERE id = ?").run(JSON.stringify(seen), at, at, watchId);
+    db.prepare("UPDATE goal_watches SET seen = ?, baseline_at = COALESCE(baseline_at, ?), last_checked_at = ?, last_line_count = ?, fail_count = 0 WHERE id = ?").run(JSON.stringify(seen), at, at, result.lines.length, watchId);
     if (watch.last_error !== null) db.prepare("UPDATE goal_watches SET last_error = NULL WHERE id = ?").run(watchId);
     if (fresh.length) db.prepare("UPDATE goal_watches SET last_fired_at = ? WHERE id = ?").run(at, watchId);
     db.prepare("DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NOT NULL AND created_at < ?").run(watchId, new Date(now.getTime() - EVENT_RETENTION_MS).toISOString());
@@ -2573,27 +3072,45 @@ function countUnqueuedWatchEvents(db, planId) {
 function markWatchEventsQueued(db, planId, now = /* @__PURE__ */ new Date()) {
   db.prepare("UPDATE goal_watch_events SET queued_at = ? WHERE plan_id = ? AND run_id IS NULL AND queued_at IS NULL").run(now.toISOString(), planId);
 }
-function takeWatchEvents(db, planId, runId) {
-  if (runId) {
-    db.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
-    db.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
-      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND e.seen_during_run = (
-        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
-        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1))`).run(runId, runId, planId, runId, runId);
-  }
+function runWatchEvents(db, planId, runId) {
   const rows = db.prepare(`
-    SELECT e.line, COALESCE(w.name, 'a removed watch') AS watch
+    SELECT e.id, e.line, e.attempts, COALESCE(w.name, 'a removed watch') AS watch
     FROM goal_watch_events e LEFT JOIN goal_watches w ON w.id = e.watch_id
     WHERE e.plan_id = ? AND ${runId ? "e.run_id = ?" : "e.run_id IS NULL"}
     ORDER BY e.created_at, e.rowid
   `).all(...runId ? [planId, runId] : [planId]);
+  const counts = /* @__PURE__ */ new Map();
+  return rows.map((r) => {
+    const n = (counts.get(r.watch) ?? 0) + 1;
+    counts.set(r.watch, n);
+    return { id: r.id, watch: r.watch, line: r.line, attempts: Number(r.attempts), shown: n <= WATCH_BRIEF_LINES };
+  });
+}
+function takeWatchEvents(db, planId, runId) {
+  if (runId) {
+    const waiting = new Set(db.prepare("SELECT id FROM goal_watch_events WHERE plan_id = ? AND run_id IS NULL").all(planId).map((r) => r.id));
+    db.prepare("UPDATE goal_watch_events SET run_id = ? WHERE plan_id = ? AND run_id IS NULL").run(runId, planId);
+    const bump = db.prepare("UPDATE goal_watch_events SET attempts = attempts + 1 WHERE id = ?");
+    for (const e of runWatchEvents(db, planId, runId)) if (e.shown && waiting.has(e.id)) bump.run(e.id);
+    db.prepare(`UPDATE goal_runs SET self_caused = 1 WHERE id = ? AND EXISTS (
+      SELECT 1 FROM goal_watch_events e WHERE e.run_id = ? AND (e.attempts > 1 OR e.seen_during_run = (
+        SELECT p.id FROM goal_runs p WHERE p.plan_id = ? AND p.id != ? AND p.status != 'skipped' AND p.started_at <= (SELECT started_at FROM goal_runs WHERE id = ?)
+        ORDER BY p.started_at DESC, p.rowid DESC LIMIT 1)))`).run(runId, runId, planId, runId, runId);
+  }
   const byWatch = /* @__PURE__ */ new Map();
-  for (const r of rows) byWatch.set(r.watch, [...byWatch.get(r.watch) ?? [], r.line]);
-  return [...byWatch.entries()].map(([watch, lines]) => ({
-    watch,
-    new: lines.slice(0, WATCH_BRIEF_LINES),
-    omitted: Math.max(0, lines.length - WATCH_BRIEF_LINES)
-  }));
+  for (const e of runWatchEvents(db, planId, runId)) byWatch.set(e.watch, [...byWatch.get(e.watch) ?? [], e]);
+  return [...byWatch.entries()].map(([watch, events]) => {
+    const shown = events.filter((e) => e.shown);
+    const carried = shown.filter((e) => e.attempts > 1).map((e) => ({ line: e.line, attempts: e.attempts - 1 }));
+    return { watch, new: shown.map((e) => e.line), omitted: events.length - shown.length, ...carried.length ? { carried_over: carried } : {} };
+  });
+}
+function releaseUnhandledWatchEvents(db, runId, handledIds) {
+  const keep = new Set(handledIds);
+  const release = db.prepare("UPDATE goal_watch_events SET run_id = NULL, queued_at = NULL WHERE id = ?");
+  for (const r of db.prepare("SELECT id FROM goal_watch_events WHERE run_id = ?").all(runId)) {
+    if (!keep.has(r.id)) release.run(r.id);
+  }
 }
 function releaseWatchEvents(db, runId, opts = {}) {
   db.prepare(`UPDATE goal_watch_events SET run_id = NULL${opts.requeue ? ", queued_at = NULL" : ""} WHERE run_id = ?`).run(runId);
@@ -2601,7 +3118,7 @@ function releaseWatchEvents(db, runId, opts = {}) {
 function listWatchEvents(db, planId) {
   return db.prepare("SELECT * FROM goal_watch_events WHERE plan_id = ? ORDER BY created_at, rowid").all(planId);
 }
-var WATCH_MAX_STEPS, WATCH_MAX_TRIES, WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_CLEANUP_STOP_AFTER, WATCH_CLEANUP_STOPPED, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS, JSON_PATH;
+var WATCH_MAX_STEPS, WATCH_MAX_TRIES, WATCH_TIMEOUT_S, WATCH_MAX_LINES, WATCH_LINE_CHARS, WATCH_SEEN_MAX, WATCH_OUTPUT_CHARS, WATCH_FAILING_AFTER, WATCH_CLEANUP_STOP_AFTER, WATCH_CLEANUP_STOPPED, WATCH_BRIEF_LINES, WATCH_MIN_MINUTES, WATCH_DEFAULT_MINUTES, WATCH_DEFAULT_MATCH, WATCH_REPORT_GRACE_MS, WATCH_NONE_LINE, WATCH_STATUS_RULES_MAX, WATCH_STATUS_CHARS, EVENT_RETENTION_MS, JSON_PATH, WATCH_NEVER_SAW_MS, WATCH_NEVER_SAW_CHECKS;
 var init_watches = __esm({
   "../core/src/watches.ts"() {
     "use strict";
@@ -2630,6 +3147,8 @@ var init_watches = __esm({
     WATCH_STATUS_CHARS = 40;
     EVENT_RETENTION_MS = 30 * 864e5;
     JSON_PATH = /^[A-Za-z_$][\w$-]*(\.[A-Za-z_$][\w$-]*|\[\d+\])*$/;
+    WATCH_NEVER_SAW_MS = 24 * 60 * 6e4;
+    WATCH_NEVER_SAW_CHECKS = 3;
   }
 });
 
@@ -2774,7 +3293,7 @@ function applyGoalChanges(db, planId, changes) {
       const before = watches.find((w) => w.name === name.trim());
       const after = setWatch(db, planId, name, spec);
       if (before && describeWatch(before) === describeWatch(after) && before.every_minutes === after.every_minutes && before.fires === after.fires && JSON.stringify(before.status_rules) === JSON.stringify(after.status_rules)) continue;
-      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}`);
+      done.push(`watch "${after.name}" ${before ? "changed" : "added"}: every ${after.every_minutes} min, ${after.kind === "tool" ? "calls" : "runs"} ${describeWatch(after)}${after.fires === "change" ? ", starts a run when its output changes" : ""}${after.status_rules ? `, sets the status (${describeStatusRules(after.status_rules)})` : ""}${matchWarning(after) ? `. Warning: ${matchWarning(after)}` : ""}`);
     }
     if (model !== void 0 && model !== goal.model) {
       updateGoal(db, planId, { model });
@@ -2947,6 +3466,60 @@ var init_health = __esm({
   }
 });
 
+// ../core/src/outside-text.ts
+function isHidden(code) {
+  return code < 32 || code >= 127 && code <= 159 || code >= 8203 && code <= 8207 || code >= 8234 && code <= 8238 || code >= 8294 && code <= 8297;
+}
+function isInvisible(code) {
+  if (code === 9 || code === 10 || code === 13) return false;
+  return isHidden(code) || code >= 8288 && code <= 8292 || code === 65279;
+}
+function isTag(code) {
+  return code >= 917504 && code <= 917631;
+}
+function removedAny(removed) {
+  return removed.comments + removed.invisible + removed.tags > 0;
+}
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+function cleanOutsideText(text, { markers = true } = {}) {
+  const removed = { comments: 0, invisible: 0, tags: 0 };
+  const noComments = text.replace(/<!--[\s\S]*?(?:-->|$)/g, () => {
+    removed.comments++;
+    return markers ? "[hidden comment removed]" : "";
+  });
+  let out = "";
+  let run = 0;
+  let runKind = null;
+  const flush = () => {
+    if (runKind && !markers) out += runKind === "tags" ? "" : " ";
+    else if (runKind) out += `[${plural(run, runKind === "tags" ? "tag character" : "invisible character")} removed]`;
+    run = 0;
+    runKind = null;
+  };
+  for (const c of noComments) {
+    const code = c.codePointAt(0);
+    const kind = isTag(code) ? "tags" : isInvisible(code) ? "invisible" : null;
+    if (kind) {
+      removed[kind]++;
+      if (runKind !== kind) flush();
+      runKind = kind;
+      run++;
+    } else {
+      flush();
+      out += c;
+    }
+  }
+  flush();
+  return { text: out, removed };
+}
+var init_outside_text = __esm({
+  "../core/src/outside-text.ts"() {
+    "use strict";
+  }
+});
+
 // ../core/src/goal-engine.ts
 function readOutsideContent(run) {
   return Boolean(run.untrusted_source && !run.untrusted_source.startsWith(RUN_SUMMARY_SOURCE));
@@ -3035,19 +3608,23 @@ function addItem(db, planId, runId, input) {
     }
     return { task: getTask(db, planId, id), existing: false };
   }
+  if (input.action.category === "trusted-read") {
+    throw new GoalError('"trusted-read" is the tool-rule category for commands the goal trusts to reach the network, not an action category. Use the category of the action itself.');
+  }
   if (input.action.category === "untrusted") {
     throw new GoalError('"untrusted" is the tool-rule category for tools that read outside content, not an action category. Use the category of the action itself.');
   }
   const goalMode = autonomyFor(goal, input.action.category);
   const similar = similarCategories(knownCategories(db, planId), input.action.category);
-  const marked = goalMode === "auto" && runId ? getRun(db, runId)?.untrusted_source ?? void 0 : void 0;
-  const guarded = marked !== void 0 && goal.auto_after_outside.includes(input.action.category) && claimUsedGuardedCheck(db, runId, input.action.category);
+  const markedRun = goalMode === "auto" && runId ? getRun(db, runId) : void 0;
+  const marked = markedRun?.untrusted_source ?? void 0;
+  const guarded = marked !== void 0 && goal.auto_after_outside.includes(input.action.category) && afterOutsideApplies(markedRun) && claimUsedGuardedCheck(db, runId, input.action.category);
   const untrusted = guarded ? void 0 : marked;
   const mode = untrusted !== void 0 ? "propose" : goalMode;
   if (mode === "off") {
     throw new GoalError(`Action category "${input.action.category}" is off for this goal: don't take or propose this action.`);
   }
-  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...input.ask_person && { asks_person: true } };
+  const state = { action: { ...input.action, params: input.action.params ?? {} }, ...input.ask_person && { asks_person: true }, ...untrusted !== void 0 && { outside_text: untrusted } };
   if (mode === "propose" || input.ask_person) {
     insertTask(db, { ...base, status: "active", state, requires_approval: true, review_requested_at: now });
   } else {
@@ -3119,7 +3696,7 @@ function buildBrief(db, planId, runId) {
     const item = summarizeItem(t);
     return isAttemptBlocked(db, planId, t) ? { ...item, blocked: true } : item;
   }).sort((a, b) => Number(b.approved_to_execute) - Number(a.approved_to_execute) || compareTaskIds(a.id, b.id));
-  const watchEvents = takeWatchEvents(db, planId, runId);
+  const watchEvents = takeWatchEvents(db, planId, runId).map((w) => ({ ...w, new: w.new.map((line) => cleanOutsideText(line).text) }));
   if (run && watchEvents.length) markRunUntrusted(db, run.id, WATCH_EVENTS_SOURCE);
   const taintedMemory = memory.find((m) => m.untrusted_source);
   if (run && taintedMemory) markFromMemory(db, run.id, taintedMemory);
@@ -3160,7 +3737,11 @@ function buildBrief(db, planId, runId) {
       const [h] = listHealth(db, planId, 1);
       return h ? { passed: h.passed, value: h.value, at: h.created_at, ...!h.passed && h.output && { output: h.output.slice(-500) } } : null;
     })(),
-    watch_events: watchEvents
+    watch_events: watchEvents,
+    ...(() => {
+      const never = listWatches(db, planId).filter((w) => watchNeverSaw(w)).map((w) => ({ name: w.name, hint: neverSawHint(w.name) }));
+      return never.length ? { watches_never_saw: never } : {};
+    })()
   };
 }
 function recallMemory(db, planId, runId, ids) {
@@ -3226,15 +3807,12 @@ function startRun(db, runId, sessionId) {
   updateGoal(db, run.plan_id, { last_run_at: (/* @__PURE__ */ new Date()).toISOString() });
   return getRun(db, runId);
 }
-function isHidden(code) {
-  return code < 32 || code >= 127 && code <= 159 || code >= 8203 && code <= 8207 || code >= 8234 && code <= 8238 || code >= 8294 && code <= 8297;
-}
 function cleanStatusNote(text) {
-  const plain = [...text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")].map((c) => isHidden(c.codePointAt(0)) ? " " : c).join("").replace(/\s+/g, " ").trim();
+  const plain = [...cleanOutsideText(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, ""), { markers: false }).text].map((c) => isHidden(c.codePointAt(0)) ? " " : c).join("").replace(/\s+/g, " ").trim();
   const chars = [...plain];
   return chars.length > STATUS_NOTE_MAX ? `${chars.slice(0, STATUS_NOTE_MAX - 1).join("").trimEnd()}\u2026` : plain;
 }
-function endRun(db, runId, summary, status2, statusCheck, statusTone) {
+function endRun(db, runId, summary, status2, statusCheck, statusTone, handled) {
   const run = getRun(db, runId);
   if (!run) throw new GoalError(`Run ${runId} not found.`);
   if (run.status !== "running" && run.status !== "queued") throw new GoalError(`Run ${runId} already ended (${run.status}).`);
@@ -3244,14 +3822,16 @@ function endRun(db, runId, summary, status2, statusCheck, statusTone) {
   }
   const check = statusCheck === void 0 || statusCheck === null ? null : validateStatusCheck(statusCheck);
   const tone = validateStatusTone(statusTone) ?? null;
+  const events = runWatchEvents(db, run.plan_id, runId);
+  const handledIds = events.length ? matchHandled(events, handled) : [];
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const created = db.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND run_id = ?").get(run.plan_id, runId).n;
   const resolved = db.prepare("SELECT COUNT(*) n FROM tasks WHERE plan_id = ? AND status IN ('completed', 'abandoned') AND updated_at >= ?").get(run.plan_id, run.started_at).n;
   updateRun(db, runId, { status: "completed", summary: summary.trim(), ended_at: now, items_created: created, items_resolved: resolved });
   if (status2 !== void 0) {
-    const note = cleanStatusNote(status2);
-    updateGoal(db, run.plan_id, note ? {
-      status_note: note,
+    const note2 = cleanStatusNote(status2);
+    updateGoal(db, run.plan_id, note2 ? {
+      status_note: note2,
       status_note_at: now,
       status_note_untrusted: run.untrusted_source ?? null,
       status_check: check,
@@ -3264,10 +3844,47 @@ function endRun(db, runId, summary, status2, statusCheck, statusTone) {
   if (run.trigger === "curate" && !db.prepare("SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?").get(run.plan_id, CURATION_REF + runId)) {
     updateGoal(db, run.plan_id, { curated_at: run.started_at });
   }
+  if (events.length) settleWatchEvents(db, run.plan_id, runId, events, handledIds, new Date(now));
   archiveResolved(db, run.plan_id);
   finishIfDone(db, run.plan_id);
   tripBreakerIfRunaway(db, run.plan_id);
   return getRun(db, runId);
+}
+function listRunEvents(events) {
+  const byWatch = /* @__PURE__ */ new Map();
+  for (const e of events) if (e.shown) byWatch.set(e.watch, [...byWatch.get(e.watch) ?? [], cleanOutsideText(e.line).text]);
+  return [...byWatch.entries()].map(([watch, lines]) => `"${watch}": ${lines.join(", ")}`).join("; ");
+}
+function matchHandled(events, handled) {
+  const yours = `Your events: ${listRunEvents(events)}.`;
+  if (!handled) throw new GoalError(`This run had watch_events, so end_run needs handled: the lines you dealt with, skipped ones included. ${yours}`);
+  const ids = /* @__PURE__ */ new Set();
+  for (const raw of handled) {
+    const h = raw.trim();
+    const matched = events.filter((e) => e.id === h || cleanOutsideText(e.line).text.trim() === h);
+    if (!matched.length) throw new GoalError(`handled names "${h}", which isn't one of this run's watch_events lines. ${yours}`);
+    for (const e of matched) ids.add(e.id);
+  }
+  return [...ids];
+}
+function settleWatchEvents(db, planId, runId, events, handledIds, now) {
+  const limit = getGoal(db, planId)?.limits.max_item_attempts ?? 0;
+  const handledSet = new Set(handledIds);
+  const capped = events.filter((e) => !handledSet.has(e.id) && limit > 0 && e.attempts >= limit);
+  releaseUnhandledWatchEvents(db, runId, [...handledIds, ...capped.map((e) => e.id)]);
+  for (const e of capped) {
+    const ref = WATCH_EVENT_REF + e.id;
+    if (db.prepare("SELECT 1 FROM tasks WHERE plan_id = ? AND external_ref = ?").get(planId, ref)) continue;
+    const line = cleanOutsideText(e.line).text;
+    askPersonUnder(
+      db,
+      planId,
+      ref,
+      `${e.attempts} runs got "${line}" from the watch "${e.watch}" and none dealt with it. It won't come back by itself: press Run now with a request if it still needs doing.`,
+      `Each of those runs ended without listing it in end_run's handled, so it was handed to the next run; after ${limit} it stops coming back, so a run that keeps forgetting it can't loop.`,
+      now
+    );
+  }
 }
 function runawayReason(db, planId, now = /* @__PURE__ */ new Date()) {
   const goal = getGoal(db, planId);
@@ -3396,6 +4013,37 @@ function failRun(db, runId, status2, reason) {
   releaseWatchEvents(db, runId);
   tripBreakerIfRunaway(db, run.plan_id);
 }
+function tripRun(db, runId, reasons) {
+  const run = getRun(db, runId);
+  if (!run || run.tripped_at) return false;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const why = `tripped: ${reasons}`;
+  updateRun(db, runId, { tripped_at: now, tripped_reason: reasons });
+  const items = db.prepare(`SELECT id, state, notes, approved_at FROM tasks
+    WHERE plan_id = ? AND run_id = ? AND status IN ('pending', 'active') AND archived_at IS NULL`).all(run.plan_id, runId);
+  for (const item of items) {
+    const state = item.state ? JSON.parse(item.state) : {};
+    if (state.asks_person) {
+      if (!item.notes?.startsWith(TRIPPED_QUESTION_WARNING)) {
+        db.prepare("UPDATE tasks SET notes = ?, updated_at = ? WHERE plan_id = ? AND id = ?").run(item.notes ? `${TRIPPED_QUESTION_WARNING}
+
+${item.notes}` : TRIPPED_QUESTION_WARNING, now, run.plan_id, item.id);
+      }
+    } else if (state.action && !item.approved_at) {
+      db.prepare("UPDATE tasks SET status = 'abandoned', abandon_reason = ?, updated_at = ? WHERE plan_id = ? AND id = ?").run(`the run that proposed this ${why}`, now, run.plan_id, item.id);
+    }
+  }
+  const source = `tripped run ${runId}`;
+  db.prepare(`UPDATE goal_memory SET untrusted_source = COALESCE(untrusted_source, ?), untrusted_root = COALESCE(untrusted_root, ?)
+    WHERE plan_id = ? AND source = 'agent' AND created_at >= ?`).run(source, run.untrusted_root ?? source, run.plan_id, run.started_at);
+  if (!run.untrusted_source) markRunUntrusted(db, runId, source);
+  if (run.status === "running" || run.status === "queued") failRun(db, runId, "failed", why);
+  else updateRun(db, runId, { summary: run.summary ?? why });
+  const previous = db.prepare(`SELECT tripped_at FROM goal_runs WHERE plan_id = ? AND id != ? AND status IN ('completed', 'failed', 'timed_out')
+    AND started_at <= ? ORDER BY started_at DESC, rowid DESC LIMIT 1`).get(run.plan_id, runId, run.started_at);
+  if (previous?.tripped_at && getGoal(db, run.plan_id)?.status === "active") updateGoal(db, run.plan_id, { status: "paused" });
+  return true;
+}
 function archiveResolved(db, planId, now = /* @__PURE__ */ new Date()) {
   const goal = getGoal(db, planId);
   if (!goal) return 0;
@@ -3441,7 +4089,7 @@ function recordSkip(db, planId, trigger, reason, now = /* @__PURE__ */ new Date(
   const recent = db.prepare("SELECT 1 FROM goal_runs WHERE plan_id = ? AND status = 'skipped' AND skip_reason = ? AND started_at >= ?").get(planId, reason, hourAgo);
   return recent ? null : insertRun(db, planId, trigger, "skipped", reason);
 }
-var AFTER_OUTSIDE_ITEM_NOTE, GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, REQUEST_SOURCE, STATUS_NOTE_MAX, COUNTED_RUNS;
+var AFTER_OUTSIDE_ITEM_NOTE, GoalError, MEMORY_BRIEF_CHARS, MEMORY_INDEX_CHARS, MEMORY_INDEX_START, RECENT_RUNS, ANSWER_PREFIX, QUESTION_NOTES_CHARS, RECALL_MAX, REQUEST_SOURCE, STATUS_NOTE_MAX, WATCH_EVENT_REF, COUNTED_RUNS, TRIPPED_QUESTION_WARNING;
 var init_goal_engine = __esm({
   "../core/src/goal-engine.ts"() {
     "use strict";
@@ -3454,6 +4102,7 @@ var init_goal_engine = __esm({
     init_guarded();
     init_health();
     init_watches();
+    init_outside_text();
     AFTER_OUTSIDE_ITEM_NOTE = "Went through after outside content because you allowed it (checked by guarded_run)";
     GoalError = class extends Error {
     };
@@ -3466,7 +4115,133 @@ var init_goal_engine = __esm({
     RECALL_MAX = 20;
     REQUEST_SOURCE = "run request";
     STATUS_NOTE_MAX = 40;
+    WATCH_EVENT_REF = "watch-event:";
     COUNTED_RUNS = "(trigger IN ('health', 'event') OR (trigger = 'watch' AND self_caused = 1))";
+    TRIPPED_QUESTION_WARNING = "Warning: the run that asked this tripped on repeated refusals, so it may have been following planted instructions. Check before you answer.";
+  }
+});
+
+// ../core/src/goal-copy.ts
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function dirParts(dir) {
+  let end = dir.length;
+  while (end > 1 && (dir[end - 1] === "/" || dir[end - 1] === "\\")) end--;
+  return dir.slice(0, end).split(/[\\/]/);
+}
+function dirPattern(dir, flags) {
+  const parts = dirParts(dir);
+  if (!parts.join("")) return null;
+  return new RegExp(`${parts.map(escapeRegExp).join("[\\\\/]")}(?![\\w.-])`, flags);
+}
+function rewriteString(text, opts, made) {
+  const ci = opts.caseInsensitive ?? process.platform === "win32";
+  const toParts = dirParts(opts.toDir);
+  let out = text;
+  const dir = dirPattern(opts.fromDir, ci ? "gi" : "g");
+  if (dir && dirParts(opts.fromDir).join("/") !== toParts.join("/")) {
+    out = out.replace(dir, (m) => {
+      const to = m.includes("\\") ? toParts.join("\\") : toParts.join("/");
+      note(made, m, to);
+      return to;
+    });
+  }
+  const { fromRepo, toRepo } = opts;
+  if (fromRepo && toRepo && fromRepo.toLowerCase() !== toRepo.toLowerCase()) {
+    const repo = new RegExp(`(?<![\\w.-])${escapeRegExp(fromRepo)}(?![\\w-]|\\.[\\w-])`, "gi");
+    out = out.replace(repo, (m) => {
+      note(made, m, toRepo);
+      return toRepo;
+    });
+  }
+  return out;
+}
+function note(made, from, to) {
+  const key = `${from}\0${to}`;
+  const r = made.get(key);
+  if (r) r.count++;
+  else made.set(key, { from, to, count: 1 });
+}
+function rewriteForCopy(value, opts) {
+  const made = /* @__PURE__ */ new Map();
+  const walk = (v) => {
+    if (typeof v === "string") return rewriteString(v, opts, made);
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
+    return v;
+  };
+  return { value: walk(value), replacements: [...made.values()] };
+}
+function watchSpecOf(w) {
+  const common = {
+    ...w.match !== null && { match: w.match },
+    ...w.ignore !== null && { ignore: w.ignore },
+    ...w.urgent && { urgent: true },
+    every_minutes: w.every_minutes,
+    fires: w.fires,
+    ...w.status_rules && { status: w.status_rules }
+  };
+  if (w.kind === "command") return { ...common, command: w.command ?? "" };
+  if (w.steps) return { ...common, steps: w.steps, ...w.finally && { finally: w.finally } };
+  return { ...common, tool: w.tool ?? "", input: w.tool_input };
+}
+function copyGoal(db, sourceId, input) {
+  const src = getGoal(db, sourceId);
+  if (!src) throw new Error(`Goal ${sourceId} not found.`);
+  const watches = input.watches ?? Object.fromEntries(listWatches(db, sourceId).map((w) => [w.name, watchSpecOf(w)]));
+  const schedule = getSchedule(db, sourceId);
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  db.transaction(() => {
+    createGoal(
+      db,
+      { id: input.id, name: input.name, description: src.objective, status: "active", working_dir: input.working_dir, created_at: now, updated_at: now },
+      { objective: src.objective, instructions: input.instructions ?? src.instructions, status: "paused", autonomy: src.autonomy, limits: src.limits, item_retention_days: src.item_retention_days, one_off: src.one_off, model: src.model }
+    );
+    const changes = {};
+    if (Object.keys(src.tool_map).length) changes.tool_map = src.tool_map;
+    if (src.auto_after_outside.length) changes.auto_after_outside = Object.fromEntries(src.auto_after_outside.map((c) => [c, true]));
+    if (Object.keys(watches).length) changes.watches = watches;
+    if (Object.keys(changes).length) applyGoalChanges(db, input.id, changes);
+    if (schedule) setSchedule(db, input.id, schedule);
+    updateGoal(db, input.id, { status: "paused", next_run_at: null });
+  })();
+  return getGoal(db, input.id);
+}
+function moveGoal(db, planId, input) {
+  const goal = getGoal(db, planId);
+  if (!goal) throw new Error(`Goal ${planId} not found.`);
+  if (getOpenRun(db, planId)) throw new Error("A run is going: wait for it to finish (or cancel it), then move the goal.");
+  db.transaction(() => {
+    updatePlan(db, planId, { working_dir: input.working_dir, updated_at: (/* @__PURE__ */ new Date()).toISOString() });
+    if (input.instructions !== void 0 && input.instructions !== goal.instructions) updateGoal(db, planId, { instructions: input.instructions });
+    if (input.watches) {
+      const changes = { watches: { ...input.watches } };
+      for (const w of listWatches(db, planId)) if (!(w.name in input.watches)) changes.watches[w.name] = null;
+      applyGoalChanges(db, planId, changes);
+    }
+    for (const w of listWatches(db, planId)) if (w.kind === "command") resetWatch(db, w.id);
+  })();
+  return getGoal(db, planId);
+}
+function repoOfRemote(url) {
+  let u = url.trim();
+  if (!u.includes("://") && !/^[\w.-]+@[\w.-]+:/.test(u)) return null;
+  if (u.endsWith(".git")) u = u.slice(0, -4);
+  while (u.endsWith("/")) u = u.slice(0, -1);
+  const parts = u.split(/[/:]/);
+  const [owner, name] = parts.slice(-2);
+  if (parts.length < 3 || !owner || !name || !/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(name)) return null;
+  return `${owner}/${name}`;
+}
+var init_goal_copy = __esm({
+  "../core/src/goal-copy.ts"() {
+    "use strict";
+    init_goals();
+    init_watches();
+    init_queries();
+    init_schedule();
+    init_goal_changes();
   }
 });
 
@@ -3490,7 +4265,7 @@ function proposeWatch(db, planId, runId, input) {
   const run = runId ? getRun(db, runId) : void 0;
   if (!run || run.plan_id !== planId || run.status !== "running") throw new GoalError("propose_watch needs an open run of this goal.");
   if (run.trigger === "curate") throw new GoalError("A memory curation run does none of the goal's work: propose your cleanup with propose_curation.");
-  const { label } = validateWatchSpec(db, planId, input.name, input.spec);
+  const { label, warnings } = validateWatchSpec(db, planId, input.name, input.spec);
   const waiting = getAllTasks(db, planId).find((t) => isWatchRequest(t) && t.state.watch.name === label && t.review_requested_at);
   if (waiting) throw new GoalError(`A request for the watch "${label}" is already waiting (item ${waiting.id}).`);
   const existing = listWatches(db, planId).find((w) => w.name === label);
@@ -3499,7 +4274,8 @@ function proposeWatch(db, planId, runId, input) {
     ...state.replaces ? [`Now:
 ${describeSpec(state.replaces)}`, `Proposed:
 ${describeSpec(state.spec)}`] : [describeSpec(state.spec)],
-    ...state.reason ? [`Why: ${state.reason}`] : []
+    ...state.reason ? [`Why: ${state.reason}`] : [],
+    ...warnings.map((w) => `Warning: ${w}`)
   ].join("\n\n");
   const now = (/* @__PURE__ */ new Date()).toISOString();
   const id = nextChildId(db, planId, null);
@@ -3997,7 +4773,7 @@ function leaseHolder(db, now = /* @__PURE__ */ new Date()) {
 function goalRunPrompt(p) {
   return [
     `Run persistent goal "${p.name}" (goal ID: ${p.goalId}, run ID: ${p.runId}). Working directory: ${p.workingDir}.`,
-    `You start with no memory of earlier runs: call get_goal_brief with goal_id "${p.goalId}" and run_id "${p.runId}" first. It has the objective, standing instructions, memory, human decisions since the last run, open items and recent run summaries. Its watch_events, when there are any, are what is new since the last run (one line per new thing, such as an issue number): deal with those first.`,
+    `You start with no memory of earlier runs: call get_goal_brief with goal_id "${p.goalId}" and run_id "${p.runId}" first. It has the objective, standing instructions, memory, human decisions since the last run, open items and recent run summaries. Its watch_events, when there are any, are what is new since the last run (one line per new thing, such as an issue number): deal with those first. List every watch_events line you dealt with, skipped ones included, in end_run's handled. The rest come back in your next run; carried_over shows ones an earlier run didn't get to.`,
     "Then: carry out approved actions first and complete those items; revise rejected ones using the feedback (update the proposal's state.action with update_task, then set_status completed to send it for review again) or abandon them; look for new work and add each piece with add_item (always with external_ref for outside things); stay within each action category's autonomy (auto: do it, then record it; propose: add_item and wait for approval; off: never). Give an action a category from known_categories in the brief when one fits it, so the same action keeps one name; make up a new one only for a different kind of action. A tool call refused by the Quarterdeck goal guard means: propose it with add_item instead.",
     "When you need something only the person can give or do (a choice, details you can't find, connecting a service, allowing a site), add_item with ask_person: true and one clear question, and carry on with what you can; don't guess. Their answer arrives as memory and the item is completed.",
     "Save anything future runs should know with remember.",
@@ -4297,34 +5073,51 @@ function itemView(t) {
     updated_at: t.updated_at
   };
 }
-function overviewItem(t, blocked) {
+function overviewItem(t, blocked, db) {
   const v = itemView(t);
   const action = v.action;
   const notesMax = v.asks_person && v.awaiting_review ? CLIP.context : CLIP.notes;
   const clipped = v.goal.length > CLIP.title || (v.notes?.length ?? 0) > notesMax || (action?.summary?.length ?? 0) > CLIP.title;
   const short = { ...v, goal: clip(v.goal, CLIP.title), notes: clip(v.notes, notesMax), result: clip(v.result, CLIP.result), ...clipped && { clipped: true } };
   const marked = blocked ? { ...short, blocked: true } : short;
-  return action ? { ...marked, action: { category: action.category, summary: clip(action.summary, CLIP.title) } } : marked;
+  if (!action) return marked;
+  const shortAction = { category: action.category, summary: clip(action.summary, CLIP.title) };
+  if (!db || !v.awaiting_review || v.asks_person) return { ...marked, action: shortAction };
+  const calls = proposalCalls(db, proposalKey(t.plan_id, t.id)).slice(0, CALLS).map((c) => ({ command: clip(c.command, CLIP.summary), files: c.files }));
+  return { ...marked, action: { ...shortAction, ...calls.length > 0 ? { calls } : { covers_any: true } } };
 }
 function getAutonomySuggestions(db, planId) {
   const goal = getGoal(db, planId);
   if (!goal) return [];
   const rows = db.prepare(`
-    SELECT json_extract(t.state, '$.action.category') AS category, v.passed
+    SELECT json_extract(t.state, '$.action.category') AS category, v.passed,
+      json_extract(t.state, '$.outside_text') IS NOT NULL AS marked
     FROM verifications v JOIN tasks t ON t.plan_id = v.plan_id AND t.id = v.task_id
     WHERE v.plan_id = ? AND v.gate = 'approval' AND json_extract(t.state, '$.action.category') IS NOT NULL
     ORDER BY v.created_at DESC, v.rowid DESC
   `).all(planId);
   const streak = /* @__PURE__ */ new Map();
   for (const r of rows) {
-    const s = streak.get(r.category) ?? { n: 0, broken: false };
+    const s = streak.get(r.category) ?? { all: 0, marked: 0, broken: false };
     if (!s.broken) {
-      if (r.passed) s.n++;
-      else s.broken = true;
+      if (!r.passed) s.broken = true;
+      else {
+        s.all++;
+        if (r.marked) s.marked++;
+      }
     }
     streak.set(r.category, s);
   }
-  return [...streak.entries()].filter(([c, s]) => s.n >= PROMOTE_AFTER && autonomyFor(goal, c) === "propose").map(([category, s]) => ({ category, approved_in_a_row: s.n }));
+  const out = [];
+  for (const [category, s] of streak) {
+    const mode = autonomyFor(goal, category);
+    if (mode === "propose" && s.all >= PROMOTE_AFTER) out.push({ category, approved_in_a_row: s.all, kind: "auto" });
+    else if (mode === "auto" && s.marked >= PROMOTE_AFTER && !(goal.auto_after_outside ?? []).includes(category)) {
+      const warning = autoAfterOutsideWarning(goal.tool_map ?? {}, category);
+      out.push({ category, approved_in_a_row: s.marked, kind: "after_outside", ...warning && { warning } });
+    }
+  }
+  return out;
 }
 function describeEvent(e, itemGoal) {
   const p = e.payload;
@@ -4352,6 +5145,16 @@ function describeEvent(e, itemGoal) {
 }
 function refusedCalls(db, runId) {
   return db.prepare("SELECT tool_name AS tool, reason AS rule FROM goal_tool_calls WHERE run_id = ? AND decision = 'refused' GROUP BY tool_name, reason ORDER BY MIN(created_at), MIN(rowid)").all(runId).map((c) => ({ tool: c.tool, rule: c.rule ?? null }));
+}
+function unmappedNetworkCommands(db, planId, runs = 20) {
+  const rows = db.prepare(`SELECT tool_name AS tool, reason FROM goal_tool_calls
+    WHERE plan_id = ? AND reason LIKE 'built-in network command: %'
+      AND run_id IN (SELECT id FROM goal_runs WHERE plan_id = ? ORDER BY started_at DESC LIMIT ?)
+    GROUP BY tool_name, reason ORDER BY MAX(created_at) DESC, MAX(rowid) DESC`).all(planId, planId, runs);
+  return rows.map((r) => {
+    const command2 = r.reason.slice("built-in network command: ".length);
+    return { tool: r.tool, command: command2, rule: `${r.tool}(${command2}*)` };
+  });
 }
 function describeActivity({ goal, openRun, lastRun, events, items }) {
   if (openRun?.status === "running") {
@@ -4445,12 +5248,16 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
         model: r.model,
         // What untrusted content it read first: from then on its auto actions needed approval
         untrusted: r.untrusted_source,
+        // The secret it read before outside content, which turned allowed-after-outside off for the rest of the run (#169)
+        secrets_read: r.secrets_read_at ? r.secrets_read_source ?? "a secret" : null,
+        // The refusals it tripped on (#174): it was failed and its pending proposals abandoned
+        tripped: r.tripped_at ? r.tripped_reason ?? "repeated refusals" : null,
         // What the person asked this one run to do (Run with a prompt), and whether it came from where they did not see it
         request: r.request ? { text: clip(r.request, CLIP.summary), untrusted: r.request_untrusted === 1 } : null,
         // Calls the guard allowed but Claude Code refused, each with the allow rule it needs (null: none it can take) (#145)
         refused: refusedCalls(db, r.id)
       })),
-      needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
+      needs_you: open.filter((t) => t.review_requested_at).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t), db)),
       open_items: open.filter((t) => !t.review_requested_at).slice(0, OPEN_ITEMS).map((t) => overviewItem(t, isAttemptBlocked(db, plan.id, t))),
       open_item_count: open.filter((t) => !t.review_requested_at).length,
       health: listHealth(db, plan.id, HEALTH).map((h) => ({ passed: h.passed, value: h.value, created_at: h.created_at })),
@@ -4465,6 +5272,8 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
         ref: m.inactive_ref ?? null,
         replaced_by: m.replaced_by ?? null
       })),
+      // Network commands its runs reached that the tool map doesn't name, with the rule to add (#173)
+      unmapped_network: unmappedNetworkCommands(db, plan.id),
       suggestions: getAutonomySuggestions(db, plan.id),
       // Without when each last checked: that changes every few minutes and would redraw the pane for nothing
       watches: watches.map((w) => ({
@@ -4477,10 +5286,13 @@ function buildOverview(db, detail = "all", standingSession = null, fullInstructi
         last_fired_at: w.last_fired_at,
         failing: watchFailing(w),
         cleanup_failures: w.cleanup_failures,
+        never_saw: watchNeverSaw(w),
         error: watchFailing(w) || w.fail_count === 0 ? clip(w.last_error, CLIP.notes) : null
       })),
       watch_count: watches.length,
-      watch_failing: watches.some(watchFailing)
+      watch_failing: watches.some(watchFailing),
+      // A watch that has never seen anything since its baseline (#185): yellow in the pane, like one that can't check
+      watch_never_saw: watches.some((w) => watchNeverSaw(w))
     };
   };
   const goals = [...all.filter(({ goal }) => goal.status !== "retired"), ...done].filter(({ plan }) => !just || asked(plan.id)).sort((a, b) => a.plan.name.localeCompare(b.plan.name)).map(entry).map((g) => {
@@ -4530,7 +5342,7 @@ function overviewWithEtag(db, detail = "all", standingSession = null, fullInstru
   const body = JSON.stringify(buildOverview(db, detail, standingSession, fullInstructions, only));
   return { body, etag: `"${createHash3("sha256").update(body).digest("base64url").slice(0, 27)}"` };
 }
-var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
+var RUNS, OPEN_ITEMS, HEALTH, MEMORY, CALLS, CLIP, DONE, ACTIVITY_EVENTS, PROMOTE_AFTER, oneLine, str, NEEDS_YOU, CARD_TEXT, CARD_CONTEXT;
 var init_goal_overview = __esm({
   "../core/src/goal-overview.ts"() {
     "use strict";
@@ -4545,10 +5357,12 @@ var init_goal_overview = __esm({
     init_goal_changes();
     init_migrate();
     init_goal_tick();
+    init_guarded();
     RUNS = 5;
     OPEN_ITEMS = 10;
     HEALTH = 20;
     MEMORY = 10;
+    CALLS = 10;
     CLIP = { summary: 300, memory: 240, title: 200, notes: 200, result: 200, activity: 240, instructions: 1500, objective: 400, watch: 300, context: 1e3 };
     DONE = 10;
     ACTIVITY_EVENTS = 20;
@@ -4645,7 +5459,12 @@ var init_todos = __esm({
     init_queries();
     DEFAULT_LIST = "To do";
     samePath = (a, b) => norm(a) === norm(b);
-    norm = (p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    norm = (p) => {
+      const s = p.replace(/\\/g, "/");
+      let end = s.length;
+      while (end > 0 && s[end - 1] === "/") end--;
+      return s.slice(0, end).toLowerCase();
+    };
     DONE_TEXT_CHARS = 200;
     isDone = (status2) => status2 === "completed" || status2 === "abandoned";
   }
@@ -4659,6 +5478,7 @@ __export(src_exports, {
   ANSWER_CONTEXT_CHARS: () => ANSWER_CONTEXT_CHARS,
   ANSWER_PREFIX: () => ANSWER_PREFIX,
   ATTEMPT_REF: () => ATTEMPT_REF,
+  BUILTIN_NETWORK: () => BUILTIN_NETWORK,
   BUILTIN_UNTRUSTED: () => BUILTIN_UNTRUSTED,
   CURATE_AFTER_RUNS: () => CURATE_AFTER_RUNS,
   CURATE_EVERY_DAYS: () => CURATE_EVERY_DAYS,
@@ -4680,6 +5500,7 @@ __export(src_exports, {
   Database: () => Database,
   ENV_VALUE_MIN_CHARS: () => ENV_VALUE_MIN_CHARS,
   GATE_FIELDS: () => GATE_FIELDS,
+  GUARDED_JOB_CHARS: () => GUARDED_JOB_CHARS,
   GUARDED_MAX_BYTES: () => GUARDED_MAX_BYTES,
   GateError: () => GateError,
   GoalError: () => GoalError,
@@ -4693,7 +5514,9 @@ __export(src_exports, {
   OUTDATED_MESSAGE: () => OUTDATED_MESSAGE,
   OUTPUT_TAIL_CHARS: () => OUTPUT_TAIL_CHARS,
   PLUGIN_QUARTERDECK_TOOL_PREFIX: () => PLUGIN_QUARTERDECK_TOOL_PREFIX,
+  PROBING_CATEGORIES: () => PROBING_CATEGORIES,
   PROMOTE_AFTER: () => PROMOTE_AFTER,
+  PROPOSAL_MAX_CALLS: () => PROPOSAL_MAX_CALLS,
   QUARTERDECK_DATA_CATEGORY: () => QUARTERDECK_DATA_CATEGORY,
   QUARTERDECK_TOOL_PREFIX: () => QUARTERDECK_TOOL_PREFIX,
   RECALL_MAX: () => RECALL_MAX,
@@ -4713,6 +5536,10 @@ __export(src_exports, {
   STATUS_TONES: () => STATUS_TONES,
   STEP_MAX: () => STEP_MAX,
   Statement: () => Statement,
+  TRIPPED_CATEGORY: () => TRIPPED_CATEGORY,
+  TRIPPED_QUESTION_WARNING: () => TRIPPED_QUESTION_WARNING,
+  TRIP_THRESHOLD: () => TRIP_THRESHOLD,
+  TRUSTED_READ_CATEGORY: () => TRUSTED_READ_CATEGORY,
   UNTRUSTED_CATEGORY: () => UNTRUSTED_CATEGORY,
   WATCH_BRIEF_LINES: () => WATCH_BRIEF_LINES,
   WATCH_BUDGET_MS: () => WATCH_BUDGET_MS,
@@ -4721,12 +5548,15 @@ __export(src_exports, {
   WATCH_DEFAULT_MATCH: () => WATCH_DEFAULT_MATCH,
   WATCH_DEFAULT_MINUTES: () => WATCH_DEFAULT_MINUTES,
   WATCH_EVENTS_SOURCE: () => WATCH_EVENTS_SOURCE,
+  WATCH_EVENT_REF: () => WATCH_EVENT_REF,
   WATCH_FAILING_AFTER: () => WATCH_FAILING_AFTER,
   WATCH_LINE_CHARS: () => WATCH_LINE_CHARS,
   WATCH_MAX_LINES: () => WATCH_MAX_LINES,
   WATCH_MAX_STEPS: () => WATCH_MAX_STEPS,
   WATCH_MAX_TRIES: () => WATCH_MAX_TRIES,
   WATCH_MIN_MINUTES: () => WATCH_MIN_MINUTES,
+  WATCH_NEVER_SAW_CHECKS: () => WATCH_NEVER_SAW_CHECKS,
+  WATCH_NEVER_SAW_MS: () => WATCH_NEVER_SAW_MS,
   WATCH_NONE_LINE: () => WATCH_NONE_LINE,
   WATCH_OUTPUT_CHARS: () => WATCH_OUTPUT_CHARS,
   WATCH_REF: () => WATCH_REF,
@@ -4738,11 +5568,13 @@ __export(src_exports, {
   addItem: () => addItem,
   addRunUsage: () => addRunUsage,
   addTodo: () => addTodo,
+  afterOutsideApplies: () => afterOutsideApplies,
   applyCuration: () => applyCuration,
   applyGoalChanges: () => applyGoalChanges,
   applyInstructionEdits: () => applyInstructionEdits,
   applyWatchRequest: () => applyWatchRequest,
   approveTask: () => approveTask,
+  approvedStagedCall: () => approvedStagedCall,
   archiveResolved: () => archiveResolved,
   asksPerson: () => asksPerson,
   attachAgent: () => attachAgent,
@@ -4752,19 +5584,23 @@ __export(src_exports, {
   buildBrief: () => buildBrief,
   buildCurationBrief: () => buildCurationBrief,
   buildOverview: () => buildOverview,
+  builtinNetworkPart: () => builtinNetworkPart,
   canonicalToolName: () => canonicalToolName,
   checkCommandWatch: () => checkCommandWatch,
   checkCompletion: () => checkCompletion,
   checkCuration: () => checkCuration,
   checkGuardedPayload: () => checkGuardedPayload,
+  checkGuardedTarget: () => checkGuardedTarget,
   checkHealth: () => checkHealth,
   checkStatuses: () => checkStatuses,
   checkWatches: () => checkWatches,
   checkWatchesAtClaim: () => checkWatchesAtClaim,
   claimRun: () => claimRun,
   claimUsedGuardedCheck: () => claimUsedGuardedCheck,
+  cleanOutsideText: () => cleanOutsideText,
   cleanStatusNote: () => cleanStatusNote,
   clearAllData: () => clearAllData,
+  clearProposalCalls: () => clearProposalCalls,
   clearRunHold: () => clearRunHold,
   commandAllowRule: () => commandAllowRule,
   commandLines: () => commandLines,
@@ -4772,6 +5608,8 @@ __export(src_exports, {
   compareMemory: () => compareMemory,
   compareTaskIds: () => compareTaskIds,
   consumeGuardedCheck: () => consumeGuardedCheck,
+  consumeProposalCall: () => consumeProposalCall,
+  copyGoal: () => copyGoal,
   countAllTasks: () => countAllTasks,
   countAttempts: () => countAttempts,
   countOpenItems: () => countOpenItems,
@@ -4808,6 +5646,8 @@ __export(src_exports, {
   expireStaleRuns: () => expireStaleRuns,
   failRun: () => failRun,
   finishIfDone: () => finishIfDone,
+  firstCheckWarnings: () => firstCheckWarnings,
+  fixedMatch: () => fixedMatch,
   forgetMemory: () => forgetMemory,
   getAllTasks: () => getAllTasks,
   getAutonomySuggestions: () => getAutonomySuggestions,
@@ -4832,8 +5672,10 @@ __export(src_exports, {
   getTreeStats: () => getTreeStats,
   getVerifications: () => getVerifications,
   getWatch: () => getWatch,
+  goalRepo: () => goalRepo,
   goalRunPrompt: () => goalRunPrompt,
   guardToolCallForRun: () => guardToolCallForRun,
+  guardedTarget: () => guardedTarget,
   hasGates: () => hasGates,
   hasUnusedGuardedCheck: () => hasUnusedGuardedCheck,
   hashContents: () => hashContents,
@@ -4847,6 +5689,7 @@ __export(src_exports, {
   insertVerification: () => insertVerification,
   isAttemptBlocked: () => isAttemptBlocked,
   isCurationRequest: () => isCurationRequest,
+  isHidden: () => isHidden,
   isProposal: () => isProposal,
   isRiskyToolRule: () => isRiskyToolRule,
   isUsageLimit: () => isUsageLimit,
@@ -4864,25 +5707,36 @@ __export(src_exports, {
   listWatchEvents: () => listWatchEvents,
   listWatches: () => listWatches,
   markFromMemory: () => markFromMemory,
+  markRunSecretsRead: () => markRunSecretsRead,
   markRunUntrusted: () => markRunUntrusted,
   markWatchEventsQueued: () => markWatchEventsQueued,
   matchLines: () => matchLines,
   matchStatusRules: () => matchStatusRules,
   matchToolCategory: () => matchToolCategory,
   matchToolRule: () => matchToolRule,
+  matchWarning: () => matchWarning,
   memoryRank: () => memoryRank,
   mergedSource: () => mergedSource,
+  moveGoal: () => moveGoal,
+  neverSawHint: () => neverSawHint,
   newId: () => newId,
   nextChildId: () => nextChildId,
   nextIntervalRun: () => nextIntervalRun,
   nextScheduledRun: () => nextScheduledRun,
+  normaliseRepo: () => normaliseRepo,
   normalizeModel: () => normalizeModel,
   openDatabase: () => openDatabase,
+  originUrl: () => originUrl,
   overrideCompletion: () => overrideCompletion,
   overviewWithEtag: () => overviewWithEtag,
   parseCron: () => parseCron,
   parseHealthValue: () => parseHealthValue,
   parseLimitReset: () => parseLimitReset,
+  proposalCalls: () => proposalCalls,
+  proposalCallsProblem: () => proposalCallsProblem,
+  proposalCallsWithFiles: () => proposalCallsWithFiles,
+  proposalHasCalls: () => proposalHasCalls,
+  proposalKey: () => proposalKey,
   proposeCuration: () => proposeCuration,
   proposeWatch: () => proposeWatch,
   purgeDate: () => purgeDate,
@@ -4907,24 +5761,37 @@ __export(src_exports, {
   rejectTask: () => rejectTask,
   rejectWatchRequest: () => rejectWatchRequest,
   releaseLease: () => releaseLease,
+  releaseUnhandledWatchEvents: () => releaseUnhandledWatchEvents,
   releaseWatchEvents: () => releaseWatchEvents,
   removeWatch: () => removeWatch,
+  removedAny: () => removedAny,
+  repoOfRemote: () => repoOfRemote,
   reportRunEnd: () => reportRunEnd,
   reportRunProgress: () => reportRunProgress,
   reportToolWatch: () => reportToolWatch,
   resetStatusCheckTimes: () => resetStatusCheckTimes,
+  resetWatch: () => resetWatch,
   restoreGoal: () => restoreGoal,
   restoreMemory: () => restoreMemory,
   retireMemory: () => retireMemory,
   reviveIfDone: () => reviveIfDone,
+  rewriteForCopy: () => rewriteForCopy,
   runChecks: () => runChecks,
   runHealthCheck: () => runHealthCheck,
   runMigrations: () => runMigrations,
+  runSecretPaths: () => runSecretPaths,
+  runTargets: () => runTargets,
   runVerifyCommand: () => runVerifyCommand,
+  runWatchEvents: () => runWatchEvents,
   runawayReason: () => runawayReason,
   runsSinceCuration: () => runsSinceCuration,
+  samePath: () => samePath,
+  sampleLines: () => sampleLines,
   schedulerPass: () => schedulerPass,
   schemaOutdated: () => schemaOutdated,
+  secretFilePaths: () => secretFilePaths,
+  secretFileValues: () => secretFileValues,
+  secretsReadReason: () => secretsReadReason,
   setIntervalTrigger: () => setIntervalTrigger,
   setRunHold: () => setRunHold,
   setRunStep: () => setRunStep,
@@ -4933,6 +5800,7 @@ __export(src_exports, {
   setWatch: () => setWatch,
   similarCategories: () => similarCategories,
   stageGuardedCall: () => stageGuardedCall,
+  stageProposalCalls: () => stageProposalCalls,
   standingAllowRules: () => standingAllowRules,
   startRun: () => startRun,
   statusCheckCommand: () => statusCheckCommand,
@@ -4945,7 +5813,10 @@ __export(src_exports, {
   touchPlan: () => touchPlan,
   touchesQuarterdeckData: () => touchesQuarterdeckData,
   touchesSecrets: () => touchesSecrets,
+  trimTrailing: () => trimTrailing,
   tripBreakerIfRunaway: () => tripBreakerIfRunaway,
+  tripRun: () => tripRun,
+  unmappedNetworkCommands: () => unmappedNetworkCommands,
   untrustedLabel: () => untrustedLabel,
   updateGoal: () => updateGoal,
   updateMemory: () => updateMemory,
@@ -4962,6 +5833,9 @@ __export(src_exports, {
   watchDue: () => watchDue,
   watchFailing: () => watchFailing,
   watchGapHolds: () => watchGapHolds,
+  watchHealth: () => watchHealth,
+  watchNeverSaw: () => watchNeverSaw,
+  watchSpecOf: () => watchSpecOf,
   watchStopped: () => watchStopped,
   withinActiveHours: () => withinActiveHours
 });
@@ -4990,7 +5864,9 @@ var init_src = __esm({
     init_schedule();
     init_health();
     init_watches();
+    init_outside_text();
     init_guard();
+    init_goal_copy();
     init_goal_tick();
     init_status_check();
     init_goal_overview();
@@ -5005,16 +5881,16 @@ var init_src = __esm({
 });
 
 // src/doctor.ts
-import { existsSync as existsSync4, readFileSync as readFileSync3, readdirSync, statSync as statSync2 } from "fs";
+import { existsSync as existsSync4, readFileSync as readFileSync4, readdirSync, statSync as statSync2 } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join5, resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 
 // src/runner-session.ts
 init_src();
-import { execFileSync } from "child_process";
+import { execFileSync as execFileSync3 } from "child_process";
 import { randomUUID as randomUUID4 } from "crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync2, rmSync, statSync, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, rmSync as rmSync2, statSync, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir3, userInfo } from "os";
 import { dirname as dirname2, join as join4, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -5345,14 +6221,14 @@ function currentBuild(scriptDir = dirname2(fileURLToPath(import.meta.url))) {
   if (!plugin) return "unknown";
   let version = "unknown";
   try {
-    version = String(JSON.parse(readFileSync2(join4(plugin, ".claude-plugin", "plugin.json"), "utf8")).version);
+    version = String(JSON.parse(readFileSync3(join4(plugin, ".claude-plugin", "plugin.json"), "utf8")).version);
   } catch {
   }
   const bundle = join4(plugin, "server", "quarterdeck-mcp.mjs");
   return existsSync3(bundle) ? `${version}+${Math.round(statSync(bundle).mtimeMs)}` : version;
 }
 function readStateText(file) {
-  return readFileSync2(file, "utf8").replace(/^﻿/, "");
+  return readFileSync3(file, "utf8").replace(/^﻿/, "");
 }
 function transcriptPath(dir, sessionId, configDir = process.env.CLAUDE_CONFIG_DIR || join4(homedir3(), ".claude")) {
   return join4(configDir, "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"), `${sessionId}.jsonl`);
@@ -5364,7 +6240,7 @@ function sessionEnv() {
 }
 function tmux(args, env) {
   try {
-    return execFileSync("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...env ? { env } : {} });
+    return execFileSync3("tmux", ["-L", TMUX_SOCKET, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], ...env ? { env } : {} });
   } catch (err) {
     if (err.code === "ENOENT") throw new Error("The standing session needs tmux on Linux: install it (for example `sudo apt install tmux`).");
     throw err;
@@ -5388,7 +6264,7 @@ function spawnInTmux(dir, args) {
   const newSession = ["new-session", "-d", "-s", TMUX_SESSION, "-x", "200", "-y", "50", "-c", dir, "-P", "-F", "#{pane_pid}", "--", claude, ...args];
   let out;
   try {
-    out = execFileSync(
+    out = execFileSync3(
       "systemd-run",
       ["--user", "--scope", "--collect", "--quiet", "--description=Quarterdeck standing session", "tmux", "-L", TMUX_SOCKET, ...newSession],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env }
@@ -5438,11 +6314,11 @@ async function realDeps() {
     spawnSession: (args) => {
       if (process.platform === "linux") return spawnInTmux(dir, args);
       if (process.platform !== "win32") throw new Error("The standing session is set up for Windows and Linux only so far.");
-      const claude = execFileSync("where.exe", ["claude"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/)[0].trim();
+      const claude = execFileSync3("where.exe", ["claude"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/)[0].trim();
       const quote2 = (a) => /[\s"]/.test(a) ? `"${a}"` : a;
       const ps = (s) => `'${s.replace(/'/g, "''")}'`;
       const line = ["--headless", quote2(claude), ...args.map(quote2)].join(" ");
-      const out = execFileSync("powershell.exe", [
+      const out = execFileSync3("powershell.exe", [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -5459,14 +6335,14 @@ async function realDeps() {
           process.kill(pid, 0);
           return true;
         }
-        return /conhost\.exe/i.test(execFileSync("tasklist.exe", ["/fi", `PID eq ${pid}`, "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true }));
+        return /conhost\.exe/i.test(execFileSync3("tasklist.exe", ["/fi", `PID eq ${pid}`, "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true }));
       } catch {
         return false;
       }
     },
     killTree: (pid) => {
       try {
-        if (process.platform === "win32") execFileSync("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
+        if (process.platform === "win32") execFileSync3("taskkill.exe", ["/pid", String(pid), "/t", "/f"], { stdio: "ignore", windowsHide: true });
         else if (process.platform === "linux") {
           tmux(["kill-session", "-t", TMUX_SESSION]);
           for (let i = 0; i < 20 && processAlive(pid); i++) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
@@ -5503,7 +6379,7 @@ async function realDeps() {
     },
     writeState: (state) => {
       if (state) writeFileSync2(stateFile, JSON.stringify(state, null, 2) + "\n");
-      else rmSync(stateFile, { force: true });
+      else rmSync2(stateFile, { force: true });
     },
     platform: process.platform,
     insideClaudeCode: process.env.CLAUDECODE === "1",
@@ -5514,14 +6390,14 @@ async function realDeps() {
       mkdirSync3(dirname2(path), { recursive: true });
       writeFileSync2(path, content, encoding ?? "utf8");
     },
-    removeFile: (path) => rmSync(path, { force: true }),
-    schtasks: (args) => execFileSync("schtasks.exe", args, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
-    systemctl: (args) => execFileSync("systemctl", ["--user", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+    removeFile: (path) => rmSync2(path, { force: true }),
+    schtasks: (args) => execFileSync3("schtasks.exe", args, { encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }),
+    systemctl: (args) => execFileSync3("systemctl", ["--user", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
     systemdDir: join4(process.env.XDG_CONFIG_HOME || join4(homedir3(), ".config"), "systemd", "user"),
     path: process.env.PATH ?? "",
     wsl: process.platform === "linux" && (() => {
       try {
-        return /microsoft/i.test(readFileSync2("/proc/version", "utf8"));
+        return /microsoft/i.test(readFileSync3("/proc/version", "utf8"));
       } catch {
         return false;
       }
@@ -5531,7 +6407,7 @@ async function realDeps() {
       if (!process.stdin.isTTY) throw new Error(`attach needs a terminal: run it in one of its own (or: tmux -L ${TMUX_SOCKET} attach -t ${TMUX_SESSION}).`);
       const env = { ...process.env };
       delete env.TMUX;
-      execFileSync("tmux", ["-L", TMUX_SOCKET, "attach", "-t", TMUX_SESSION], { stdio: "inherit", env });
+      execFileSync3("tmux", ["-L", TMUX_SOCKET, "attach", "-t", TMUX_SESSION], { stdio: "inherit", env });
     },
     sleep: (ms) => {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -5744,7 +6620,7 @@ function checkHooks(o) {
   if (!existsSync4(file)) return ok("Claude Code hooks", "none installed (none needed)");
   let text;
   try {
-    text = readFileSync3(file, "utf8");
+    text = readFileSync4(file, "utf8");
     JSON.parse(text);
   } catch {
     return fail("Claude Code hooks", "~/.claude/settings.json is not valid JSON", "Fix the JSON syntax.");
@@ -5771,7 +6647,7 @@ function checkPlugin(o) {
 function checkRenameLeftovers(o) {
   const read = (file) => {
     try {
-      return JSON.parse(readFileSync3(file, "utf8"));
+      return JSON.parse(readFileSync4(file, "utf8"));
     } catch {
       return {};
     }
@@ -5827,6 +6703,26 @@ async function checkGoals(o, plugins) {
     plugins.fix ?? "Install the quarterdeck-goals and quarterdeck-guard plugins (see the Claude Code plugins check above)."
   );
 }
+async function checkUnmappedNetwork(o) {
+  let found = [];
+  try {
+    const core = await Promise.resolve().then(() => (init_src(), src_exports));
+    const db = core.openDatabase(core.defaultDbPath(o.env, o.home));
+    try {
+      found = core.listGoals(db, "active").flatMap((g) => core.unmappedNetworkCommands(db, g.plan.id).map((c) => ({ goal: g.plan.name, command: c.command, rule: c.rule })));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+  if (found.length === 0) return null;
+  return warn(
+    "Unmapped network commands",
+    `goal runs reached the network through commands their tool map doesn't name, so each run was marked as having read outside content: ${found.map((f) => `${f.goal}: ${f.command}`).join(", ")}`,
+    `Add a tool rule for each, such as ${found[0].rule} \u2192 untrusted, or \u2192 trusted-read when it only fetches what the goal trusts (update_goal tool_map).`
+  );
+}
 async function checkRunner(o, deps) {
   const name = "Standing session";
   if (!existsSync4(join5(o.home, ".quarterdeck", "runner", "launch.mjs"))) return null;
@@ -5860,7 +6756,7 @@ async function runDoctor(o = defaultOptions()) {
     plugins,
     ...[checkUpdates(o), checkPermissionRules(o), checkRenameLeftovers(o)].filter((r) => r !== null),
     web,
-    ...[await checkGoals(o, plugins), await checkRunner(o)].filter((r) => r !== null)
+    ...[await checkGoals(o, plugins), await checkUnmappedNetwork(o), await checkRunner(o)].filter((r) => r !== null)
   ];
 }
 function formatResults(results) {
@@ -5877,7 +6773,7 @@ function formatResults(results) {
 }
 function readJson(file) {
   try {
-    return JSON.parse(readFileSync3(file, "utf8"));
+    return JSON.parse(readFileSync4(file, "utf8"));
   } catch {
     return {};
   }

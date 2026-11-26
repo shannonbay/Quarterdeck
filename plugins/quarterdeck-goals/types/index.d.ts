@@ -1,5 +1,5 @@
 /** A goal work item: a proposal waiting for the person, or an open item. */
-export type Item = { id: string; title: string; category: string | null; summary: string | null; /** A question or request for the person, not a proposal. */ asksPerson?: boolean; /** The run's context for it: a question's options, why a proposal. */ notes?: string; /** The overview cut its title, notes or summary short: get_item has the full text. */ clipped?: boolean; /** Out of attempts: runs leave it alone until the person answers. */ blocked?: boolean }
+export type Item = { id: string; title: string; category: string | null; summary: string | null; /** A question or request for the person, not a proposal. */ asksPerson?: boolean; /** The run's context for it: a question's options, why a proposal. */ notes?: string; /** The overview cut its title, notes or summary short: get_item has the full text. */ clipped?: boolean; /** Out of attempts: runs leave it alone until the person answers. */ blocked?: boolean; /** A proposal waiting for the person: the exact calls approving it lets through, each once, or "any" when it staged none and covers its whole category (#167). */ calls?: { command: string; files: string[] }[] | 'any' }
 
 /** One goal run. */
 export type Run = {
@@ -89,8 +89,10 @@ export type GoalCard = {
   memory: Memory[]
   /** Missing from a server older than memory recovery. */
   inactiveMemory: InactiveMemory[]
-  /** Categories approved every time lately: candidates for 'auto'. */
-  suggestions: { category: string; approvedInARow: number }[]
+  /** Categories approved every time lately: candidates for 'auto' (kind auto) or for keeping auto after outside text (kind after_outside, #189). */
+  suggestions: { category: string; approvedInARow: number; kind: 'auto' | 'after_outside'; warning?: string }[]
+  /** Network commands recent runs reached that the tool map doesn't name, with the rule to add (#173) */
+  unmappedNetwork?: { tool: string; command: string; rule: string }[]
   /** Checks whose new lines start a run (empty on a card: `watchCount` has how many). */
   watches: Watch[]
   watchCount: number
@@ -98,6 +100,10 @@ export type GoalCard = {
   watchGapMinutes: number
   /** A watch's check has failed several times in a row. */
   watchFailing: boolean
+  /** A watch has seen nothing, or the same one line, since it was set, for a day and 3 checks (#185). */
+  watchNeverSaw: boolean
+  /** The goal's folder (its plan's working_dir); null from a server older than #47: the pane puts it in the session's group (#207). */
+  workingDir: string | null
 }
 
 export type Watch = {
@@ -111,6 +117,8 @@ export type Watch = {
   runs: string
   lastFiredAt: string | null
   failing: boolean
+  /** It has seen nothing, or the same one line, since it was set (#185). */
+  neverSaw: boolean
   error: string | null
 }
 
