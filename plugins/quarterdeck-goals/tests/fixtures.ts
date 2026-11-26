@@ -90,7 +90,7 @@ export const SPILL_TEXT = 'result (68,739 characters across 1 line) exceeds maxi
 
 const TOOLS = [
   'goals_overview', 'decide_item', 'run_goal', 'request_run', 'cancel_run', 'set_goal_status', 'delete_memory', 'restore_memory', 'trust_memory', 'create_goal',
-  'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold', 'copy_goal',
+  'goals_tick', 'attach_agent', 'fail_run', 'guard_check', 'set_schedule', 'todo_list', 'todo_add', 'todo_set', 'update_goal', 'delete_goal', 'restore_goal', 'purge_goal', 'watch_report', 'get_item', 'clear_run_hold', 'copy_goal', 'move_goal',
 ] as const
 
 /**
@@ -250,6 +250,16 @@ export function fakeQuarterdeck(on: On, goals: FakeGoal[], opts: { fail?: boolea
           if (input.preview) return ok({ preview: true, name, working_dir: input.working_dir, instructions: `In ${String(input.working_dir)}`, watches: { issues: { command: `gh issue list -R me/beta` } }, replacements: [{ from: '/work/project', to: input.working_dir, count: 1 }] }) as never
           version++
           return ok({ id: 'g-copy', name, working_dir: input.working_dir, status: 'paused', next_run_at: null, watches: 1, replacements: [] }) as never
+        }
+        case 'move_goal': {
+          // The same rewrite; refused while a run is going, and /work/new doesn't exist yet
+          if (!g) return { result: `Error: Goal ${String(input.goal_id)} not found.`, isError: true } as never
+          if (g.open_run) return { result: 'Error: A run is going: wait for it to finish (or cancel it), then move the goal.', isError: true } as never
+          const exists = input.working_dir !== '/work/new'
+          if (input.preview) return ok({ preview: true, name: g.name, working_dir: input.working_dir, exists, instructions: `In ${String(input.working_dir)}`, watches: { issues: { command: `gh issue list -R me/beta` } }, replacements: [{ from: '/work/project', to: input.working_dir, count: 1 }] }) as never
+          g.working_dir = String(input.working_dir)
+          version++
+          return ok({ id: g.id, name: g.name, working_dir: input.working_dir, status: g.status, watches: 1, replacements: [] }) as never
         }
         case 'update_goal': {
           const changed: string[] = []

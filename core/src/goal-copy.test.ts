@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { copyGoal, repoOfRemote, rewriteForCopy, watchSpecOf } from './goal-copy.js'
-import { applyGoalChanges, createGoal, getGoal, getPlan, getSchedule, listMemory, listWatches, openDatabase, setSchedule, updateGoal, type Watch } from './index.js'
+import { copyGoal, moveGoal, repoOfRemote, rewriteForCopy, watchSpecOf } from './goal-copy.js'
+import { applyGoalChanges, queueRun, createGoal, getGoal, getPlan, getSchedule, listMemory, listWatches, openDatabase, setSchedule, updateGoal, type Watch } from './index.js'
 
 const win = { fromDir: 'C:\\Users\\me\\GitHub\\Alpha', toDir: 'C:\\Users\\me\\GitHub\\Beta', fromRepo: 'me/Alpha', toRepo: 'me/Beta', caseInsensitive: true }
 
@@ -88,6 +88,44 @@ describe('copyGoal (#208)', () => {
   it('refuses a goal that does not exist', () => {
     const db = openDatabase(':memory:')
     expect(() => copyGoal(db, 'nope', { id: 'dst', name: 'x', working_dir: '/b' })).toThrow(/not found/)
+  })
+})
+
+describe('moveGoal', () => {
+  const now = new Date().toISOString()
+  const setUp = () => {
+    const db = openDatabase(':memory:')
+    createGoal(db, { id: 'g', name: 'Fixer', description: null, status: 'active', working_dir: '/a', created_at: now, updated_at: now },
+      { objective: 'Fix issues', instructions: 'Work in /a', autonomy: {}, limits: { max_run_minutes: 30, min_watch_gap_minutes: 5 }, one_off: false, model: null })
+    applyGoalChanges(db, 'g', {
+      watches: { issues: { command: 'gh issue list' }, mail: { tool: 'mcp__gmail__search', input: { q: 'a' } }, old: { command: 'ls /a/old' } },
+      add_memory: [{ kind: 'fact', text: 'kept' }],
+    })
+    // Every watch has a baseline before the move
+    db.prepare("UPDATE goal_watches SET seen = '[\"x\"]', baseline_at = ?, last_checked_at = ?").run(now, now)
+    return db
+  }
+
+  it('keeps the goal and its memory, saves what the person confirmed and starts command watches afresh', () => {
+    const db = setUp()
+    const specs = Object.fromEntries(listWatches(db, 'g').filter((w) => w.name !== 'old').map((w) => [w.name, watchSpecOf(w)]))
+    const moved = moveGoal(db, 'g', { working_dir: '/b', instructions: 'Work in /b', watches: specs })
+    expect(moved).toMatchObject({ instructions: 'Work in /b', status: 'active' })
+    expect(getPlan(db, 'g')!.working_dir).toBe('/b')
+    expect(listMemory(db, 'g').map((m) => m.text)).toEqual(['kept'])
+    const watches = Object.fromEntries(listWatches(db, 'g').map((w) => [w.name, w]))
+    expect(Object.keys(watches).sort()).toEqual(['issues', 'mail'])
+    // The command runs in the new folder, so it starts again; the unchanged tool watch keeps what it saw
+    expect(watches.issues).toMatchObject({ seen: [], baseline_at: null })
+    expect(watches.mail).toMatchObject({ seen: ['x'], baseline_at: now })
+  })
+
+  it('refuses a missing goal and a goal with a run going', () => {
+    const db = setUp()
+    expect(() => moveGoal(db, 'nope', { working_dir: '/b' })).toThrow(/not found/)
+    queueRun(db, 'g')
+    expect(() => moveGoal(db, 'g', { working_dir: '/b' })).toThrow(/run is going/)
+    expect(getPlan(db, 'g')!.working_dir).toBe('/a')
   })
 })
 

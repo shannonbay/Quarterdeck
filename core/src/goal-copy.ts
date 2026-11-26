@@ -6,8 +6,9 @@
 
 import type { Database } from './sqlite.js'
 import type { Goal, Watch, WatchSpec, WatchSpecCommon } from './types.js'
-import { createGoal, getGoal, updateGoal } from './goals.js'
-import { listWatches } from './watches.js'
+import { createGoal, getGoal, getOpenRun, updateGoal } from './goals.js'
+import { listWatches, resetWatch } from './watches.js'
+import { updatePlan } from './queries.js'
 import { getSchedule, setSchedule } from './schedule.js'
 import { applyGoalChanges, type GoalChanges } from './goal-changes.js'
 
@@ -146,6 +147,38 @@ export function copyGoal(db: Database, sourceId: string, input: CopyGoalInput): 
     updateGoal(db, input.id, { status: 'paused', next_run_at: null })
   })()
   return getGoal(db, input.id)!
+}
+
+export interface MoveGoalInput {
+  /** The folder the goal works in from now on. */
+  working_dir: string
+  /** The instructions and watches to save (the rewritten text the person confirmed); left out: the goal's own. */
+  instructions?: string
+  watches?: Record<string, WatchSpec>
+}
+
+/**
+ * Moves a goal to another folder: the same goal, with its runs, items, questions,
+ * memory, schedule and status, now working in `working_dir`, with the instructions
+ * and watches the person confirmed. Refused while a run is going (it read the old
+ * folder in its brief). Every command watch starts again from a fresh baseline,
+ * since it runs in the folder; a tool watch only when its check changed.
+ */
+export function moveGoal(db: Database, planId: string, input: MoveGoalInput): Goal {
+  const goal = getGoal(db, planId)
+  if (!goal) throw new Error(`Goal ${planId} not found.`)
+  if (getOpenRun(db, planId)) throw new Error('A run is going: wait for it to finish (or cancel it), then move the goal.')
+  db.transaction(() => {
+    updatePlan(db, planId, { working_dir: input.working_dir, updated_at: new Date().toISOString() })
+    if (input.instructions !== undefined && input.instructions !== goal.instructions) updateGoal(db, planId, { instructions: input.instructions })
+    if (input.watches) {
+      const changes: GoalChanges = { watches: { ...input.watches } }
+      for (const w of listWatches(db, planId)) if (!(w.name in input.watches)) changes.watches![w.name] = null
+      applyGoalChanges(db, planId, changes)
+    }
+    for (const w of listWatches(db, planId)) if (w.kind === 'command') resetWatch(db, w.id)
+  })()
+  return getGoal(db, planId)!
 }
 
 /** owner/name from a git remote URL (https, ssh or scp-like); null for a local path or anything else. */

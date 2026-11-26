@@ -180,6 +180,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'mcp__quarterdeck-goals__set_schedule' }, ($, e) => answerTool($, 'set_schedule', e)).catch(failedTool)
   on('tool.call', { tool: 'mcp__quarterdeck-goals__update_goal' }, ($, e) => answerTool($, 'update_goal', e)).catch(failedTool)
   on('tool.call', { tool: 'mcp__quarterdeck-goals__copy_goal' }, ($, e) => answerTool($, 'copy_goal', e)).catch(failedTool)
+  on('tool.call', { tool: 'mcp__quarterdeck-goals__move_goal' }, ($, e) => answerTool($, 'move_goal', e)).catch(failedTool)
   on('tool.call', { tool: 'mcp__quarterdeck-goals__todos' }, ($, e) => answerTool($, 'todos', e)).catch(failedTool)
   on('tool.call', { tool: 'mcp__quarterdeck-goals__add_todo' }, ($, e) => answerTool($, 'add_todo', e)).catch(failedTool)
   on('tool.call', { tool: 'mcp__quarterdeck-goals__complete_todo' }, ($, e) => answerTool($, 'complete_todo', e)).catch(failedTool)

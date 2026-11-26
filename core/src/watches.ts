@@ -380,6 +380,19 @@ export function removeWatch(db: Database, planId: string, name: string): boolean
   return true
 }
 
+/**
+ * Starts a watch again from a fresh baseline: its next check marks what it sees as
+ * seen without starting a run (a goal moved to another folder, whose command now
+ * runs somewhere else). Unclaimed events go too.
+ */
+export function resetWatch(db: Database, watchId: string): void {
+  db.prepare(`
+    UPDATE goal_watches SET seen = '[]', baseline_at = NULL, last_checked_at = NULL, last_line_count = NULL, asked_at = NULL,
+      last_error = NULL, fail_count = 0, cleanup_failures = 0 WHERE id = ?
+  `).run(watchId)
+  db.prepare('DELETE FROM goal_watch_events WHERE watch_id = ? AND run_id IS NULL').run(watchId)
+}
+
 export function watchDue(watch: Watch, now: Date = new Date()): boolean {
   if (!watch.last_checked_at) return true
   return now.getTime() - new Date(watch.last_checked_at).getTime() >= watch.every_minutes * 60_000

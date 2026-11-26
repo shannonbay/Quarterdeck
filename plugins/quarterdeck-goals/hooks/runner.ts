@@ -46,6 +46,7 @@ export const HUMAN_ONLY_TOOLS = serverToolNames(
   'guard_check',
   'create_goal',
   'copy_goal',
+  'move_goal',
   'delete_goal',
   'restore_goal',
   'purge_goal',

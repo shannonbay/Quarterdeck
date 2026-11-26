@@ -547,13 +547,13 @@ test('a goal\'s controls are separated by dots, and a scheduled goal has Resched
   expect(await ui.find({ key: 'reschedule-g1' })).toBeDefined()
   expect(await ui.find({ key: 'schedule-g1' })).toBeUndefined()
   expect(await ui.find({ key: 'reschedule-g2' })).toBeUndefined()
-  // Each goal: Reschedule (or Set schedule) · Run now · Run with a prompt… · Pause · Copy to… · Delete, with no
+  // Each goal: Reschedule (or Set schedule) · Run now · Prompt… · Pause · Folder… · Delete, with no
   // dot at either end, and its facts line: Runs … · model
   expect(await ui.findAll({ type: 'Text', text: /^ · $/ })).toHaveLength(12)
   await ui.unmount()
 })
 
-test('Run with a prompt opens a box and sends the typed text as a trusted request; a refusal shows (#143)', async ($, on) => {
+test('Prompt… opens a box and sends the typed text as a trusted request; a refusal shows (#143)', async ($, on) => {
   engine(on)
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })], {
     errors: { request_run: 'Goal runs are on hold until 2026-11-21T03:00:00Z: usage limit' },
@@ -573,36 +573,69 @@ test('Run with a prompt opens a box and sends the typed text as a trusted reques
   await ui.unmount()
 })
 
-test('Copy to… asks for a folder, shows the rewrite and copies only on Copy (#208)', async ($, on) => {
+test('Folder… asks for a folder, shows the rewrite once and copies on Copy (#208)', async ($, on) => {
   const { asked, toasts } = engine(on, { answer: 'Copy' })
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
-  await ui.press({ key: 'copy-g1' })
-  await ui.input({ key: 'copy-input-g1', text: '  /work/beta ' })
-  expect(asked[0]).toContain('Copy the goal "Inbox" to /work/beta as "Inbox"? It starts paused.')
+  await ui.press({ key: 'folder-g1' })
+  await ui.input({ key: 'folder-input-g1', text: '  /work/beta ' })
+  expect(asked).toHaveLength(1)
+  expect(asked[0]).toContain('Move or copy the goal "Inbox" to /work/beta?')
   expect(asked[0]).toContain('/work/project → /work/beta')
-  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true, undefined])
+  expect(fake.of('move_goal').map((c) => c.input.preview)).toEqual([true])
+  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([undefined])
+  expect(fake.of('copy_goal')[0]!.input).not.toHaveProperty('create_dir')
   expect(toasts.join(' ')).toContain('It is paused')
   // A copy closes the box
-  expect(await ui.find({ key: 'copy-input-g1' })).toBeUndefined()
-  expect(await ui.find({ key: 'copy-g1' })).toBeDefined()
+  expect(await ui.find({ key: 'folder-input-g1' })).toBeUndefined()
+  expect(await ui.find({ key: 'folder-g1' })).toBeDefined()
   await ui.unmount()
 })
 
-test('Copy to… copies nothing on Cancel and keeps the box open', async ($, on) => {
+test('Folder… moves the goal on Move, making a folder that does not exist', async ($, on) => {
+  const { asked, toasts } = engine(on, { answer: 'Move' })
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'toggle-g1' })
+  await ui.press({ key: 'folder-g1' })
+  await ui.input({ key: 'folder-input-g1', text: '/work/new' })
+  expect(asked[0]).toContain("/work/new doesn't exist yet: it will be created.")
+  expect(fake.of('move_goal').map((c) => [c.input.preview, c.input.create_dir])).toEqual([[true, undefined], [undefined, true]])
+  expect(fake.of('copy_goal')).toEqual([])
+  expect(toasts.join(' ')).toContain('Moved Inbox to /work/new. Created /work/new.')
+  await ui.unmount()
+})
+
+test('Folder… offers only Copy while a run is going', async ($, on) => {
+  const { asked, choices } = engine(on) // the fake dismisses (answers Cancel)
+  const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox', open_run: { id: 'r1', status: 'running' } })])
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // A goal with a run going isn't quiet, so its buttons show without expanding it
+  await ui.press({ key: 'folder-g1' })
+  await ui.input({ key: 'folder-input-g1', text: '/work/beta' })
+  expect(asked[0]).toContain("It can't be moved: A run is going")
+  expect(choices[0]).toEqual(['Copy', 'Cancel'])
+  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true])
+  await ui.unmount()
+})
+
+test('Folder… moves and copies nothing on Cancel and keeps the box open', async ($, on) => {
   const { toasts } = engine(on) // the fake dismisses (answers Cancel)
   const fake = fakeQuarterdeck(on, [goal({ id: 'g1', name: 'Inbox' })])
   await $.session.start(START)
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'toggle-g1' })
-  await ui.press({ key: 'copy-g1' })
-  await ui.input({ key: 'copy-input-g1', text: '/work/beta' })
-  expect(fake.of('copy_goal').map((c) => c.input.preview)).toEqual([true])
-  expect(toasts.join(' ')).toContain('nothing was copied')
-  await ui.press({ key: 'copy-cancel-g1' })
-  expect(await ui.find({ key: 'copy-input-g1' })).toBeUndefined()
+  await ui.press({ key: 'folder-g1' })
+  await ui.input({ key: 'folder-input-g1', text: '/work/beta' })
+  expect(fake.of('move_goal').map((c) => c.input.preview)).toEqual([true])
+  expect(fake.of('copy_goal')).toEqual([])
+  expect(toasts.join(' ')).toContain('nothing was moved or copied')
+  await ui.press({ key: 'folder-cancel-g1' })
+  expect(await ui.find({ key: 'folder-input-g1' })).toBeUndefined()
   await ui.unmount()
 })
 

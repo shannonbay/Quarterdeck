@@ -6,7 +6,7 @@
 import type { EngineInterface } from 'claude-code'
 
 import type { DeletedGoal, GoalCard } from '../types'
-import { type CopyPreview, type WatchHealth, addTodo, answerItem, approve, copyGoal, createGoal, previewCopy, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
+import { type CopyPreview, type WatchHealth, addTodo, answerItem, approve, copyGoal, createGoal, moveGoal, previewCopy, previewMove, detectForge, fetchOverview, editTodo, fetchTodos, getItem, reject, runNow, setGoalStatus, setSchedule, setTodo, updateGoal } from './api'
 import { ago, clip, describe, describeWatchHealth, NEW_GOAL_MODEL, newGoalModelText, describeGoalChanges, editInstructions, fallbackTitle, findGoal, noMatch, parseSchedule, SCHEDULE_USAGE, scheduleLabel, soundsEventDriven, splitGoalArgs, WATCH_FALLBACK, watchSetupPrompt, summarize, type GoalChanges, type OverviewGoal, toCard } from './model'
 import { kick } from './runner'
 import { sendToChat } from './chat'
@@ -65,13 +65,25 @@ export const TOOLS = [
   },
   {
     name: 'copy_goal',
-    description: "Copies one or more Quarterdeck goals to another existing folder, so a goal that works can be reused in another project: objective, instructions, schedule, watches, autonomy, tool rules, model and limits, with the old folder and repo rewritten; no runs, items, questions, to-dos or memory. For each goal the person sees the rewritten instructions and watches and confirms first. Each copy starts paused.",
+    description: "Copies one or more Quarterdeck goals to another folder, so a goal that works can be reused in another project: objective, instructions, schedule, watches, autonomy, tool rules, model and limits, with the old folder and repo rewritten; no runs, items, questions, to-dos or memory. For each goal the person sees the rewritten instructions and watches and confirms first. Each copy starts paused.",
     inputSchema: {
       type: 'object',
       properties: {
         goals: { type: 'array', items: { type: 'string' }, description: 'Goal names or ids to copy' },
-        to: { type: 'string', description: 'The folder the copies work in (must exist)' },
+        to: { type: 'string', description: "The folder the copies work in: a full path, or a name or relative path, which goes beside the goal's folder (./ inside it, ~ the home folder). A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
         name: { type: 'string', description: "The copy's name, only with one goal; left out, the same name" },
+      },
+      required: ['goals', 'to'],
+    },
+  },
+  {
+    name: 'move_goal',
+    description: "Moves one or more Quarterdeck goals to another folder: the same goal, keeping its runs, items, questions, memory, schedule and status, now working in the new folder, with the old folder and repo rewritten in its instructions and watches. For each goal the person sees the rewrite and confirms first. Refused while the goal's run is going.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        goals: { type: 'array', items: { type: 'string' }, description: 'Goal names or ids to move' },
+        to: { type: 'string', description: "The folder they work in from now on: a full path, or a name or relative path, which goes beside the goal's folder (./ inside it, ~ the home folder). A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
       },
       required: ['goals', 'to'],
     },
@@ -286,11 +298,90 @@ function watchLine(spec: Record<string, unknown>): string {
   return JSON.stringify(spec)
 }
 
-/** The copy confirm (#208): the rewritten instructions and watches the person checks before anything is saved. */
-export function copyQuestion(goalName: string, p: CopyPreview): string {
+/** What a copy or move would save: the folder note, each replacement, the instructions and the watches. */
+function rewriteDetails(p: CopyPreview): string {
   const made = p.replacements.length ? p.replacements.map((r) => `• ${r.from} → ${r.to}`).join('\n') : '• nothing (no old folder or repo in its text)'
   const watches = Object.entries(p.watches).map(([n, w]) => `• ${n}: ${watchLine(w)}`).join('\n')
-  return `Copy the goal "${goalName}" to ${p.working_dir} as "${p.name}"? It starts paused.\n\nReplaced:\n${made}\n\nInstructions:\n${p.instructions || '(none)'}${watches ? `\n\nWatches:\n${watches}` : ''}`
+  const folder = p.exists === false ? `${p.working_dir} doesn't exist yet: it will be created.\n\n` : ''
+  return `${folder}Replaced:\n${made}\n\nInstructions:\n${p.instructions || '(none)'}${watches ? `\n\nWatches:\n${watches}` : ''}`
+}
+
+/** The copy confirm (#208): the rewritten instructions and watches the person checks before anything is saved. */
+export function copyQuestion(goalName: string, p: CopyPreview): string {
+  return `Copy the goal "${goalName}" to ${p.working_dir} as "${p.name}"? It starts paused.\n\n${rewriteDetails(p)}`
+}
+
+/** The move confirm: the same rewrite, for the goal itself. */
+export function moveQuestion(goalName: string, p: CopyPreview): string {
+  return `Move the goal "${goalName}" to ${p.working_dir}? It keeps its runs, items and memory; its command watches start afresh there.\n\n${rewriteDetails(p)}`
+}
+
+/** The pane's Folder… question: one rewrite, then Move or Copy (Move left out when `noMove` says why). */
+export function folderQuestion(goalName: string, p: CopyPreview, noMove: string | null): string {
+  const choice = noMove
+    ? `Copy the goal "${goalName}" to ${p.working_dir}? It can't be moved: ${noMove} A copy is a new goal, paused, with none of its runs, items or memory.`
+    : `Move or copy the goal "${goalName}" to ${p.working_dir}?\n• Move: the same goal works there from now on, keeping its runs, items and memory; its command watches start afresh.\n• Copy: a new goal, paused, with none of them.`
+  return `${choice}\n\n${rewriteDetails(p)}`
+}
+
+/** Moves one goal after the person confirms its rewrite; Cancel changes nothing. */
+export async function moveOneGoal($: Engine, ref: unknown, to: string): Promise<{ moved: boolean; text: string }> {
+  const found = await resolveGoal($, ref)
+  if ('error' in found) return { moved: false, text: found.error }
+  const { goal } = found
+  let preview: CopyPreview
+  try {
+    preview = await previewMove($, goal.id, to)
+  } catch (e) {
+    return { moved: false, text: `${goal.name}: ${e instanceof Error ? e.message : String(e)}` }
+  }
+  if (!(await confirmWith($, moveQuestion(goal.name, preview), 'Move'))) return { moved: false, text: `${goal.name}: the person declined; nothing was moved.` }
+  return doMove($, goal, preview)
+}
+
+async function doMove($: Engine, goal: { id: string; name: string }, preview: CopyPreview): Promise<{ moved: boolean; text: string }> {
+  const ok = await act($, `move:${goal.id}`, 'move the goal', async () => void (await moveGoal($, preview, goal.id)))
+  if (!ok) return { moved: false, text: `${goal.name}: ${await actFailure($, "the move didn't go through.")}` }
+  const made = preview.exists === false ? ` Created ${preview.working_dir}.` : ''
+  const replaced = preview.replacements.length ? ` Replaced: ${preview.replacements.map((r) => `${r.from} → ${r.to}`).join('; ')}.` : ' Nothing in its text named the old folder or repo.'
+  return { moved: true, text: `Moved ${goal.name} to ${preview.working_dir}.${made}${replaced}` }
+}
+
+/**
+ * The pane's Folder…: one preview of the rewrite, then Move, Copy or Cancel. When the
+ * goal can't move (a run going, or it already works there) it offers Copy only.
+ */
+export async function moveOrCopyOneGoal($: Engine, goalId: string, to: string): Promise<{ done: boolean; text: string }> {
+  const found = await resolveGoal($, goalId)
+  if ('error' in found) return { done: false, text: found.error }
+  const { goal } = found
+  let preview: CopyPreview
+  let noMove: string | null = null
+  try {
+    preview = await previewMove($, goal.id, to)
+  } catch (e) {
+    noMove = e instanceof Error ? e.message : String(e)
+    try {
+      preview = await previewCopy($, goal.id, to)
+    } catch (e2) {
+      return { done: false, text: `${goal.name}: ${e2 instanceof Error ? e2.message : String(e2)}` }
+    }
+  }
+  let choice: string | undefined
+  try {
+    choice = await $.ui.ask(folderQuestion(goal.name, preview, noMove), noMove ? ['Copy', 'Cancel'] : ['Move', 'Copy', 'Cancel'])
+  } catch {
+    choice = undefined
+  }
+  if (choice === 'Move') {
+    const r = await doMove($, goal, preview)
+    return { done: r.moved, text: r.text }
+  }
+  if (choice === 'Copy') {
+    const r = await doCopy($, goal, preview)
+    return { done: r.copied, text: r.text }
+  }
+  return { done: false, text: `${goal.name}: nothing was moved or copied.` }
 }
 
 /** Copies one goal after the person confirms its rewrite; Cancel creates nothing. */
@@ -305,13 +396,18 @@ export async function copyOneGoal($: Engine, ref: unknown, to: string, newName?:
     return { copied: false, text: `${goal.name}: ${e instanceof Error ? e.message : String(e)}` }
   }
   if (!(await confirmWith($, copyQuestion(goal.name, preview), 'Copy'))) return { copied: false, text: `${goal.name}: the person declined; nothing was copied.` }
+  return doCopy($, goal, preview)
+}
+
+async function doCopy($: Engine, goal: { id: string; name: string }, preview: CopyPreview): Promise<{ copied: boolean; text: string }> {
   let made: { id: string; name: string } | undefined
   const ok = await act($, `copy:${goal.id}`, 'copy the goal', async () => {
     made = await copyGoal($, preview, goal.id)
   })
   if (!ok || !made) return { copied: false, text: `${goal.name}: ${await actFailure($, "the copy didn't go through.")}` }
   const replaced = preview.replacements.length ? ` Replaced: ${preview.replacements.map((r) => `${r.from} → ${r.to}`).join('; ')}.` : ' Nothing in its text named the old folder or repo.'
-  return { copied: true, text: `Copied ${goal.name} to ${to} as "${made.name}" (${made.id}). It is paused: resume it once you've checked it.${replaced}` }
+  const created = preview.exists === false ? ` Created ${preview.working_dir}.` : ''
+  return { copied: true, text: `Copied ${goal.name} to ${preview.working_dir} as "${made.name}" (${made.id}). It is paused: resume it once you've checked it.${created}${replaced}` }
 }
 
 /** The text a tool call answers with. */
@@ -359,6 +455,20 @@ export async function runTool($: Engine, name: ToolName, input: Record<string, u
       lines.push(res.text)
     }
     return { text: lines.join('\n'), isError: copied === 0 }
+  }
+
+  if (name === 'move_goal') {
+    const wanted = Array.isArray(input.goals) ? input.goals.map(String) : typeof input.goals === 'string' ? [input.goals] : []
+    const to = String(input.to ?? '').trim()
+    if (!wanted.length || !to) return fail('Give the goals to move and the folder to move them to.')
+    const lines: string[] = []
+    let moved = 0
+    for (const ref of wanted) {
+      const res = await moveOneGoal($, ref, to)
+      if (res.moved) moved++
+      lines.push(res.text)
+    }
+    return { text: lines.join('\n'), isError: moved === 0 }
   }
 
   const found = await resolveGoal($, input.goal)

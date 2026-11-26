@@ -6,17 +6,19 @@
  */
 import {
   schedulerPass, releaseLease, clearRunHold, overviewWithEtag, decideItem, failRun, attachAgent, guardToolCallForRun, recordRefusal, stageGuardedCall,
-  getGoal, getPlan, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, copyGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
+  getGoal, getPlan, getRun, getOpenGoalRun, updateGoal, touchPlan, createGoal, copyGoal, moveGoal, getMemory, deleteMemory, restoreMemory, updateMemory,
   setSchedule, getSchedule, nextScheduledRun, queueRun, applyGoalChanges, reportRunEnd, reportRunProgress, deleteGoal, restoreGoal, purgeDeletedGoal,
   listWatches, watchHealth, checkCommandWatch, getTask, updateTask, getWatch, reportToolWatch, queueForWatchEvents, reviveIfDone,
 } from '../db.js'
 import {
   GoalsTickSchema, GoalsOverviewSchema, DecideItemSchema, CancelRunSchema, SetGoalStatusSchema, AttachAgentSchema,
-  FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, CopyGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
+  FailRunSchema, GuardCheckSchema, RunRefusedSchema, GuardedStageSchema, CreateGoalSchema, CopyGoalSchema, MoveGoalSchema, DeleteMemorySchema, RestoreMemorySchema, TrustMemorySchema, SetScheduleSchema, UpdateGoalSchema, ReportRunEndSchema, DeleteGoalSchema, RestoreGoalSchema, PurgeGoalSchema, WatchReportSchema,
   RunProgressSchema, GetItemSchema, ClearRunHoldSchema,
 } from '../schema.js'
-import { defaultRunFile, firstCheckWarnings, normalizeModel, purgeDate, repoOfRemote, rewriteForCopy, sampleLines, watchSpecOf, type GoalChanges, type Replacement, type RunFile, type WatchSpec } from '@quarterdeck/core'
-import { existsSync } from 'fs'
+import { defaultRunFile, firstCheckWarnings, normalizeModel, purgeDate, repoOfRemote, rewriteForCopy, sampleLines, samePath, watchSpecOf, type GoalChanges, type Replacement, type RunFile, type WatchSpec } from '@quarterdeck/core'
+import { existsSync, mkdirSync, statSync } from 'fs'
+import { dirname, isAbsolute, resolve } from 'path'
+import { homedir } from 'os'
 import { nanoid } from 'nanoid'
 import { record } from '../history.js'
 import { standingSessionId } from '../runner-session.js'
@@ -211,6 +213,58 @@ async function originRepo(dir: string, run: RunFile): Promise<string | null> {
 }
 
 /**
+ * The folder a goal is copied or moved to. A missing folder is refused unless
+ * `create` (the person confirmed making it), and then only one level is made: its
+ * parent must exist, so a mistyped parent is still refused. A preview only says
+ * whether it exists.
+ */
+function targetFolder(dir: string, create: boolean, preview: boolean): { exists: boolean } {
+  if (existsSync(dir)) {
+    if (!statSync(dir).isDirectory()) throw new Error(`Not a folder: ${dir}`)
+    return { exists: true }
+  }
+  const parent = dirname(resolve(dir))
+  if (!existsSync(parent) || !statSync(parent).isDirectory()) throw new Error(`Folder not found: ${dir}, and neither is the folder it would go in (${parent}).`)
+  if (preview) return { exists: false }
+  if (!create) throw new Error(`Working directory not found: ${dir}`)
+  mkdirSync(dir)
+  return { exists: true }
+}
+
+/**
+ * The full path of the folder a goal is copied or moved to, typed relative to the
+ * goal's own folder `from`. A bare name is a sibling (`Selling` from GitHub\Quarterdeck
+ * is GitHub\Selling: goal folders are projects side by side, and one inside a repo
+ * would show in git), `./x` and `../x` go from the folder itself, `~` is the home
+ * folder, and a full path stays as typed.
+ */
+export function resolveTargetDir(from: string, typed: string): string {
+  const t = typed.trim()
+  if (t === '~' || /^~[\\/]/.test(t)) return resolve(homedir(), t.slice(2) || '.')
+  if (isAbsolute(t)) return resolve(t)
+  if (/^\.\.?([\\/]|$)/.test(t)) return resolve(from, t)
+  return resolve(dirname(resolve(from)), t)
+}
+
+/** The goal's instructions and watches for another folder: the ones the person confirmed, else its own with the folder and repo rewritten. */
+async function rewrittenFor(goalId: string, fromDir: string, toDir: string, confirmed: { instructions?: string; watches?: Record<string, WatchSpec> }, run: RunFile) {
+  let { instructions, watches } = confirmed
+  let replacements: Replacement[] = []
+  if (instructions === undefined || watches === undefined) {
+    const src = getGoal(goalId)!
+    const [fromRepo, toRepo] = await Promise.all([originRepo(fromDir, run), existsSync(toDir) ? originRepo(toDir, run) : Promise.resolve(null)])
+    const rewritten = rewriteForCopy(
+      { instructions: src.instructions, watches: Object.fromEntries(listWatches(goalId).map((w) => [w.name, watchSpecOf(w)])) },
+      { fromDir, toDir, fromRepo, toRepo },
+    )
+    instructions ??= rewritten.value.instructions
+    watches ??= rewritten.value.watches
+    replacements = rewritten.replacements
+  }
+  return { instructions, watches, replacements }
+}
+
+/**
  * Copies a goal's set-up to another folder (#208), for the person: the plugin shows
  * them the rewritten instructions and watches first. The copy starts paused with no
  * next run due and its watches unchecked, so nothing runs against the new folder
@@ -221,25 +275,37 @@ export async function copy_goal(args: unknown, run: RunFile = defaultRunFile) {
   const src = getGoal(input.goal_id)
   const plan = src ? getPlan(input.goal_id) : undefined
   if (!src || !plan) throw new Error(`Goal ${input.goal_id} not found.`)
-  if (!existsSync(input.working_dir)) throw new Error(`Working directory not found: ${input.working_dir}`)
-  let replacements: Replacement[] = []
-  let instructions = input.instructions
-  let watches = input.watches as Record<string, WatchSpec> | undefined
-  if (instructions === undefined || watches === undefined) {
-    const [fromRepo, toRepo] = await Promise.all([originRepo(plan.working_dir ?? '', run), originRepo(input.working_dir, run)])
-    const rewritten = rewriteForCopy(
-      { instructions: src.instructions, watches: Object.fromEntries(listWatches(input.goal_id).map((w) => [w.name, watchSpecOf(w)])) },
-      { fromDir: plan.working_dir ?? '', toDir: input.working_dir, fromRepo, toRepo },
-    )
-    instructions ??= rewritten.value.instructions
-    watches ??= rewritten.value.watches
-    replacements = rewritten.replacements
-  }
-  if (input.preview) return { preview: true, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches, replacements }
+  const dir = resolveTargetDir(plan.working_dir, input.working_dir)
+  const { exists } = targetFolder(dir, input.create_dir ?? false, input.preview ?? false)
+  const confirmed = { instructions: input.instructions, watches: input.watches as Record<string, WatchSpec> | undefined }
+  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', dir, confirmed, run)
+  if (input.preview) return { preview: true, name: input.name ?? plan.name, working_dir: dir, exists, instructions, watches, replacements }
   const id = `plan_${nanoid(10)}`
-  const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches })
-  record(id, id, 'goal_copied', { from: input.goal_id, working_dir: input.working_dir }, human)
-  return { id, name: input.name ?? plan.name, working_dir: input.working_dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements }
+  const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: dir, instructions, watches })
+  record(id, id, 'goal_copied', { from: input.goal_id, working_dir: dir }, human)
+  return { id, name: input.name ?? plan.name, working_dir: dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements }
+}
+
+/**
+ * Moves a goal to another folder, for the person: the same goal (runs, items, memory,
+ * schedule and status stay), working in the new folder with the instructions and
+ * watches they confirmed. Refused while a run is going.
+ */
+export async function move_goal(args: unknown, run: RunFile = defaultRunFile) {
+  const input = MoveGoalSchema.parse(args)
+  const src = getGoal(input.goal_id)
+  const plan = src ? getPlan(input.goal_id) : undefined
+  if (!src || !plan) throw new Error(`Goal ${input.goal_id} not found.`)
+  const dir = resolveTargetDir(plan.working_dir, input.working_dir)
+  if (samePath(plan.working_dir ?? '', dir)) throw new Error(`The goal already works in ${plan.working_dir}.`)
+  if (getOpenGoalRun(input.goal_id)) throw new Error('A run is going: wait for it to finish (or cancel it), then move the goal.')
+  const { exists } = targetFolder(dir, input.create_dir ?? false, input.preview ?? false)
+  const confirmed = { instructions: input.instructions, watches: input.watches as Record<string, WatchSpec> | undefined }
+  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', dir, confirmed, run)
+  if (input.preview) return { preview: true, name: plan.name, working_dir: dir, exists, instructions, watches, replacements }
+  moveGoal(input.goal_id, { working_dir: dir, instructions, watches })
+  record(input.goal_id, input.goal_id, 'goal_moved', { from: plan.working_dir, working_dir: dir }, human)
+  return { id: input.goal_id, name: plan.name, working_dir: dir, status: getGoal(input.goal_id)!.status, watches: Object.keys(watches).length, replacements }
 }
 
 export async function delete_memory(args: unknown) {

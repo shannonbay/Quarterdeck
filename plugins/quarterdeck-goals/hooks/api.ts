@@ -143,8 +143,12 @@ export async function updateGoal($: Engine, goalId: string, changes: GoalChanges
 
 /** A watch as the server stores it (copy_goal's preview gives them in full). */
 export type WatchSpecRecord = Record<string, unknown>
-/** What copy_goal's preview found: the instructions and watches with the folder and repo rewritten, and each replacement. */
-export type CopyPreview = { name: string; working_dir: string; instructions: string; watches: Record<string, WatchSpecRecord>; replacements: { from: string; to: string; count?: number }[] }
+/**
+ * What copy_goal's or move_goal's preview found: the instructions and watches with the
+ * folder and repo rewritten, each replacement, and whether the folder exists (false:
+ * it is made, one level, once the person confirms; an older server leaves it out).
+ */
+export type CopyPreview = { name: string; working_dir: string; exists?: boolean; instructions: string; watches: Record<string, WatchSpecRecord>; replacements: { from: string; to: string; count?: number }[] }
 
 /** The rewrite a copy of the goal to workingDir would make (#208); creates nothing. */
 export async function previewCopy($: Engine, goalId: string, workingDir: string, name?: string): Promise<CopyPreview> {
@@ -153,7 +157,17 @@ export async function previewCopy($: Engine, goalId: string, workingDir: string,
 
 /** Copies the goal with the instructions and watches the person confirmed; the copy starts paused. */
 export async function copyGoal($: Engine, p: CopyPreview, goalId: string): Promise<{ id: string; name: string; status: string }> {
-  return call($, 'copy_goal', { goal_id: goalId, working_dir: p.working_dir, name: p.name, instructions: p.instructions, watches: p.watches })
+  return call($, 'copy_goal', { goal_id: goalId, working_dir: p.working_dir, name: p.name, instructions: p.instructions, watches: p.watches, ...(p.exists === false && { create_dir: true }) })
+}
+
+/** The rewrite moving the goal to workingDir would make; changes nothing. Refused for its own folder or while a run is going. */
+export async function previewMove($: Engine, goalId: string, workingDir: string): Promise<CopyPreview> {
+  return call<CopyPreview>($, 'move_goal', { goal_id: goalId, working_dir: workingDir, preview: true })
+}
+
+/** Moves the goal to the folder with the instructions and watches the person confirmed; it keeps its runs, items and memory. */
+export async function moveGoal($: Engine, p: CopyPreview, goalId: string): Promise<{ id: string; name: string; working_dir: string }> {
+  return call($, 'move_goal', { goal_id: goalId, working_dir: p.working_dir, instructions: p.instructions, watches: p.watches, ...(p.exists === false && { create_dir: true }) })
 }
 
 /** Deletes a goal so it can be restored until it is purged (the pane confirms first). */
