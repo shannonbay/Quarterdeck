@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   goals_tick, goals_overview, decide_item, get_item, cancel_run, set_goal_status, attach_agent, fail_run, guard_check, run_refused,
-  create_goal, copy_goal, move_goal, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
+  create_goal, copy_goal, move_goal, resolveTargetDir, delete_memory, restore_memory, trust_memory, set_schedule, update_goal, report_run_end, watch_report, clear_run_hold,
 } from '../../tools/goal_runner.js'
 import { add_item, get_goal_brief, end_run, run_goal } from '../../tools/goals.js'
 import { create_plan } from '../../tools/create_plan.js'
 import { createGoal, queueRun, getRun, getGoal, getPlan, getEvents, updateGoal, insertMemory, getMemory, getRunHold } from '../../db.js'
-import { tmpdir } from 'os'
-import { existsSync, mkdtempSync } from 'fs'
+import { homedir, tmpdir } from 'os'
+import { existsSync, mkdirSync, mkdtempSync } from 'fs'
 import { join } from 'path'
 import { getOpenPlan, getOpenRun, withScope } from '../../session.js'
 import type { PassResult } from '@quarterdeck/core'
@@ -523,6 +523,38 @@ describe('copy_goal (#208)', () => {
     const r = await copy_goal({ goal_id: src.id, working_dir: fresh, create_dir: true }, run)
     expect(existsSync(fresh)).toBe(true)
     expect(r.working_dir).toBe(fresh)
+  })
+})
+
+describe('resolveTargetDir', () => {
+  const from = join(tmpdir(), 'GitHub', 'Quarterdeck')
+  const github = join(tmpdir(), 'GitHub')
+
+  it('takes a bare name as a sibling of the goal folder', () => {
+    expect(resolveTargetDir(from, 'Selling')).toBe(join(github, 'Selling'))
+    expect(resolveTargetDir(from, ' Goals/Selling ')).toBe(join(github, 'Goals', 'Selling'))
+  })
+
+  it('goes from the folder itself for ./ and ../, from home for ~, and keeps a full path', () => {
+    expect(resolveTargetDir(from, './Selling')).toBe(join(from, 'Selling'))
+    expect(resolveTargetDir(from, '.\\Selling')).toBe(process.platform === 'win32' ? join(from, 'Selling') : join(github, '.\\Selling'))
+    expect(resolveTargetDir(from, '../Selling')).toBe(join(github, 'Selling'))
+    expect(resolveTargetDir(from, '~/Selling')).toBe(join(homedir(), 'Selling'))
+    expect(resolveTargetDir(from, '~')).toBe(homedir())
+    expect(resolveTargetDir(from, join(tmpdir(), 'Elsewhere'))).toBe(join(tmpdir(), 'Elsewhere'))
+  })
+
+  it('saves the full path for a name typed to move_goal', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'qd-rel-'))
+    const goalDir = join(base, 'Quarterdeck')
+    mkdirSync(goalDir)
+    const src = await create_goal({ name: 'Rel', objective: 'B', working_dir: goalDir })
+    const run = async () => Promise.reject(new Error('no remote'))
+    const preview = await move_goal({ goal_id: src.id, working_dir: 'Selling', preview: true }, run)
+    expect(preview).toMatchObject({ working_dir: join(base, 'Selling'), exists: false })
+    await move_goal({ goal_id: src.id, working_dir: 'Selling', create_dir: true }, run)
+    expect(getPlan(src.id)!.working_dir).toBe(join(base, 'Selling'))
+    expect(existsSync(join(base, 'Selling'))).toBe(true)
   })
 })
 

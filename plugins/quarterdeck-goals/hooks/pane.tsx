@@ -821,7 +821,7 @@ function controls($: Engine, e: E, view: View, g: GoalCard) {
     }
     return (
       <Box key={`controls-${g.id}`} marginTop={g.needsYou.length > 0 ? 1 : 0}>
-        <Input key={`folder-input-${g.id}`} label="Move or copy to folder" submitLabel="Next…" autoFocus onSubmit={send} />
+        <Input key={`folder-input-${g.id}`} label="Move or copy to folder" placeholder="a name goes beside this goal's folder; ./name inside it" submitLabel="Next…" autoFocus onSubmit={send} />
         <Text dimColor> · </Text>
         {action($, e, { key: `folder-cancel-${g.id}`, label: 'Cancel', onPress: () => void setRejecting($, null) })}
       </Box>

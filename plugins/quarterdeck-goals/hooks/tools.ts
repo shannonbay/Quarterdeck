@@ -70,7 +70,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         goals: { type: 'array', items: { type: 'string' }, description: 'Goal names or ids to copy' },
-        to: { type: 'string', description: "The folder the copies work in. A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
+        to: { type: 'string', description: "The folder the copies work in: a full path, or a name or relative path, which goes beside the goal's folder (./ inside it, ~ the home folder). A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
         name: { type: 'string', description: "The copy's name, only with one goal; left out, the same name" },
       },
       required: ['goals', 'to'],
@@ -83,7 +83,7 @@ export const TOOLS = [
       type: 'object',
       properties: {
         goals: { type: 'array', items: { type: 'string' }, description: 'Goal names or ids to move' },
-        to: { type: 'string', description: "The folder they work in from now on. A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
+        to: { type: 'string', description: "The folder they work in from now on: a full path, or a name or relative path, which goes beside the goal's folder (./ inside it, ~ the home folder). A folder that doesn't exist is made (one level: its parent must exist) once the person confirms" },
       },
       required: ['goals', 'to'],
     },

@@ -346,7 +346,7 @@ export const CreateGoalSchema = z.object({
 
 export const CopyGoalSchema = z.object({
   goal_id: z.string().describe('The goal to copy'),
-  working_dir: z.string().min(1).describe("The folder the copy works in; it must exist unless create_dir (its parent must exist)"),
+  working_dir: z.string().min(1).describe("The folder the copy works in: a full path, or a name or relative path beside the goal's folder (./ inside it, ~ the home folder). It must exist unless create_dir (its parent must exist)"),
   name: z.string().trim().min(1).optional().describe("The copy's name; left out, the same name"),
   instructions: z.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the original's with its folder and repo rewritten"),
   watches: z.record(z.string(), WatchSchema).optional().describe("Every watch to save, by name (as the person confirmed them); left out, the original's with its folder and repo rewritten"),
@@ -356,7 +356,7 @@ export const CopyGoalSchema = z.object({
 
 export const MoveGoalSchema = z.object({
   goal_id: z.string().describe('The goal to move'),
-  working_dir: z.string().min(1).describe("The folder the goal works in from now on; it must exist unless create_dir (its parent must exist)"),
+  working_dir: z.string().min(1).describe("The folder the goal works in from now on: a full path, or a name or relative path beside the goal's folder (./ inside it, ~ the home folder). It must exist unless create_dir (its parent must exist)"),
   instructions: z.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the goal's own with its folder and repo rewritten"),
   watches: z.record(z.string(), WatchSchema).optional().describe("Every watch to keep, by name (as the person confirmed them); left out, the goal's own with its folder and repo rewritten"),
   preview: z.boolean().optional().describe('true: change nothing, only answer the rewritten instructions and watches, the replacements made and whether the folder exists, for the person to check'),

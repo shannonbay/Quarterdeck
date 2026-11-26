@@ -17,7 +17,8 @@ import {
 } from '../schema.js'
 import { defaultRunFile, firstCheckWarnings, normalizeModel, purgeDate, repoOfRemote, rewriteForCopy, sampleLines, samePath, watchSpecOf, type GoalChanges, type Replacement, type RunFile, type WatchSpec } from '@quarterdeck/core'
 import { existsSync, mkdirSync, statSync } from 'fs'
-import { dirname, resolve } from 'path'
+import { dirname, isAbsolute, resolve } from 'path'
+import { homedir } from 'os'
 import { nanoid } from 'nanoid'
 import { record } from '../history.js'
 import { standingSessionId } from '../runner-session.js'
@@ -230,6 +231,21 @@ function targetFolder(dir: string, create: boolean, preview: boolean): { exists:
   return { exists: true }
 }
 
+/**
+ * The full path of the folder a goal is copied or moved to, typed relative to the
+ * goal's own folder `from`. A bare name is a sibling (`Selling` from GitHub\Quarterdeck
+ * is GitHub\Selling: goal folders are projects side by side, and one inside a repo
+ * would show in git), `./x` and `../x` go from the folder itself, `~` is the home
+ * folder, and a full path stays as typed.
+ */
+export function resolveTargetDir(from: string, typed: string): string {
+  const t = typed.trim()
+  if (t === '~' || /^~[\\/]/.test(t)) return resolve(homedir(), t.slice(2) || '.')
+  if (isAbsolute(t)) return resolve(t)
+  if (/^\.\.?([\\/]|$)/.test(t)) return resolve(from, t)
+  return resolve(dirname(resolve(from)), t)
+}
+
 /** The goal's instructions and watches for another folder: the ones the person confirmed, else its own with the folder and repo rewritten. */
 async function rewrittenFor(goalId: string, fromDir: string, toDir: string, confirmed: { instructions?: string; watches?: Record<string, WatchSpec> }, run: RunFile) {
   let { instructions, watches } = confirmed
@@ -259,14 +275,15 @@ export async function copy_goal(args: unknown, run: RunFile = defaultRunFile) {
   const src = getGoal(input.goal_id)
   const plan = src ? getPlan(input.goal_id) : undefined
   if (!src || !plan) throw new Error(`Goal ${input.goal_id} not found.`)
-  const { exists } = targetFolder(input.working_dir, input.create_dir ?? false, input.preview ?? false)
+  const dir = resolveTargetDir(plan.working_dir, input.working_dir)
+  const { exists } = targetFolder(dir, input.create_dir ?? false, input.preview ?? false)
   const confirmed = { instructions: input.instructions, watches: input.watches as Record<string, WatchSpec> | undefined }
-  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', input.working_dir, confirmed, run)
-  if (input.preview) return { preview: true, name: input.name ?? plan.name, working_dir: input.working_dir, exists, instructions, watches, replacements }
+  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', dir, confirmed, run)
+  if (input.preview) return { preview: true, name: input.name ?? plan.name, working_dir: dir, exists, instructions, watches, replacements }
   const id = `plan_${nanoid(10)}`
-  const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches })
-  record(id, id, 'goal_copied', { from: input.goal_id, working_dir: input.working_dir }, human)
-  return { id, name: input.name ?? plan.name, working_dir: input.working_dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements }
+  const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: dir, instructions, watches })
+  record(id, id, 'goal_copied', { from: input.goal_id, working_dir: dir }, human)
+  return { id, name: input.name ?? plan.name, working_dir: dir, status: copy.status, next_run_at: copy.next_run_at, watches: Object.keys(watches).length, replacements }
 }
 
 /**
@@ -279,15 +296,16 @@ export async function move_goal(args: unknown, run: RunFile = defaultRunFile) {
   const src = getGoal(input.goal_id)
   const plan = src ? getPlan(input.goal_id) : undefined
   if (!src || !plan) throw new Error(`Goal ${input.goal_id} not found.`)
-  if (samePath(plan.working_dir ?? '', input.working_dir)) throw new Error(`The goal already works in ${plan.working_dir}.`)
+  const dir = resolveTargetDir(plan.working_dir, input.working_dir)
+  if (samePath(plan.working_dir ?? '', dir)) throw new Error(`The goal already works in ${plan.working_dir}.`)
   if (getOpenGoalRun(input.goal_id)) throw new Error('A run is going: wait for it to finish (or cancel it), then move the goal.')
-  const { exists } = targetFolder(input.working_dir, input.create_dir ?? false, input.preview ?? false)
+  const { exists } = targetFolder(dir, input.create_dir ?? false, input.preview ?? false)
   const confirmed = { instructions: input.instructions, watches: input.watches as Record<string, WatchSpec> | undefined }
-  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', input.working_dir, confirmed, run)
-  if (input.preview) return { preview: true, name: plan.name, working_dir: input.working_dir, exists, instructions, watches, replacements }
-  moveGoal(input.goal_id, { working_dir: input.working_dir, instructions, watches })
-  record(input.goal_id, input.goal_id, 'goal_moved', { from: plan.working_dir, working_dir: input.working_dir }, human)
-  return { id: input.goal_id, name: plan.name, working_dir: input.working_dir, status: getGoal(input.goal_id)!.status, watches: Object.keys(watches).length, replacements }
+  const { instructions, watches, replacements } = await rewrittenFor(input.goal_id, plan.working_dir ?? '', dir, confirmed, run)
+  if (input.preview) return { preview: true, name: plan.name, working_dir: dir, exists, instructions, watches, replacements }
+  moveGoal(input.goal_id, { working_dir: dir, instructions, watches })
+  record(input.goal_id, input.goal_id, 'goal_moved', { from: plan.working_dir, working_dir: dir }, human)
+  return { id: input.goal_id, name: plan.name, working_dir: dir, status: getGoal(input.goal_id)!.status, watches: Object.keys(watches).length, replacements }
 }
 
 export async function delete_memory(args: unknown) {
