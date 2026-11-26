@@ -235,6 +235,7 @@ export async function copy_goal(args: unknown, run: RunFile = defaultRunFile) {
     watches ??= rewritten.value.watches
     replacements = rewritten.replacements
   }
+  if (input.preview) return { preview: true, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches, replacements }
   const id = `plan_${nanoid(10)}`
   const copy = copyGoal(input.goal_id, { id, name: input.name ?? plan.name, working_dir: input.working_dir, instructions, watches })
   record(id, id, 'goal_copied', { from: input.goal_id, working_dir: input.working_dir }, human)

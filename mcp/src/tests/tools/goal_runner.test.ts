@@ -491,17 +491,24 @@ describe('copy_goal (#208)', () => {
     const r = await copy_goal({ goal_id: src.id, working_dir: to, name: 'Fixer (beta)' }, run)
     expect(r).toMatchObject({ name: 'Fixer (beta)', working_dir: to, status: 'paused', next_run_at: null, watches: 1 })
     expect(r.replacements.map((x) => x.to)).toEqual(expect.arrayContaining(['me/beta']))
-    expect(getGoal(r.id)).toMatchObject({ instructions: expect.stringContaining('me/beta'), autonomy: { 'email.send': 'auto' }, tool_map: { 'mcp__x__send*': 'email.send' }, status: 'paused', next_run_at: null })
-    expect(getGoal(r.id)!.instructions).not.toContain('me/alpha')
-    expect(getEvents(r.id).find((e) => e.event_type === 'goal_copied')).toBeTruthy()
+    expect(getGoal(r.id!)).toMatchObject({ instructions: expect.stringContaining('me/beta'), autonomy: { 'email.send': 'auto' }, tool_map: { 'mcp__x__send*': 'email.send' }, status: 'paused', next_run_at: null })
+    expect(getGoal(r.id!)!.instructions).not.toContain('me/alpha')
+    expect(getEvents(r.id!).find((e) => e.event_type === 'goal_copied')).toBeTruthy()
   })
 
   it('saves the text the person confirmed, and refuses a missing goal or folder', async () => {
     const src = await create_goal({ name: 'A', objective: 'B', working_dir: from, instructions: 'old' })
     const r = await copy_goal({ goal_id: src.id, working_dir: to, instructions: 'confirmed', watches: {} }, run)
-    expect(getGoal(r.id)!.instructions).toBe('confirmed')
+    expect(getGoal(r.id!)!.instructions).toBe('confirmed')
     expect(r.replacements).toEqual([])
     await expect(copy_goal({ goal_id: 'nope', working_dir: to }, run)).rejects.toThrow(/not found/)
     await expect(copy_goal({ goal_id: src.id, working_dir: '/no/such/dir/xyz' }, run)).rejects.toThrow(/not found/)
+  })
+
+  it('previews the rewrite without creating anything', async () => {
+    const src = await create_goal({ name: 'P', objective: 'B', working_dir: from, instructions: `In ${from} on me/alpha` })
+    const r = await copy_goal({ goal_id: src.id, working_dir: to, preview: true }, run)
+    expect(r).toMatchObject({ preview: true, name: 'P', working_dir: to, instructions: expect.stringContaining('me/beta'), watches: {} })
+    expect(r).not.toHaveProperty('id')
   })
 })

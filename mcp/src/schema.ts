@@ -350,6 +350,7 @@ export const CopyGoalSchema = z.object({
   name: z.string().trim().min(1).optional().describe("The copy's name; left out, the same name"),
   instructions: z.string().optional().describe("The instructions to save (the rewritten text the person confirmed); left out, the original's with its folder and repo rewritten"),
   watches: z.record(z.string(), WatchSchema).optional().describe("Every watch to save, by name (as the person confirmed them); left out, the original's with its folder and repo rewritten"),
+  preview: z.boolean().optional().describe('true: create nothing, only answer the rewritten instructions and watches and the replacements made, for the person to check'),
 })
 
 export const SetScheduleSchema = z.object({
