@@ -35,6 +35,6 @@ jobs:
           cp -r site/. _site/
           cp docs/goals-pane.png docs/needs-you-sell-gear.jpg docs/quarterdeck-icon.svg _site/
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
       - id: deployment
         uses: actions/deploy-pages@v4
