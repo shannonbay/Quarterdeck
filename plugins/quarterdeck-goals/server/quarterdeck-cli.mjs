@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Quarterdeck MCP server 0.33.0, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
+// Quarterdeck MCP server 0.33.1, bundled by mcp/scripts/bundle.mjs. Edit mcp/ and core/, not this file.
 import { createRequire as __qdCreateRequire } from 'module'; const require = __qdCreateRequire(import.meta.url);
 // Older Node versions warn that node:sqlite is experimental: drop that one warning, keep every other
 const __qdEmitWarning = process.emitWarning; process.emitWarning = function (warning, ...rest) { const type = typeof rest[0] === 'string' ? rest[0] : (rest[0] && rest[0].type) || (warning && warning.name); if (type === 'ExperimentalWarning' && /sqlite/i.test(String((warning && warning.message) || warning))) return; return __qdEmitWarning.call(process, warning, ...rest) };
@@ -2094,13 +2094,13 @@ function proposalHasCalls(db, key) {
 }
 function approvedStagedCall(db, planId, category, command2) {
   const row = db.prepare(`
-    SELECT g.task_id AS key, g.file_hashes AS file_hashes FROM guarded_checks g
+    SELECT g.task_id AS key, g.file_hashes AS file_hashes, json_extract(t.state, '$.action.category') AS category FROM guarded_checks g
     JOIN tasks t ON g.task_id = t.plan_id || '/' || t.id
     WHERE t.plan_id = ? AND t.status = 'active' AND t.archived_at IS NULL AND t.approved_at IS NOT NULL
-      AND json_extract(t.state, '$.action.category') = ? AND g.command = ? AND g.used_at IS NULL
+      AND (? IS NULL OR json_extract(t.state, '$.action.category') = ?) AND g.command = ? AND g.used_at IS NULL
     ORDER BY t.created_at, t.rowid, g.created_at, g.rowid LIMIT 1
-  `).get(planId, category, command2);
-  return row ? { key: row.key, files: Object.keys(JSON.parse(row.file_hashes)) } : null;
+  `).get(planId, category, category, command2);
+  return row ? { key: row.key, category: row.category, files: Object.keys(JSON.parse(row.file_hashes)) } : null;
 }
 function consumeProposalCall(db, key, command2, readFile) {
   const rows = db.prepare("SELECT * FROM guarded_checks WHERE task_id = ? AND command = ? ORDER BY created_at, rowid").all(key, command2);
@@ -2386,7 +2386,8 @@ function guardRun(db, run, toolName, input, paths) {
     }
     guardedMiss = match.reason;
   }
-  if (command2 !== null && listed !== null && listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) !== "off") {
+  const stagedCategory = listed === null || listed !== UNTRUSTED_CATEGORY && listed !== TRUSTED_READ_CATEGORY && autonomyFor(goal, listed) !== "off";
+  if (command2 !== null && stagedCategory) {
     const staged = approvedStagedCall(db, run.plan_id, listed, command2);
     if (staged !== null) {
       const rest = staged.files.reduce((c, f) => c.split(f).join(""), command2);
@@ -2394,12 +2395,12 @@ function guardRun(db, run, toolName, input, paths) {
         const item = staged.key.slice(staged.key.indexOf("/") + 1);
         const match = consumeProposalCall(db, staged.key, command2, readStaged);
         if (match.ok) {
-          record(db, run, toolName, listed, "allow", `staged call of item ${item}`);
-          return { decision: "allow", category: listed, run_id: run.id };
+          record(db, run, toolName, staged.category, "allow", `staged call of item ${item}`);
+          return { decision: "allow", category: staged.category, run_id: run.id };
         }
-        const reason2 = `Quarterdeck goal guard: the approved proposal for "${listed}" covers only the exact calls it staged, each once, with their files unchanged (item ${item}: ${match.reason}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
-        record(db, run, toolName, listed, "deny", reason2);
-        return { decision: "deny", category: listed, run_id: run.id, reason: reason2 };
+        const reason2 = `Quarterdeck goal guard: the approved proposal for "${staged.category}" covers only the exact calls it staged, each once, with their files unchanged (item ${item}: ${match.reason}). Make the call exactly as add_item returned it, or propose this one with add_item.`;
+        record(db, run, toolName, staged.category, "deny", reason2);
+        return { decision: "deny", category: staged.category, run_id: run.id, reason: reason2 };
       }
     }
   }
