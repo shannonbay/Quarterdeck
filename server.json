@@ -6,13 +6,13 @@
     "url": "https://github.com/shannonbay/Quarterdeck",
     "source": "github"
   },
-  "version": "0.33.0",
+  "version": "0.33.1",
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/shannonbay/Quarterdeck/releases/download/v0.33.0/quarterdeck-0.33.0.mcpb",
-      "version": "0.33.0",
-      "fileSha256": "2e2cb1ad26f07aaec3ae5246347a6777035974c3389fb648035fae223e7db0b4",
+      "identifier": "https://github.com/shannonbay/Quarterdeck/releases/download/v0.33.1/quarterdeck-0.33.1.mcpb",
+      "version": "0.33.1",
+      "fileSha256": "8eb0c06f4b68f6a682e6105ae51049dd1be0888c1e2a968b18194b051ab54e2b",
       "transport": {
         "type": "stdio"
       }
