@@ -210,7 +210,22 @@ export const register: Register = (on, options) => {
 
   // Drawing
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => renderPane($, e))
+  // A drawing error shows in the pane, with Refresh, rather than leaving it blank
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    try {
+      return await renderPane($, e)
+    } catch (err) {
+      const { Box, Text, Button } = $.ui.resolve(e)
+      const text = err instanceof Error ? `${err.message}${err.stack ? `\n${err.stack.split('\n').slice(1, 6).join('\n')}` : ''}` : String(err)
+      return (
+        <Box flexDirection="column">
+          <Text color="red">The Goals pane hit an error while drawing:</Text>
+          <Text dimColor>{text}</Text>
+          <Button key="retry" label="Refresh" hotkey="g" onPress={() => void refresh($)} />
+        </Box>
+      )
+    }
+  })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const run = await getActiveRun($)
