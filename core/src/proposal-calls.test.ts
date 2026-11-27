@@ -81,6 +81,22 @@ describe('proposal staged calls (#167)', () => {
     expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }).decision).toBe('deny')
   })
 
+  it('lets an approved staged call through when the tool map names no rule for its command', () => {
+    // Seen 27 Nov 2026: a goal with an empty tool map proposed a cp from its staged copy, and the data rule refused it
+    updateGoal(db, 'g1', { tool_map: {}, autonomy: {} })
+    const qdDir = join(dataDir, '.quarterdeck')
+    const run = insertRun(db, 'g1', 'manual', 'running')
+    const r = addItem(db, 'g1', run.id, { goal: 'Update scores', external_ref: 'scores', action: { category: 'news_scores.update', summary: 'Write scores' } })
+    const [cmd] = stageProposalCalls(db, { id: r.task.id, plan_id: 'g1', run_id: run.id }, 'news_scores.update', [
+      { command: 'cp /work/next.json news_scores.json && rm /work/next.json && python screen.py', files: [{ path: '/work/next.json', contents: '{}' }] },
+    ], { dataDir: qdDir })
+    approve(r.task.id)
+    const decision = guardToolCallForRun(db, run.id, 'Bash', { command: cmd })
+    expect(decision.decision).toBe('allow')
+    expect(decision.category).toBe('news_scores.update')
+    expect(guardToolCallForRun(db, run.id, 'Bash', { command: cmd }).category).toBe('quarterdeck-data')
+  })
+
   it('still refuses an approved staged call that names the data folder beyond its staged copies', () => {
     const qdDir = join(dataDir, '.quarterdeck')
     const run = insertRun(db, 'g1', 'manual', 'running')
